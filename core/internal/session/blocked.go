@@ -17,7 +17,9 @@ plays as the room has it.
 
 The one way to hear what is blocked is to ask for it and nothing else. A queue
 of a blocked song alone, or of a blocked album from its own page, plays as it
-stands, since stepping over all of it would leave nothing.
+stands, since stepping over all of it would leave nothing. A blocked track
+that starts that way is excused: it goes on playing whatever is queued behind
+it later, and however often the settings are sent again.
 */
 
 // Blocked names what is never to be played, by id.
@@ -31,7 +33,6 @@ type Blocked struct {
 // been blocked gives way to the next.
 func (c *Core) SetBlocked(b Blocked) []LogEntry {
 	cur := c.state.Queue.Current()
-	was := cur != nil && c.blocked(cur)
 
 	c.blockedTracks = make(map[string]bool, len(b.Tracks))
 	for _, id := range b.Tracks {
@@ -46,22 +47,53 @@ func (c *Core) SetBlocked(b Blocked) []LogEntry {
 		c.blockedAlbums[id] = true
 	}
 
-	// Only one blocked by this change: a blocked song played by itself was
-	// asked for, and every later change of settings must leave it playing.
-	if cur != nil && !was && c.blocked(cur) && !c.following && c.playIntent() {
-		if !c.anyAllowed() {
-			// The whole queue went with it: an album blocked while it plays.
-			c.state.PositionMs = c.positionNow()
-			c.state.PositionAt = c.clk.Now()
-			c.state.State = domain.StatePaused
-			c.bump()
-			return nil
-		}
-		_, logs := c.skip(+1, true)
-		return logs
+	if cur == nil || !c.blocked(cur) {
+		// Unblocked, and blocked again later, it is blocked like any other.
+		c.excused = ""
+		c.bump()
+		return nil
 	}
-	c.bump()
-	return nil
+	// Paused, it waits: the press that would start it moves on instead.
+	if cur.ID == c.excused || c.following || !c.playIntent() {
+		c.bump()
+		return nil
+	}
+	if !c.anyAllowed() {
+		// The whole queue went with it: an album blocked while it plays.
+		c.state.PositionMs = c.positionNow()
+		c.state.PositionAt = c.clk.Now()
+		c.state.State = domain.StatePaused
+		c.bump()
+		return nil
+	}
+	_, logs := c.skip(+1, true)
+	return logs
+}
+
+// excuseCurrent notes whether the track that has just become current is
+// blocked, and so plays only because it was asked for.
+func (c *Core) excuseCurrent() {
+	c.excused = ""
+	if cur := c.currentPtr(); cur != nil && c.blocked(cur) {
+		c.excused = cur.ID
+	}
+}
+
+// resumeBlocked is called when play is pressed on a paused track. One that
+// is blocked and was not asked for (blocked while paused, or brought back
+// from the last launch) gives way to the next that may play; it reports
+// whether it did. With nothing to give way to, the press is the asking.
+func (c *Core) resumeBlocked() (bool, []LogEntry) {
+	cur := c.state.Queue.Current()
+	if cur == nil || c.following || cur.ID == c.excused || !c.blocked(cur) {
+		return false, nil
+	}
+	if next, ok := c.nextIndex(+1); ok && next != c.state.Queue.Index && c.anyAllowed() {
+		_, logs := c.skip(+1, true)
+		return true, logs
+	}
+	c.excused = cur.ID
+	return false, nil
 }
 
 // Blocked is whether the listener has blocked this track, its album or one of
@@ -95,10 +127,11 @@ func artistKey(id string) string {
 	return id
 }
 
-// firstAllowed is the first track at or after idx that is not blocked, or idx
-// itself when every one from there on is.
+// firstAllowed is the first track at or after idx that is not blocked, coming
+// round to the start when there is none, or idx itself when all are blocked.
 func (c *Core) firstAllowed(items []domain.Track, idx int) int {
-	for i := idx; i < len(items); i++ {
+	for n := range items {
+		i := (idx + n) % len(items)
 		if !c.blocked(&items[i]) {
 			return i
 		}

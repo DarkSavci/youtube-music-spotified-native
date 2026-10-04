@@ -144,7 +144,7 @@ func (s *Server) topUp(ctx context.Context, p session.Projection, force bool) {
 	} else if !force {
 		return
 	}
-	if p.FollowingRoom || p.State.Repeat != domain.RepeatOff || len(q.Items) == 0 || len(q.Items)-1-q.Index >= autoplayLow {
+	if p.FollowingRoom || p.State.Repeat != domain.RepeatOff || len(q.Items) == 0 || s.playableAhead(q) >= autoplayLow {
 		return
 	}
 	if !a.enabled || a.busy || a.gaveUp {
@@ -171,6 +171,19 @@ func (s *Server) topUp(ctx context.Context, p session.Projection, force bool) {
 	a.busy = true
 	a.fetchedAt = now
 	go s.extendRadio(ctx, a.key, a.seed, a.mix, a.token)
+}
+
+// playableAhead counts the tracks after the current one that will play, as
+// far as autoplayLow: a queue that ends in songs the listener has blocked is
+// as near its end as one that is short.
+func (s *Server) playableAhead(q domain.Queue) int {
+	ahead := 0
+	for i := q.Index + 1; i < len(q.Items) && ahead < autoplayLow; i++ {
+		if !s.deps.Session.Blocked(q.Items[i]) {
+			ahead++
+		}
+	}
+	return ahead
 }
 
 // recheckAutoplay looks at the queue again after d, once. Called with a.mu
@@ -348,13 +361,21 @@ func (s *Server) startMix(w http.ResponseWriter, r *http.Request, deviceID strin
 		s.fail(w, r, err)
 		return
 	}
-	var queue []domain.Track
+	var queue, allowed []domain.Track
 	seen := map[string]bool{}
 	for _, t := range tracks {
-		if t.ID != "" && t.Playable && !seen[t.ID] && !s.deps.Session.Blocked(t) {
+		if t.ID != "" && t.Playable && !seen[t.ID] {
 			seen[t.ID] = true
 			queue = append(queue, t)
+			if !s.deps.Session.Blocked(t) {
+				allowed = append(allowed, t)
+			}
 		}
+	}
+	// What the listener has blocked is left out, unless that leaves nothing:
+	// a blocked artist's own mix was asked for, and plays as it is.
+	if len(allowed) > 0 {
+		queue = allowed
 	}
 	if len(queue) == 0 {
 		s.write(w, http.StatusBadGateway, apiError{Error: "the radio came back empty"})

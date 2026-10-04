@@ -81,6 +81,8 @@ pub struct Video {
     pub before_room: bool,
     /// The last of the room's display changes that has been acted on.
     pub room_seen: u64,
+    /// The room's song last asked about for its artists and its album.
+    pub credits_asked: String,
 }
 
 impl Video {

@@ -2,6 +2,23 @@
 
 Every release of Youtube Music Spotified Native, newest first.
 
+## 0.4.6 — 2026-10-05
+
+### New
+
+- Blocking an album blocks every song on it, so its songs are skipped on Home and in search results too, where a song does not say what album it is on
+- In a Listen Together room the player bar names the album, and the song, its artists and its album lead to their pages and have their menus
+
+### Fixed
+
+- Pressing play on a paused song that was blocked played it; it now moves on to the next song
+- A blocked song played by itself was cut off once its radio arrived
+- A queue that ended in blocked songs stopped, where it now carries on with a radio
+- A blocked artist's own mix failed to start
+- Picking a blocked song at the end of a list played it
+- Removing the song that plays could land on a blocked one
+- A gap in the middle of the "Show music videos" description
+
 ## 0.4.5 — 2026-10-04
 
 ### New

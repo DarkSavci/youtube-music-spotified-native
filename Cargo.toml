@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/app", "crates/audio", "crates/client"]
 
 [workspace.package]
-version = "0.4.5"
+version = "0.4.6"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/DarkSavci/youtube-music-spotified-native"

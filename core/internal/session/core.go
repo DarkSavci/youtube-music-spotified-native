@@ -76,6 +76,9 @@ type Core struct {
 	blockedTracks  map[string]bool
 	blockedArtists map[string]bool
 	blockedAlbums  map[string]bool
+	// excused is the current track when it is blocked and plays all the
+	// same, having been asked for.
+	excused string
 
 	rng *rand.Rand
 }
@@ -308,6 +311,9 @@ func (c *Core) toggle() (Reject, []LogEntry) {
 		c.state.State = domain.StatePaused
 		c.waitingForNetwork = false
 	case domain.StatePaused:
+		if moved, logs := c.resumeBlocked(); moved {
+			return RejectNone, logs
+		}
 		c.state.State = domain.StatePlaying
 		// Pressed while offline: the track is waiting for the connection
 		// again, and is started afresh when it returns (#7).
@@ -444,6 +450,15 @@ func (c *Core) remove(at int) (Reject, []LogEntry) {
 			c.state.Queue.Index = 0
 			c.state.State = domain.StateIdle
 		}
+		// What slides into its place may be blocked: the first after it
+		// that is not takes the place instead.
+		for i := c.state.Queue.Index; i < len(c.state.Queue.Items) && !c.following; i++ {
+			if !c.blocked(&c.state.Queue.Items[i]) {
+				c.state.Queue.Index = i
+				break
+			}
+		}
+		c.excuseCurrent()
 	}
 	c.bump()
 	return RejectNone, nil
@@ -793,6 +808,7 @@ func (c *Core) startTrack(index int, ms int64) {
 	c.playedMs = 0
 	c.lastPositionMs = ms
 	c.loggedCurrent = false
+	c.excuseCurrent()
 	c.bump()
 }
 

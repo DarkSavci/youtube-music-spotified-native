@@ -32,6 +32,11 @@ impl Kind {
 pub struct Entry {
     pub id: String,
     pub name: String,
+    /// An album's songs, by id, once its page has been read: each is
+    /// blocked while the album is, since a song does not always say what
+    /// album it is on.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub songs: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -75,7 +80,8 @@ impl Blocked {
     /// Whether this very song, artist or album is blocked.
     pub fn has(&self, kind: Kind, id: &str) -> bool {
         let id = key(kind, id);
-        !id.is_empty() && self.of(kind).iter().any(|entry| entry.id == id)
+        // An entry written by hand may name an artist as the library does.
+        !id.is_empty() && self.of(kind).iter().any(|entry| key(kind, &entry.id) == id)
     }
 
     /// Whether a song is kept from playing: blocked itself, or by its album
@@ -85,6 +91,7 @@ impl Blocked {
             return false;
         }
         self.has(Kind::Song, &track.id)
+            || self.on_blocked_album(&track.id)
             || track
                 .album
                 .as_ref()
@@ -103,19 +110,52 @@ impl Blocked {
         }
         let list = self.of_mut(kind);
         if blocked {
-            let name = name.to_owned();
-            list.push(Entry { id, name });
+            list.push(Entry {
+                id,
+                name: name.to_owned(),
+                songs: Vec::new(),
+            });
         } else {
-            list.retain(|entry| entry.id != id);
+            list.retain(|entry| key(kind, &entry.id) != id);
         }
         true
     }
 
-    /// The list as the core takes it: ids alone.
+    /// Whether a song is one of those a blocked album was found to hold.
+    fn on_blocked_album(&self, track_id: &str) -> bool {
+        self.albums
+            .iter()
+            .any(|album| album.songs.iter().any(|song| song == track_id))
+    }
+
+    /// Notes the songs a blocked album holds. Returns whether that changed
+    /// anything: it does not for an album that is not blocked, one that
+    /// came back empty, or songs already known.
+    pub fn learn_album(&mut self, id: &str, songs: Vec<String>) -> bool {
+        let Some(album) = self.albums.iter_mut().find(|album| album.id == id) else {
+            return false;
+        };
+        if songs.is_empty() || album.songs == songs {
+            return false;
+        }
+        album.songs = songs;
+        true
+    }
+
+    /// The blocked albums whose songs are not known yet.
+    pub fn albums_unread(&self) -> Vec<String> {
+        let unread = self.albums.iter().filter(|album| album.songs.is_empty());
+        unread.map(|album| album.id.clone()).collect()
+    }
+
+    /// The list as the core takes it: ids alone, a blocked album's songs
+    /// among the songs.
     pub fn for_core(&self) -> session::Blocked {
         let ids = |list: &[Entry]| list.iter().map(|entry| entry.id.clone()).collect();
+        let mut tracks: Vec<String> = ids(&self.songs);
+        tracks.extend(self.albums.iter().flat_map(|album| album.songs.clone()));
         session::Blocked {
-            tracks: ids(&self.songs),
+            tracks,
             artists: ids(&self.artists),
             albums: ids(&self.albums),
         }
@@ -173,6 +213,35 @@ mod tests {
         assert_eq!(blocked.for_core().artists, ["UCa"]);
         // Blocked once, however it is named.
         assert!(!blocked.set(Kind::Artist, "UCa", "A", true));
+    }
+
+    #[test]
+    fn a_blocked_albums_songs_are_stopped_wherever_they_turn_up() {
+        let mut blocked = Blocked::default();
+        // A song as a Home shelf gives it: no album named.
+        let bare = Track {
+            album: None,
+            ..song()
+        };
+        blocked.set(Kind::Album, "MPREb", "Album", true);
+        assert!(!blocked.stops(&bare));
+        assert_eq!(blocked.albums_unread(), ["MPREb"]);
+
+        assert!(blocked.learn_album("MPREb", vec!["s".into(), "t".into()]));
+        assert!(blocked.stops(&bare));
+        assert!(blocked.albums_unread().is_empty());
+        let core = blocked.for_core();
+        assert_eq!(core.tracks, ["s", "t"]);
+        assert_eq!(core.albums, ["MPREb"]);
+        // Read again with the same songs, nothing changes.
+        assert!(!blocked.learn_album("MPREb", vec!["s".into(), "t".into()]));
+        // An album that is not blocked teaches nothing.
+        assert!(!blocked.learn_album("MPREother", vec!["u".into()]));
+
+        // Unblocked, its songs play again.
+        blocked.set(Kind::Album, "MPREb", "Album", false);
+        assert!(!blocked.stops(&bare));
+        assert!(blocked.for_core().tracks.is_empty());
     }
 
     #[test]

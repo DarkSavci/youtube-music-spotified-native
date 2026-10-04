@@ -2,6 +2,7 @@
 //! Listen Together room, and what the button says meanwhile.
 
 use serde_json::json;
+use spotified_client::models::{AlbumRef, ArtistRef};
 use spotified_client::session::Command;
 
 use super::together::{hear, in_room, room};
@@ -412,4 +413,75 @@ fn music_videos_among_songs_are_shown_only_when_asked_for() {
     let effects = apply(&mut state, Action::SetShowMusicVideos(true));
     assert_eq!(effects, [Effect::SaveSettings]);
     assert!(state.shows(&clip()));
+}
+
+/// The song as a relay passes it on: named, and nothing more.
+fn bare_song() -> Track {
+    Track {
+        artists: vec![ArtistRef {
+            id: String::new(),
+            name: "The Artist".into(),
+        }],
+        ..song()
+    }
+}
+
+/// The same song as YouTube tells of it.
+fn credited_song() -> Track {
+    Track {
+        artists: vec![ArtistRef {
+            id: "UCartist".into(),
+            name: "The Artist".into(),
+        }],
+        album: Some(AlbumRef {
+            id: "MPREb1".into(),
+            name: "The Album".into(),
+        }),
+        ..song()
+    }
+}
+
+fn credits_of(state: &State) -> (String, Option<String>) {
+    let track = state
+        .playback
+        .as_ref()
+        .and_then(|playback| playback.current())
+        .expect("a song playing");
+    (
+        track.artists[0].id.clone(),
+        track.album.as_ref().map(|album| album.id.clone()),
+    )
+}
+
+#[test]
+fn a_rooms_song_is_given_its_artists_pages_and_its_album() {
+    let mut state = ready();
+    let asked = now_playing(&mut state, bare_song(), true);
+    assert_eq!(asked, [Effect::Fetch(Request::Versions(SONG.into()))]);
+    assert_eq!(credits_of(&state), (String::new(), None));
+
+    pair_found(&mut state, SONG, Ok(vec![credited_song(), clip()]));
+    let credited = ("UCartist".to_owned(), Some("MPREb1".to_owned()));
+    assert_eq!(credits_of(&state), credited);
+
+    // The core goes on reporting the song as the relay gave it, and it is
+    // filled in each time without asking again.
+    assert!(now_playing(&mut state, bare_song(), true).is_empty());
+    assert_eq!(credits_of(&state), credited);
+}
+
+#[test]
+fn a_rooms_song_youtube_will_not_speak_of_is_asked_about_once() {
+    let mut state = ready();
+    now_playing(&mut state, bare_song(), true);
+    let refused = ApiError::Unreachable("no route".into());
+    assert!(pair_found(&mut state, SONG, Err(refused)).is_empty());
+    assert!(now_playing(&mut state, bare_song(), true).is_empty());
+    assert_eq!(credits_of(&state), (String::new(), None));
+}
+
+#[test]
+fn a_song_played_alone_is_not_asked_about() {
+    let mut state = ready();
+    assert!(now_playing(&mut state, bare_song(), false).is_empty());
 }

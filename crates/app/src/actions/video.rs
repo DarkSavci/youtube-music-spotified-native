@@ -139,6 +139,47 @@ fn check(state: &mut State) -> Vec<Effect> {
     vec![Effect::Fetch(Request::Versions(track.id))]
 }
 
+/// Gives the room's song its artists' pages and its album back.
+///
+/// A relay passes a song on as a title and the names of its artists: none
+/// of them leads anywhere, and the album is not said at all. What YouTube
+/// says of the song has both, so in a room it is asked about the song that
+/// plays (once: the core keeps the answer) and the song is filled in from
+/// it, here and on every later report of the session.
+pub(super) fn room_credits(state: &mut State) -> Vec<Effect> {
+    let Some(playback) = &mut state.playback else {
+        return Vec::new();
+    };
+    let index = playback.session.queue.index;
+    let Some(track) = playback.session.queue.items.get_mut(index) else {
+        return Vec::new();
+    };
+    let bare = track.album.is_none() || track.artists.iter().any(|artist| artist.id.is_empty());
+    if !playback.following_room || !bare {
+        return Vec::new();
+    }
+    match state.video.pair(&track.id) {
+        Some(pair) => {
+            if let Some(known) = pair.iter().find(|edit| edit.id == track.id) {
+                if !known.artists.is_empty() {
+                    track.artists.clone_from(&known.artists);
+                }
+                if track.album.is_none() {
+                    track.album.clone_from(&known.album);
+                }
+            }
+            Vec::new()
+        }
+        // Asked once for each song, whatever comes of it: a song YouTube
+        // will not speak of stays as the relay gave it.
+        None if state.video.credits_asked != track.id => {
+            state.video.credits_asked.clone_from(&track.id);
+            vec![Effect::Fetch(Request::Versions(track.id.clone()))]
+        }
+        None => Vec::new(),
+    }
+}
+
 fn availability(pair: &[Track]) -> Availability {
     if pair.iter().any(|edit| edit.is_video && edit.playable) {
         Availability::Available
@@ -168,7 +209,8 @@ pub(super) fn answered(
         .wanting
         .take_if(|wanting| wanting.track_id == track_id);
     let Some(wanting) = waited else {
-        return Vec::new();
+        // Asked for the room's song, to say whose it is and what it is on.
+        return room_credits(state);
     };
     match playing {
         Some((track, _)) if track.id == track_id => settle(state, &track, wanting.enabled, result),

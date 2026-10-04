@@ -306,6 +306,12 @@ pub(super) fn store(state: &mut State, response: Response) -> Vec<Effect> {
         Response::Versions { track_id, result } => {
             return video::answered(state, track_id, result);
         }
+        Response::Album(id, result) => {
+            let learnt = super::blocking::album_read(state, &id, &result);
+            let mut effects = store_rest(state, Response::Album(id, result));
+            effects.extend(learnt);
+            return effects;
+        }
         other => return store_rest(state, other),
     };
     effects.extend(play_pending(state));

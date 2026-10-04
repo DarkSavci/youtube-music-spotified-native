@@ -426,3 +426,104 @@ fn a_reset_leaves_what_is_blocked() {
     apply(&mut state, Action::ResetPreferences);
     assert!(state.settings.blocked.has(Kind::Song, "a"));
 }
+
+fn block_album(state: &mut State) -> Vec<Effect> {
+    apply(
+        state,
+        Action::SetBlocked {
+            kind: crate::blocked::Kind::Album,
+            id: "MPREb1".into(),
+            name: "The Album".into(),
+            blocked: true,
+        },
+    )
+}
+
+fn album_page() -> spotified_client::models::Album {
+    spotified_client::models::Album {
+        id: "MPREb1".into(),
+        title: "The Album".into(),
+        tracks: vec![track("s1"), track("s2")],
+        ..Default::default()
+    }
+}
+
+#[test]
+fn blocking_an_album_reads_its_page_and_blocks_each_song_on_it() {
+    let mut state = ready();
+    // Its page has not been opened: it is read, to learn the songs.
+    let effects = block_album(&mut state);
+    assert_eq!(
+        effects,
+        [
+            Effect::SaveSettings,
+            Effect::ApplyAudioSettings,
+            Effect::Fetch(Request::Album("MPREb1".into())),
+        ]
+    );
+    // A song as a Home shelf gives it, with no album named, still plays.
+    assert!(!state.settings.blocked.stops(&track("s1")));
+
+    let read = Response::Album("MPREb1".into(), Ok(album_page()));
+    assert_eq!(loaded(&mut state, read), HEARD);
+    assert!(state.settings.blocked.stops(&track("s1")));
+    assert!(state.settings.blocked.stops(&track("s2")));
+    assert_eq!(state.settings.blocked.for_core().tracks, ["s1", "s2"]);
+
+    // The page read again, as on a later visit, changes nothing.
+    let again = Response::Album("MPREb1".into(), Ok(album_page()));
+    assert!(loaded(&mut state, again).is_empty());
+}
+
+#[test]
+fn an_album_blocked_from_its_own_page_needs_no_reading() {
+    let mut state = ready();
+    loaded(
+        &mut state,
+        Response::Album("MPREb1".into(), Ok(album_page())),
+    );
+    assert_eq!(block_album(&mut state), HEARD);
+    assert!(state.settings.blocked.stops(&track("s2")));
+}
+
+#[test]
+fn an_album_whose_page_could_not_be_read_is_read_at_the_next_launch() {
+    let mut state = ready();
+    block_album(&mut state);
+    let failed = Response::Album("MPREb1".into(), Err(ApiError::Unreachable("down".into())));
+    assert!(loaded(&mut state, failed).is_empty());
+    assert_eq!(state.settings.blocked.albums_unread(), ["MPREb1"]);
+
+    // The next launch: the same settings, and a core that has come up.
+    let mut next = State::new(state.settings.clone());
+    let origin = "http://127.0.0.1:1".into();
+    let effects = apply(&mut next, Action::CoreChanged(CoreStatus::Ready { origin }));
+    assert!(effects.contains(&Effect::Fetch(Request::Album("MPREb1".into()))));
+}
+
+#[test]
+fn an_album_that_is_not_blocked_is_read_without_a_word_to_the_core() {
+    let mut state = ready();
+    let read = Response::Album("MPREb1".into(), Ok(album_page()));
+    assert!(loaded(&mut state, read).is_empty());
+    assert!(!state.settings.blocked.stops(&track("s1")));
+}
+
+#[test]
+fn unblocking_an_album_lets_its_songs_play() {
+    let mut state = ready();
+    block_album(&mut state);
+    loaded(
+        &mut state,
+        Response::Album("MPREb1".into(), Ok(album_page())),
+    );
+    let unblock = Action::SetBlocked {
+        kind: crate::blocked::Kind::Album,
+        id: "MPREb1".into(),
+        name: "The Album".into(),
+        blocked: false,
+    };
+    assert_eq!(apply(&mut state, unblock), HEARD);
+    assert!(!state.settings.blocked.stops(&track("s1")));
+    assert!(state.settings.blocked.for_core().tracks.is_empty());
+}

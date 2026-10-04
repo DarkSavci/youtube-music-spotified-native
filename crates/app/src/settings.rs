@@ -493,6 +493,7 @@ mod tests {
                 songs: vec![crate::blocked::Entry {
                     id: "a".into(),
                     name: "A song".into(),
+                    songs: Vec::new(),
                 }],
                 ..Default::default()
             },

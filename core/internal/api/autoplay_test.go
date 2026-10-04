@@ -353,3 +353,98 @@ func TestPlayingAfterAMixDoesNotContinueTheMix(t *testing.T) {
 		}
 	}
 }
+
+func postJSON(t *testing.T, s *Server, path string, body any) *httptest.ResponseRecorder {
+	t.Helper()
+	raw, _ := json.Marshal(body)
+	rec := httptest.NewRecorder()
+	s.mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, path, bytes.NewReader(raw)))
+	return rec
+}
+
+func block(t *testing.T, s *Server, blocked session.Blocked) {
+	t.Helper()
+	body := map[string]any{"crossfadeMs": 0, "gapless": true, "blocked": blocked}
+	if rec := postJSON(t, s, "/v1/session/settings", body); rec.Code != http.StatusOK {
+		t.Fatalf("settings: status %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// A radio leaves out what the listener has blocked.
+func TestARadioLeavesOutWhatIsBlocked(t *testing.T) {
+	s, hub, _, _ := radioServer(t)
+	block(t, s, session.Blocked{Tracks: []string{"seed-r0-1", "seed-r0-4"}})
+	postJSON(t, s, "/v1/session/radio", map[string]any{"deviceId": "d", "track": track("seed")})
+	ids := waitQueue(t, hub, 9)
+	for _, id := range ids {
+		if id == "seed-r0-1" || id == "seed-r0-4" {
+			t.Fatalf("%s was queued: %v", id, ids)
+		}
+	}
+}
+
+// Settings that say nothing of what is blocked leave it as it is.
+func TestSettingsWithoutABlockListKeepIt(t *testing.T) {
+	s, hub, _, _ := radioServer(t)
+	block(t, s, session.Blocked{Tracks: []string{"x"}})
+	postJSON(t, s, "/v1/session/settings", map[string]any{"crossfadeMs": 0, "gapless": true})
+	if !hub.Blocked(track("x")) {
+		t.Fatal("the block list was dropped by settings that did not name it")
+	}
+	block(t, s, session.Blocked{})
+	if hub.Blocked(track("x")) {
+		t.Fatal("an empty block list did not clear it")
+	}
+}
+
+// A queue that ends in blocked songs is as near its end as a short one, and
+// is carried on from.
+func TestBlockedSongsAheadDoNotCountAsQueued(t *testing.T) {
+	s, hub, _, _ := radioServer(t)
+	var album []domain.Track
+	var blocked []string
+	for i := range 8 {
+		id := fmt.Sprintf("a%d", i)
+		album = append(album, track(id))
+		if i > 0 {
+			blocked = append(blocked, id)
+		}
+	}
+	block(t, s, session.Blocked{Tracks: blocked})
+	_, _ = hub.Command(context.Background(), "d", session.Command{Kind: session.CmdPlay, Tracks: album, Origin: "Album"})
+	ids := waitQueue(t, hub, 9)
+	_, _ = hub.Command(context.Background(), "d", session.Command{Kind: session.CmdNext})
+	if cur := hub.Projection().State.Queue.Current(); cur == nil || cur.ID != ids[8] {
+		t.Fatalf("next went to %v, want the radio's first song %s", cur, ids[8])
+	}
+}
+
+// A blocked artist's own mix was asked for, and plays as it is; a mix with
+// some of it blocked leaves that part out.
+func TestAMixLeavesOutWhatIsBlockedUnlessThatIsAllOfIt(t *testing.T) {
+	s, hub, cat, _ := radioServer(t)
+	mix := map[string]any{"deviceId": "d", "playlistId": "RDEMx", "videoId": "seed", "origin": "Artist radio"}
+	block(t, s, session.Blocked{Tracks: []string{"RDEMx-seed-0-0"}})
+	if rec := postJSON(t, s, "/v1/session/radio", mix); rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+	if ids := queueIDs(hub); len(ids) != 10 || ids[1] != "RDEMx-seed-0-1" {
+		t.Fatalf("queue %v", ids)
+	}
+
+	cat.mu.Lock()
+	cat.short = 3
+	cat.mu.Unlock()
+	var all []string
+	for i := range 3 {
+		all = append(all, fmt.Sprintf("RDEMx-seed-short-%d", i))
+	}
+	block(t, s, session.Blocked{Tracks: all})
+	if rec := postJSON(t, s, "/v1/session/radio", mix); rec.Code != http.StatusOK {
+		t.Fatalf("an all-blocked mix: status %d: %s", rec.Code, rec.Body.String())
+	}
+	state := hub.Projection().State
+	if len(state.Queue.Items) != 3 || state.State != domain.StatePlaying {
+		t.Fatalf("queue %v %s, want the mix as it is, playing", queueIDs(hub), state.State)
+	}
+}

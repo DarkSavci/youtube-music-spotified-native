@@ -59,7 +59,7 @@ pub fn show(state: &State, ui: &mut Ui, actions: &mut Vec<Action>) {
     section(state, ui, "Content", |ui| {
         let on = state.settings.show_music_videos;
         let label = "Show music videos";
-        let about = "Off by default. This is an audio-first player; videos appear in their                      own shelves when enabled. Videos in a playlist always show.";
+        let about = "Off by default. This is an audio-first player; videos appear in their own shelves when enabled. Videos in a playlist always show.";
         row(state, ui, label, about, |ui| {
             if widgets::switch(ui, &state.palette, on, label).clicked() {
                 actions.push(Action::SetShowMusicVideos(!on));
