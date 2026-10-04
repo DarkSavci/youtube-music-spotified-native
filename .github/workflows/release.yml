@@ -1,0 +1,72 @@
+name: Release
+
+# Pushing a tag like v0.3.2 builds that version and publishes it: the
+# installer, the portable zip, and the checksums the app's own updater
+# checks a download against.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: core/go.mod
+          cache-dependency-path: core/go.sum
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      # A tag that disagrees with Cargo.toml would publish files named for
+      # one version under a release named for another, and the updater
+      # compares against the tag.
+      - name: Check the tag is the version
+        shell: pwsh
+        run: |
+          $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
+          if ("v$version" -ne $env:GITHUB_REF_NAME) {
+            throw "the tag is $env:GITHUB_REF_NAME but Cargo.toml says $version"
+          }
+          "VERSION=$version" >> $env:GITHUB_ENV
+
+      - name: Test
+        run: cargo test --workspace
+
+      - name: Package
+        shell: pwsh
+        run: scripts/package.ps1
+
+      # The release's notes are that version's section of the changelog.
+      - name: Release notes
+        shell: pwsh
+        run: |
+          $lines = Get-Content CHANGELOG.md
+          $start = ($lines | Select-String -Pattern "^## $([regex]::Escape($env:VERSION)) " | Select-Object -First 1).LineNumber
+          if (-not $start) { throw "CHANGELOG.md has no section for $env:VERSION" }
+          $rest = $lines[$start..($lines.Count - 1)]
+          $next = ($rest | Select-String -Pattern '^## ' | Select-Object -First 1).LineNumber
+          $notes = if ($next) { $rest[0..($next - 2)] } else { $rest }
+          Set-Content notes.md ($notes -join "`n").Trim()
+
+      - name: Publish
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $files = @(
+            "dist/youtube-music-spotified-native-$env:VERSION-setup.exe",
+            "dist/youtube-music-spotified-native-$env:VERSION-windows-x64.zip",
+            "dist/SHA256SUMS.txt"
+          )
+          foreach ($file in $files) {
+            if (-not (Test-Path $file)) { throw "$file was not built" }
+          }
+          gh release create $env:GITHUB_REF_NAME @files --title $env:GITHUB_REF_NAME --notes-file notes.md
