@@ -235,7 +235,8 @@ func (s *Server) extendRadio(ctx context.Context, key, seed string, mix domain.M
 	}
 	var fresh []domain.Track
 	for _, t := range tracks {
-		if t.ID != "" && t.Playable && !have[t.ID] {
+		// A radio is not to bring what the listener has blocked.
+		if t.ID != "" && t.Playable && !have[t.ID] && !s.deps.Session.Blocked(t) {
 			have[t.ID] = true
 			fresh = append(fresh, t)
 		}
@@ -350,7 +351,7 @@ func (s *Server) startMix(w http.ResponseWriter, r *http.Request, deviceID strin
 	var queue []domain.Track
 	seen := map[string]bool{}
 	for _, t := range tracks {
-		if t.ID != "" && t.Playable && !seen[t.ID] {
+		if t.ID != "" && t.Playable && !seen[t.ID] && !s.deps.Session.Blocked(t) {
 			seen[t.ID] = true
 			queue = append(queue, t)
 		}

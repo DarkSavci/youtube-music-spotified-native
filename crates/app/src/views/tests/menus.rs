@@ -263,3 +263,115 @@ fn an_artist_from_the_library_opens_the_channel_the_page_wants() {
     assert_eq!(artist_page_id("UCabc"), "UCabc");
     assert_eq!(artist_page_id("MPLAxyz"), "MPLAxyz");
 }
+
+#[test]
+fn a_songs_menu_blocks_the_song_its_artist_or_its_album() {
+    use crate::blocked::Kind;
+
+    let mut harness = first_songs_menu();
+    harness.get_by_label("Block this song").click();
+    harness.run();
+    assert!(asked(&harness, |action| matches!(
+        action,
+        Action::SetBlocked { kind: Kind::Song, id, blocked: true, .. } if id == "a"
+    )));
+
+    let mut harness = first_songs_menu();
+    harness.get_by_label("Block The Artist").click();
+    harness.run();
+    assert!(asked(&harness, |action| matches!(
+        action,
+        Action::SetBlocked { kind: Kind::Artist, id, name, blocked: true }
+            if id == "artist-1" && name == "The Artist"
+    )));
+}
+
+#[test]
+fn what_is_blocked_is_offered_back() {
+    use crate::blocked::Kind;
+
+    let mut state = on_playlist();
+    let blocked = &mut state.settings.blocked;
+    blocked.set(Kind::Song, "a", "First song", true);
+    let mut harness = harness(state);
+    harness.get_by_label("First song").click_secondary();
+    harness.run();
+    assert!(harness.query_by_label("Block this song").is_none());
+    harness.get_by_label("Unblock this song").click();
+    harness.run();
+    assert!(asked(&harness, |action| matches!(
+        action,
+        Action::SetBlocked {
+            kind: Kind::Song,
+            blocked: false,
+            ..
+        }
+    )));
+}
+
+/// A right click on the player bar's song (`true`) or on its artist, found
+/// from the heart that follows them.
+fn right_click_now_playing(harness: &mut Harness<'_, Fixture>, title: bool) {
+    let heart = harness.get_by_label("Save to Liked Songs").rect().center();
+    let at = heart + vec2(-60.0, if title { -9.0 } else { 9.0 });
+    harness.hover_at(at);
+    harness.run();
+    for pressed in [true, false] {
+        harness.event(eframe::egui::Event::PointerButton {
+            pos: at,
+            button: eframe::egui::PointerButton::Secondary,
+            pressed,
+            modifiers: Default::default(),
+        });
+    }
+    harness.run();
+}
+
+#[test]
+fn a_right_click_on_the_playing_song_brings_its_menu() {
+    let mut harness = harness(playing(state()));
+    right_click_now_playing(&mut harness, true);
+    for entry in ["Add to queue", "Go to song radio", "Block this song"] {
+        assert!(harness.query_by_label(entry).is_some(), "{entry}");
+    }
+}
+
+#[test]
+fn a_right_click_on_the_playing_artist_brings_theirs() {
+    let mut harness = harness(playing(state()));
+    right_click_now_playing(&mut harness, false);
+    assert!(harness.query_by_label("Add to queue").is_none());
+    harness.get_by_label("Block The Artist").click();
+    harness.run();
+    assert!(asked(&harness, |action| matches!(
+        action,
+        Action::SetBlocked { kind: crate::blocked::Kind::Artist, id, blocked: true, .. }
+            if id == "artist-1"
+    )));
+}
+
+#[test]
+fn the_playing_songs_album_is_named_after_its_artists_and_leads_to_it() {
+    use spotified_client::models::AlbumRef;
+
+    let mut state = playing(state());
+    if let Some(playback) = &mut state.playback {
+        playback.session.queue.items[0].album = Some(AlbumRef {
+            id: "MPREb1".into(),
+            name: "A long enough album name".into(),
+        });
+    }
+    let mut harness = harness(state);
+    // The line ends with the album, a little before the heart.
+    let heart = harness.get_by_label("Save to Liked Songs").rect().center();
+    let at = heart + vec2(-48.0, 9.0);
+    harness.hover_at(at);
+    harness.run();
+    harness.drag_at(at);
+    harness.drop_at(at);
+    harness.run();
+    assert!(asked(&harness, |action| matches!(
+        action,
+        Action::Open(Page::Album(id)) if id == "MPREb1"
+    )));
+}

@@ -11,6 +11,7 @@ mod actions;
 mod app;
 mod artistsongs;
 mod backend;
+mod blocked;
 mod changelog;
 mod channel;
 mod cli;

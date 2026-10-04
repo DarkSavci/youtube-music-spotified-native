@@ -8,6 +8,7 @@ use spotified_client::session::{Command, Projection};
 
 use crate::accounts::Accounts;
 use crate::backend::{Request, Response};
+use crate::blocked;
 use crate::migrate;
 use crate::settings::{LibrarySort, VolumeLevel};
 use crate::share;
@@ -193,6 +194,14 @@ pub enum Action {
     PlayNext(Vec<Track>),
     /// Like a song, or take the like back.
     ToggleLike(Track),
+    /// Never play this song, artist or album, or let it play again.
+    SetBlocked {
+        kind: blocked::Kind,
+        id: String,
+        /// What it is called, to list it by.
+        name: String,
+        blocked: bool,
+    },
     /// Like every one of these that is not liked already.
     LikeAll(Vec<Track>),
     AddToPlaylist {

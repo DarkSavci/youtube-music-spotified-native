@@ -280,6 +280,7 @@ pub(super) fn apply_audio_settings(session: &Session, state: &State) {
         report_to_youtube: settings.report_to_youtube,
         cache_max_mb: u64::from(settings.cache_max_mb),
         autoplay: settings.autoplay,
+        blocked: settings.blocked.for_core(),
     });
 }
 

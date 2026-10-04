@@ -228,6 +228,8 @@ pub struct Settings {
     pub equalizer_headroom: bool,
     /// Curves saved under names of the listener's own.
     pub equalizer_presets: Vec<crate::equalizer::Saved>,
+    /// The songs, artists and albums that are never played.
+    pub blocked: crate::blocked::Blocked,
     /// How the core knows this installation among its devices. Made up on
     /// the first run and kept.
     pub device_id: String,
@@ -284,6 +286,7 @@ impl Default for Settings {
             equalizer_preamp: 0.0,
             equalizer_headroom: true,
             equalizer_presets: Vec::new(),
+            blocked: crate::blocked::Blocked::default(),
             device_id: String::new(),
         }
     }
@@ -360,6 +363,7 @@ impl Settings {
             recent_searches: std::mem::take(&mut self.recent_searches),
             recent_searches_by: std::mem::take(&mut self.recent_searches_by),
             equalizer_presets: std::mem::take(&mut self.equalizer_presets),
+            blocked: std::mem::take(&mut self.blocked),
             device_id: std::mem::take(&mut self.device_id),
             ..fresh
         };
@@ -485,6 +489,13 @@ mod tests {
             equalizer_preamp: -2.0,
             equalizer_headroom: false,
             equalizer_presets: Vec::new(),
+            blocked: crate::blocked::Blocked {
+                songs: vec![crate::blocked::Entry {
+                    id: "a".into(),
+                    name: "A song".into(),
+                }],
+                ..Default::default()
+            },
             device_id: "native-1".into(),
         };
         save(&path, &settings)?;

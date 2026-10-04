@@ -245,6 +245,30 @@ pub fn apply(state: &mut State, action: Action) -> Vec<Effect> {
                 liked,
             })]
         }
+        Action::SetBlocked {
+            kind,
+            id,
+            name,
+            blocked,
+        } => {
+            if !state.settings.blocked.set(kind, &id, &name, blocked) {
+                return Vec::new();
+            }
+            state.toast(match (blocked, kind) {
+                (false, _) => format!("{name} unblocked"),
+                (true, crate::blocked::Kind::Song) => {
+                    format!("{name} blocked. It will be skipped.")
+                }
+                (true, crate::blocked::Kind::Artist) => {
+                    format!("{name} blocked. Their songs will be skipped.")
+                }
+                (true, crate::blocked::Kind::Album) => {
+                    format!("{name} blocked. Its songs will be skipped.")
+                }
+            });
+            // The core is what steps over it, and is told at once.
+            vec![Effect::SaveSettings, Effect::ApplyAudioSettings]
+        }
         Action::LikeAll(tracks) => {
             let mut effects = Vec::new();
             for track in tracks {

@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use eframe::egui::text::CCursor;
 use eframe::egui::text_selection::LabelSelectionState;
-use eframe::egui::{self, Align2, Color32, Galley, Rect, Sense, Ui};
+use eframe::egui::{self, Align2, Color32, Galley, Rect, Response, Sense, Ui};
 use spotified_client::models::ArtistRef;
 
 /// Text painted at a point, for layouts that place things by hand.
@@ -108,6 +108,25 @@ impl Artists<'_> {
     /// Paints the line with its top left at `at`. Returns the id of the
     /// artist whose name was clicked, and how wide the line came out.
     pub fn show(&self, ui: &Ui, id: egui::Id, at: egui::Pos2) -> (Option<String>, f32) {
+        let mut clicked = None;
+        let width = self.show_each(ui, id, at, |artist, response| {
+            if response.clicked() {
+                clicked = Some(artist_page_id(&artist.id).to_owned());
+            }
+        });
+        (clicked, width)
+    }
+
+    /// As [`Artists::show`], handing each name that leads somewhere, and
+    /// what the pointer did with it, to `each`: for a caller that hangs a
+    /// menu on a name as well. Returns how wide the line came out.
+    pub fn show_each(
+        &self,
+        ui: &Ui,
+        id: egui::Id,
+        at: egui::Pos2,
+        mut each: impl FnMut(&ArtistRef, &Response),
+    ) -> f32 {
         let named = || self.artists.iter().filter(|artist| !artist.name.is_empty());
         let line = named()
             .map(|artist| artist.name.as_str())
@@ -115,7 +134,6 @@ impl Artists<'_> {
             .join(BETWEEN_ARTISTS);
         let galley = elided(ui, &line, self.font.clone(), self.color, self.width, 1);
         let size = galley.size();
-        let mut clicked = None;
         // Where each name lies, counted in characters as the galley counts.
         let mut start = 0;
         for (index, artist) in named().enumerate() {
@@ -137,12 +155,10 @@ impl Artists<'_> {
                 ui.painter()
                     .hline(name.x_range(), name.bottom() - 1.0, (1.0, self.color));
             }
-            if response.clicked() {
-                clicked = Some(artist_page_id(&artist.id).to_owned());
-            }
+            each(artist, &response);
         }
         ui.painter().galley(at, galley, self.color);
-        (clicked, size.x)
+        size.x
     }
 }
 
@@ -181,19 +197,44 @@ impl Link<'_> {
         at: egui::Pos2,
         leads_somewhere: bool,
     ) -> (bool, f32) {
+        let (response, width) = self.place(ui, id, at, leads_somewhere, leads_somewhere);
+        (response.is_some_and(|response| response.clicked()), width)
+    }
+
+    /// As [`Link::show_measured`], for a caller that hangs a menu on the
+    /// text: it answers the pointer whether or not it leads somewhere, and
+    /// what the pointer did with it is handed back.
+    pub fn show_response(
+        &self,
+        ui: &Ui,
+        id: egui::Id,
+        at: egui::Pos2,
+        leads_somewhere: bool,
+    ) -> (Option<Response>, f32) {
+        self.place(ui, id, at, true, leads_somewhere)
+    }
+
+    fn place(
+        &self,
+        ui: &Ui,
+        id: egui::Id,
+        at: egui::Pos2,
+        senses: bool,
+        leads_somewhere: bool,
+    ) -> (Option<Response>, f32) {
         let galley = elided(ui, self.text, self.font.clone(), self.color, self.width, 1);
         let rect = Rect::from_min_size(at, galley.size());
-        let mut clicked = false;
-        if leads_somewhere && !self.text.is_empty() {
-            let response = ui.interact(rect, id, Sense::click());
-            if response.hovered() {
+        let mut response = None;
+        if senses && !self.text.is_empty() {
+            let text = ui.interact(rect, id, Sense::click());
+            if leads_somewhere && text.hovered() {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                 ui.painter()
                     .hline(rect.x_range(), rect.bottom() - 1.0, (1.0, self.color));
             }
-            clicked = response.clicked();
+            response = Some(text);
         }
         ui.painter().galley(at, galley, self.color);
-        (clicked, rect.width())
+        (response, rect.width())
     }
 }

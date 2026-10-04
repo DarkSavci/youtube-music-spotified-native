@@ -1,14 +1,15 @@
-//! What a right click on a song offers.
+//! What a right click on a song offers, or one on an artist's name.
 //!
 //! Built here and not in each list, so a song means the same wherever it
 //! is shown. The entries, their order and their words are the Electron
 //! app's (`trackmenu.ts`).
 
-use spotified_client::models::{LibraryKind, Track};
+use spotified_client::models::{AlbumRef, ArtistRef, LibraryKind, Track};
 
 use super::widgets;
 use super::widgets::menu::{Entry, Menu};
 use crate::actions::Action;
+use crate::blocked::Kind;
 use crate::state::{Loadable, Page, State};
 use crate::theme::Icon;
 
@@ -84,6 +85,16 @@ pub fn tracks(
     {
         actions.push(Action::Open(Page::Album(album.id.clone())));
     }
+    // Never to be played, or to be played again: the song, each artist
+    // that has a page, and the album.
+    menu.separator();
+    actions.extend(block(state, menu, Kind::Song, &track.id, &track.title));
+    for artist in &track.artists {
+        actions.extend(block(state, menu, Kind::Artist, &artist.id, &artist.name));
+    }
+    if let Some(album) = &track.album {
+        actions.extend(block(state, menu, Kind::Album, &album.id, &album.name));
+    }
     menu.separator();
     let like = if state.likes.is_liked(&track.id) {
         "Remove from your library"
@@ -97,6 +108,79 @@ pub fn tracks(
         actions.push(Action::Share {
             kind: crate::share::Kind::Track,
             id: track.id.clone(),
+        });
+    }
+}
+
+/// The entry that blocks a song, an artist or an album, or lets one that
+/// is blocked play again. Nothing without an id can be blocked, and has no
+/// entry. Returns what was asked for, if it was chosen.
+pub fn block(
+    state: &State,
+    menu: &mut Menu<'_>,
+    kind: Kind,
+    id: &str,
+    name: &str,
+) -> Option<Action> {
+    if id.is_empty() {
+        return None;
+    }
+    let blocked = state.settings.blocked.has(kind, id);
+    let verb = if blocked { "Unblock" } else { "Block" };
+    let label = match kind {
+        Kind::Song => format!("{verb} this song"),
+        Kind::Album => format!("{verb} this album"),
+        // A song can have several, so each is named.
+        Kind::Artist => format!("{verb} {name}"),
+    };
+    // The icon is given: an artist's name may hold any word a label is
+    // told apart by.
+    menu.entry(Entry::new(&label).icon(Icon::Ban))
+        .then(|| Action::SetBlocked {
+            kind,
+            id: id.to_owned(),
+            name: name.to_owned(),
+            blocked: !blocked,
+        })
+}
+
+/// What a right click on an artist's name offers, where the name is a
+/// link to their page.
+pub fn artist(state: &State, menu: &mut Menu<'_>, actions: &mut Vec<Action>, artist: &ArtistRef) {
+    let label = format!("Go to {}", artist.name);
+    if menu.entry(Entry::new(&label).icon(Icon::User)) {
+        let id = widgets::artist_page_id(&artist.id).to_owned();
+        actions.push(Action::Open(Page::Artist(id)));
+    }
+    menu.separator();
+    actions.extend(block(state, menu, Kind::Artist, &artist.id, &artist.name));
+    menu.separator();
+    if menu.item("Share") {
+        actions.push(Action::Share {
+            kind: crate::share::Kind::Artist,
+            id: artist.id.clone(),
+        });
+    }
+}
+
+/// What a right click on an album's name offers, where the name is a link
+/// to its page.
+pub fn album(state: &State, menu: &mut Menu<'_>, actions: &mut Vec<Action>, album: &AlbumRef) {
+    // One with no page can only be read.
+    if album.id.is_empty() {
+        menu.note(&album.name);
+        return;
+    }
+    if menu.item("Go to album") {
+        actions.push(Action::Open(Page::Album(album.id.clone())));
+    }
+    menu.separator();
+    actions.extend(block(state, menu, Kind::Album, &album.id, &album.name));
+    menu.separator();
+    if menu.item("Share") {
+        actions.push(Action::Share {
+            kind: crate::share::Kind::Album,
+            id: album.id.clone(),
         });
     }
 }

@@ -11,6 +11,7 @@ use crate::theme;
 use crate::update::Status;
 
 mod accounts;
+mod blocked;
 mod playback;
 
 /// Cards stop growing here; a row's label and its control would otherwise
@@ -65,6 +66,7 @@ pub fn show(state: &State, ui: &mut Ui, actions: &mut Vec<Action>) {
             }
         });
     });
+    section(state, ui, "Blocked", |ui| blocked::show(state, ui, actions));
     section(state, ui, "Storage", |ui| {
         let about = "Songs you play, and the ones about to play, are kept on disk so they \
                      start instantly. The least recently played are removed first.";

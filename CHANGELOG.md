@@ -2,6 +2,14 @@
 
 Every release of Youtube Music Spotified Native, newest first.
 
+## 0.4.5 — 2026-10-04
+
+### New
+
+- Block a song, an artist or an album from its right-click menu, or from the "…" menu on an album's or an artist's page: the queue steps over what is blocked, radios leave it out, and it is shown dimmed. Everything blocked is listed in Settings, each with a button to unblock it
+- The player bar names the album after the artists, as a link to it
+- A right click on the playing song's title, on one of its artists or on its album brings that one's menu
+
 ## 0.4.4 — 2026-10-04
 
 ### New

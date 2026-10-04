@@ -427,8 +427,10 @@ impl Row<'_> {
             widgets::artwork(ui, state, &track.artwork, cover, shape, Icon::Music);
         }
 
-        // A track that cannot be played is shown, but dimmed.
-        let title_color = match (playing, track.playable) {
+        // A track that cannot be played, or that the listener has blocked,
+        // is shown, but dimmed.
+        let plays = track.playable && !state.settings.blocked.stops(track);
+        let title_color = match (playing, plays) {
             (true, _) => palette.accent,
             (false, true) => palette.text,
             (false, false) => palette.dim,

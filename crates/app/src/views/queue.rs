@@ -225,6 +225,8 @@ fn row(
     let width = (rect.right() - left - 52.0).max(20.0);
     let title_color = match place {
         Place::Playing => palette.accent,
+        // What is blocked is stepped over, and looks it.
+        Place::Played | Place::Upcoming if state.settings.blocked.stops(track) => palette.dim,
         Place::Played | Place::Upcoming => palette.text.gamma_multiply(strength),
     };
     let title = widgets::elided(ui, &track.title, theme::medium(14.0), title_color, width, 1);

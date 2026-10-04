@@ -307,6 +307,9 @@ func (s *Server) handleSessionSettings(w http.ResponseWriter, r *http.Request) {
 		CacheMaxMB *int64 `json:"cacheMaxMB"`
 		// Whether the queue carries on with a radio once it runs low.
 		Autoplay *bool `json:"autoplay"`
+		// The songs, artists and albums never to be played; absent leaves
+		// them as they are.
+		Blocked *session.Blocked `json:"blocked"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		s.write(w, http.StatusBadRequest, apiError{Error: "invalid body"})
@@ -324,6 +327,9 @@ func (s *Server) handleSessionSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	if body.Autoplay != nil {
 		s.SetAutoplay(*body.Autoplay)
+	}
+	if body.Blocked != nil {
+		s.deps.Session.SetBlocked(r.Context(), *body.Blocked)
 	}
 	if body.CacheMaxMB != nil && *body.CacheMaxMB > 0 && s.deps.Audio != nil {
 		s.deps.Audio.SetMax(*body.CacheMaxMB << 20)

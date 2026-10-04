@@ -9,6 +9,7 @@ use super::menus;
 use super::widgets::menu::{self, Entry, Menu};
 use super::widgets::{self, ArtShape};
 use crate::actions::Action;
+use crate::blocked::Kind;
 use crate::state::{Page, State};
 use crate::theme::{self, Icon};
 
@@ -136,8 +137,14 @@ fn card(state: &State, ui: &mut Ui, card: Card<'_>) -> CardResponse {
     }
 }
 
-/// The menu on an album, a playlist or an artist.
-fn collection_menu(menu: &mut Menu<'_>, actions: &mut Vec<Action>, page: &Page, link: String) {
+/// The menu on an album, a playlist or an artist, which is called `title`.
+fn collection_menu(
+    state: &State,
+    menu: &mut Menu<'_>,
+    actions: &mut Vec<Action>,
+    (page, title): (&Page, &str),
+    link: String,
+) {
     // What it is called is what the entry that opens it says, as the
     // Electron app's did: "Open album", "Open show".
     let (open, playable) = match page {
@@ -158,6 +165,15 @@ fn collection_menu(menu: &mut Menu<'_>, actions: &mut Vec<Action>, page: &Page, 
     if menu.entry(Entry::new(open).icon(icon)) {
         actions.push(Action::Open(page.clone()));
     }
+    let blockable = match page {
+        Page::Album(id) => Some((Kind::Album, id)),
+        Page::Artist(id) => Some((Kind::Artist, id)),
+        _ => None,
+    };
+    if let Some((kind, id)) = blockable {
+        menu.separator();
+        actions.extend(menus::block(state, menu, kind, id, title));
+    }
     menu.separator();
     if menu.item("Share") {
         actions.push(Action::CopyLink(link));
@@ -174,9 +190,10 @@ fn collection_card(
     page: Page,
     link: String,
 ) {
+    let title = card_spec.title;
     let response = card(state, ui, card_spec);
     menu::context(&response.card, &state.palette, |menu| {
-        collection_menu(menu, actions, &page, link);
+        collection_menu(state, menu, actions, (&page, title), link);
     });
     if response.play {
         actions.push(Action::PlayCollection(page));

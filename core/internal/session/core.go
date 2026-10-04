@@ -72,6 +72,11 @@ type Core struct {
 	// played (see endedTooEarly), so a second early end fails it instead.
 	earlyEndRetried string
 
+	// What the listener never wants played, by id (see blocked.go).
+	blockedTracks  map[string]bool
+	blockedArtists map[string]bool
+	blockedAlbums  map[string]bool
+
 	rng *rand.Rand
 }
 
@@ -270,6 +275,10 @@ func (c *Core) play(cmd Command) (Reject, []LogEntry) {
 		return RejectOutOfRange, nil
 	}
 
+	// Asked to start on a blocked track, the queue starts on the next that
+	// is not.
+	idx = c.firstAllowed(cmd.Tracks, idx)
+
 	logs := c.closeOutCurrent(false)
 
 	c.state.Queue = domain.Queue{Items: cmd.Tracks, Index: idx, Origin: cmd.Origin}
@@ -447,6 +456,7 @@ func (c *Core) jump(at int) (Reject, []LogEntry) {
 	if at < 0 || at >= len(c.state.Queue.Items) {
 		return RejectOutOfRange, nil
 	}
+	at = c.firstAllowed(c.state.Queue.Items, at)
 	logs := c.closeOutCurrent(false)
 	c.userChange = true
 	c.startTrack(at, 0)
@@ -817,24 +827,40 @@ func (c *Core) closeOutCurrent(completed bool) []LogEntry {
 	}}
 }
 
-// nextIndex resolves the next playback position, honouring shuffle and repeat.
-// ok is false when the queue is exhausted.
+// nextIndex resolves the next playback position, honouring shuffle and repeat,
+// and stepping over what the listener has blocked. ok is false when the queue
+// is exhausted.
 func (c *Core) nextIndex(delta int) (int, bool) {
-	n := len(c.state.Queue.Items)
+	items := c.state.Queue.Items
+	n := len(items)
 	if n == 0 {
 		return 0, false
 	}
-	idx := c.state.Queue.Index + delta
-	switch {
-	case idx >= n:
-		if c.state.Repeat != domain.RepeatAll {
-			return 0, false
-		}
-		idx = 0
-	case idx < 0:
-		idx = 0
+	step := 1
+	if delta < 0 {
+		step = -1
 	}
-	return idx, true
+	idx := max(c.state.Queue.Index+delta, 0)
+	// A queue blocked from end to end was asked for as it is.
+	heed := c.anyAllowed()
+	for range n {
+		if idx >= n {
+			if c.state.Repeat != domain.RepeatAll {
+				return 0, false
+			}
+			idx = 0
+		}
+		if idx < 0 {
+			// Going back, with only blocked tracks before this one: it
+			// starts over, as the first of a queue does.
+			return c.state.Queue.Index, true
+		}
+		if !heed || !c.blocked(&items[idx]) {
+			return idx, true
+		}
+		idx += step
+	}
+	return 0, false
 }
 
 // peekNext is nextIndex without mutating anything, for preload.

@@ -392,3 +392,37 @@ fn a_failed_or_empty_read_at_launch_says_nothing() {
     assert!(loaded(&mut state, failed).is_empty());
     assert!(state.toasts.is_empty());
 }
+
+#[test]
+fn blocking_is_kept_and_the_core_told_and_said() {
+    use crate::blocked::Kind;
+
+    let mut state = ready();
+    let block = |blocked| Action::SetBlocked {
+        kind: Kind::Artist,
+        id: "MPLAUCa".into(),
+        name: "The Artist".into(),
+        blocked,
+    };
+    assert_eq!(apply(&mut state, block(true)), HEARD);
+    assert!(state.settings.blocked.has(Kind::Artist, "UCa"));
+    assert_eq!(
+        state.toasts.last().map(|toast| toast.text.as_str()),
+        Some("The Artist blocked. Their songs will be skipped.")
+    );
+    // Blocked already: nothing to keep or tell.
+    assert!(apply(&mut state, block(true)).is_empty());
+
+    assert_eq!(apply(&mut state, block(false)), HEARD);
+    assert!(state.settings.blocked.is_empty());
+}
+
+#[test]
+fn a_reset_leaves_what_is_blocked() {
+    use crate::blocked::Kind;
+
+    let mut state = ready();
+    state.settings.blocked.set(Kind::Song, "a", "A song", true);
+    apply(&mut state, Action::ResetPreferences);
+    assert!(state.settings.blocked.has(Kind::Song, "a"));
+}

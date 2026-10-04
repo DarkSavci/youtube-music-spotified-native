@@ -6,6 +6,7 @@ use spotified_client::models::{LibraryKind, Track};
 
 use super::widgets::menu::{self, Entry, Menu};
 use crate::actions::Action;
+use crate::blocked;
 use crate::share;
 use crate::state::{Loadable, State, Whole};
 use crate::theme::Icon;
@@ -118,6 +119,16 @@ fn entries(state: &State, menu: &mut Menu<'_>, entity: &Entity) -> Option<Action
                 title: entity.title.to_owned(),
             });
         }
+    }
+    let blockable = match entity.kind {
+        share::Kind::Album => Some(blocked::Kind::Album),
+        share::Kind::Artist => Some(blocked::Kind::Artist),
+        _ => None,
+    };
+    if let Some(kind) = blockable {
+        menu.separator();
+        let block = super::menus::block(state, menu, kind, entity.id, entity.title);
+        chosen = block.or(chosen);
     }
     menu.separator();
     if menu.item("Share") {

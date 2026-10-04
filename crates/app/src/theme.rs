@@ -326,6 +326,7 @@ macro_rules! icons {
 icons! {
     Archive => "archive",
     AudioLines => "audio-lines",
+    Ban => "ban",
     Check => "check",
     ChevronDown => "chevron-down",
     ChevronLeft => "chevron-left",

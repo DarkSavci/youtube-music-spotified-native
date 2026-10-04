@@ -130,6 +130,11 @@ fn settings_are_written_as_the_core_reads_them() {
         report_to_youtube: true,
         cache_max_mb: 2048,
         autoplay: false,
+        blocked: Blocked {
+            tracks: vec!["a".into()],
+            artists: vec!["UCb".into()],
+            albums: Vec::new(),
+        },
     };
     assert_eq!(
         json!(settings),
@@ -140,6 +145,7 @@ fn settings_are_written_as_the_core_reads_them() {
             "reportToYouTube": true,
             "cacheMaxMB": 2048,
             "autoplay": false,
+            "blocked": { "tracks": ["a"], "artists": ["UCb"], "albums": [] },
         })
     );
 }

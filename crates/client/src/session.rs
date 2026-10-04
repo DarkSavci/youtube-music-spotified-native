@@ -259,7 +259,7 @@ impl Command {
 
 /// The playback settings the core acts on, as its settings endpoint takes
 /// them. The rest are this device's, and never leave the app.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Settings {
     /// How long one track fades into the next; 0 for no fade.
@@ -276,6 +276,16 @@ pub struct Settings {
     pub cache_max_mb: u64,
     /// Carry on with songs like the last when the queue runs out.
     pub autoplay: bool,
+    /// What the queue steps over.
+    pub blocked: Blocked,
+}
+
+/// The songs, artists and albums the listener never wants played, by id.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct Blocked {
+    pub tracks: Vec<String>,
+    pub artists: Vec<String>,
+    pub albums: Vec<String>,
 }
 
 /// What the engine reports. `reason` is one of the strings the core knows:

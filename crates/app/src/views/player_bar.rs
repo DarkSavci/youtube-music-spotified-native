@@ -6,10 +6,11 @@
 use std::time::Instant;
 
 use eframe::egui::{self, Align2, Margin, Rect, Sense, Ui, pos2, vec2};
+use spotified_client::models::Track;
 use spotified_client::session::Repeat;
 
-use super::widgets::{self, ArtShape};
-use super::{equalizer, format, speed, video, visualizer, volume};
+use super::widgets::{self, ArtShape, menu};
+use super::{equalizer, format, menus, speed, video, visualizer, volume};
 use crate::actions::Action;
 use crate::settings::RightPanel;
 use crate::state::{Page, Playback, State};
@@ -39,6 +40,10 @@ const EXTRA_STEP: f32 = 36.0;
 /// The least the middle zone is, and the part of the bar it takes.
 const CENTRE_LEAST: f32 = 320.0;
 const CENTRE_SHARE: f32 = 0.38;
+/// What stands between a song's artists and its album.
+const ALBUM_DOT: &str = " • ";
+/// The least room left on the artists' line for the album to be named.
+const ALBUM_LEAST: f32 = 40.0;
 /// The room each of the two times has beside the seek bar.
 const TIME_WIDTH: f32 = 40.0;
 
@@ -121,7 +126,10 @@ fn now_playing(
     widgets::artwork(ui, state, &track.artwork, cover, shape, Icon::Music);
     // The text leaves room for the heart and the share button after it.
     let width = (zone.right() - left - 76.0).max(20.0);
-    // The title leads to the album and the artists to the artist.
+    // The title leads to the album, as the album's own name under it does,
+    // and the artists to the artist. A right click on any of them brings
+    // the menu a row of a list would: the song's on its title, the artist's
+    // on a name, the album's on the album.
     let album_page = track
         .album
         .as_ref()
@@ -135,9 +143,14 @@ fn now_playing(
     };
     let at = pos2(left, zone.center().y - 18.0);
     let id = ui.id().with(("now-playing", 0));
-    let (clicked, title_width) = title.show_measured(ui, id, at, album_page.is_some());
-    if let (true, Some(page)) = (clicked, album_page) {
-        actions.push(Action::Open(page));
+    let (response, title_width) = title.show_response(ui, id, at, album_page.is_some());
+    if let Some(response) = response {
+        menu::context(&response, palette, |menu| {
+            menus::tracks(state, menu, actions, &[track], None);
+        });
+        if let (true, Some(page)) = (response.clicked(), album_page) {
+            actions.push(Action::Open(page));
+        }
     }
     let artists = widgets::Artists {
         artists: &track.artists,
@@ -146,11 +159,19 @@ fn now_playing(
         width,
     };
     let at = pos2(left, zone.center().y + 2.0);
-    let (artist, artists_width) = artists.show(ui, ui.id().with(("now-playing", 1)), at);
-    if let Some(artist) = artist {
-        actions.push(Action::Open(Page::Artist(artist)));
-    }
-    let text_width = title_width.max(artists_width);
+    let id = ui.id().with(("now-playing", 1));
+    let artists_width = artists.show_each(ui, id, at, |artist, response| {
+        menu::context(response, palette, |menu| {
+            menus::artist(state, menu, actions, artist);
+        });
+        if response.clicked() {
+            let id = widgets::artist_page_id(&artist.id).to_owned();
+            actions.push(Action::Open(Page::Artist(id)));
+        }
+    });
+    let credits =
+        artists_width + album_credit(state, ui, actions, track, at, (artists_width, width));
+    let text_width = title_width.max(credits);
 
     let liked = state.likes.is_liked(&track.id);
     let heart = widgets::IconButton {
@@ -183,6 +204,53 @@ fn now_playing(
             id: track.id.clone(),
         });
     }
+}
+
+/// The album a song is on, after its artists on their line: " • " and the
+/// album's name, which leads to its page. `taken` of the line's `width` is
+/// the artists'. Returns how much more of the line this took.
+fn album_credit(
+    state: &State,
+    ui: &Ui,
+    actions: &mut Vec<Action>,
+    track: &Track,
+    at: egui::Pos2,
+    (taken, width): (f32, f32),
+) -> f32 {
+    let palette = &state.palette;
+    let Some(album) = track.album.as_ref().filter(|album| !album.name.is_empty()) else {
+        return 0.0;
+    };
+    let link = |text, room: f32| widgets::Link {
+        text,
+        font: theme::regular(12.0),
+        color: palette.secondary,
+        width: room.max(0.0),
+    };
+    let mut drawn = 0.0;
+    // Nobody named: the album has the line to itself.
+    if taken > 0.0 {
+        // Too little room left for the dot and a few letters after it.
+        if width - taken < ALBUM_LEAST {
+            return 0.0;
+        }
+        let dot = link(ALBUM_DOT, width - taken);
+        let id = ui.id().with(("now-playing", 2));
+        drawn = dot.show_measured(ui, id, at + vec2(taken, 0.0), false).1;
+    }
+    let name = link(&album.name, width - taken - drawn);
+    let id = ui.id().with(("now-playing", 3));
+    let leads = !album.id.is_empty();
+    let (response, name_width) = name.show_response(ui, id, at + vec2(taken + drawn, 0.0), leads);
+    if let Some(response) = response {
+        menu::context(&response, palette, |menu| {
+            menus::album(state, menu, actions, album);
+        });
+        if leads && response.clicked() {
+            actions.push(Action::Open(Page::Album(album.id.clone())));
+        }
+    }
+    drawn + name_width
 }
 
 /// The transport, centred in `zone`: the buttons above, the seek bar and

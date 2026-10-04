@@ -267,6 +267,27 @@ func (h *Hub) SetSettings(crossfadeMs int, gapless bool) {
 	h.broadcastLocked()
 }
 
+// SetBlocked replaces what the listener never wants played, and moves on from
+// a track that is playing and now blocked.
+func (h *Hub) SetBlocked(ctx context.Context, b Blocked) {
+	h.mu.Lock()
+	logs := h.core.SetBlocked(b)
+	h.broadcastLocked()
+	h.mu.Unlock()
+
+	if len(logs) > 0 && h.sink != nil {
+		h.sink.Record(ctx, logs)
+	}
+}
+
+// Blocked is whether the listener has blocked this track, its album or one of
+// its artists.
+func (h *Hub) Blocked(t domain.Track) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.core.Blocked(&t)
+}
+
 func (h *Hub) Projection() Projection {
 	h.mu.Lock()
 	defer h.mu.Unlock()
