@@ -1,0 +1,421 @@
+//! The Settings page: a few cards of rows, each a label, a line that says
+//! what it does, and its control on the right.
+
+use eframe::egui::{self, Align, Frame, Layout, Margin, Ui};
+
+use super::{cards, format, keys, widgets};
+use crate::actions::{Action, MAX_CROSSFADE_SECONDS};
+use crate::state::{Loadable, Page, State};
+use crate::theme;
+use crate::update::Status;
+
+/// Cards stop growing here; a row's label and its control would otherwise
+/// drift apart on a wide window.
+const MAX_WIDTH: f32 = 760.0;
+
+pub fn show(state: &State, ui: &mut Ui, actions: &mut Vec<Action>) {
+    ui.label(egui::RichText::new("Settings").font(theme::bold(28.0)));
+    // No wider than reads well, and never wider than there is room for.
+    ui.set_max_width(MAX_WIDTH.min(ui.available_width()));
+
+    section(state, ui, "Account", |ui| account(state, ui, actions));
+    section(state, ui, "Playback", |ui| {
+        let on = state.settings.normalise_volume;
+        let label = "Normalise volume";
+        let about = "Turns louder songs down so they all play at a similar level. \
+                     Applies from the next song.";
+        row(state, ui, label, about, |ui| {
+            if widgets::switch(ui, &state.palette, on, label).clicked() {
+                actions.push(Action::SetNormaliseVolume(!on));
+            }
+        });
+        ui.add_space(10.0);
+        let about = "Fades each song into the next as it ends. Off at zero.";
+        row(state, ui, "Crossfade", about, |ui| {
+            // The view may not change state, so it moves a copy and asks.
+            let mut seconds = state.settings.crossfade_seconds;
+            let slider = egui::Slider::new(&mut seconds, 0..=MAX_CROSSFADE_SECONDS).suffix(" s");
+            if ui.add(slider).changed() {
+                actions.push(Action::SetCrossfade(seconds));
+            }
+        });
+    });
+    section(state, ui, "Equalizer", |ui| equalizer(state, ui, actions));
+    section(state, ui, "Appearance", |ui| {
+        themes(state, ui, actions);
+        ui.add_space(12.0);
+        let on = state.settings.visualizer;
+        let label = "Player bar visualizer";
+        let about = "Draws the music behind the player bar. The window is redrawn thirty \
+                     times a second while a song plays, which costs some processor time.";
+        row(state, ui, label, about, |ui| {
+            if widgets::switch(ui, &state.palette, on, label).clicked() {
+                actions.push(Action::SetVisualizer(!on));
+            }
+        });
+    });
+    section(state, ui, "Storage", |ui| {
+        let kept = match state.cache_usage {
+            Some(usage) if usage.tracks > 0 => format!(
+                "{} in {}.",
+                format::bytes(usage.bytes),
+                format::songs(usage.tracks as usize)
+            ),
+            Some(_) => "Nothing kept yet.".to_owned(),
+            None => String::new(),
+        };
+        let about = format!(
+            "Songs you play are kept on this computer so they start at once and \
+             play offline. {kept}"
+        );
+        row(state, ui, "Downloaded songs", &about, |ui| {
+            let empty = state.cache_usage.is_none_or(|usage| usage.tracks == 0);
+            ui.add_enabled_ui(!empty, |ui| {
+                if widgets::outline_button(ui, &state.palette, "Delete").clicked() {
+                    actions.push(Action::ClearCache);
+                }
+            });
+        });
+    });
+    section(state, ui, "Window", |ui| {
+        if cfg!(windows) {
+            let on = state.settings.system_title_bar;
+            let label = "Use the system title bar";
+            let about = "Gives the window Windows' own title bar and frame instead of \
+                         the app's.";
+            row(state, ui, label, about, |ui| {
+                if widgets::switch(ui, &state.palette, on, label).clicked() {
+                    actions.push(Action::SetSystemTitleBar(!on));
+                }
+            });
+            ui.add_space(10.0);
+        }
+        let on = state.settings.close_to_tray;
+        let label = "Keep playing when the window is closed";
+        let about = "Closing the window leaves the app in the notification area. \
+                     Quit from its menu there.";
+        row(state, ui, label, about, |ui| {
+            if widgets::switch(ui, &state.palette, on, label).clicked() {
+                actions.push(Action::SetCloseToTray(!on));
+            }
+        });
+        ui.add_space(10.0);
+        let on = state.starts_at_login;
+        let label = "Start with Windows";
+        let about = "Starts in the notification area when you sign in to Windows.";
+        row(state, ui, label, about, |ui| {
+            if widgets::switch(ui, &state.palette, on, label).clicked() {
+                actions.push(Action::SetStartAtLogin(!on));
+            }
+        });
+    });
+    section(state, ui, "Keyboard shortcuts", |ui| shortcuts(state, ui));
+    section(state, ui, "Troubleshooting", |ui| {
+        let about = "A log is written for each launch. Send the newest with a bug report.";
+        row(state, ui, "Logs", about, |ui| {
+            if widgets::outline_button(ui, &state.palette, "Open folder").clicked() {
+                actions.push(Action::OpenLogs);
+            }
+        });
+        ui.add_space(10.0);
+        let about = "yt-dlp finds the audio for each song. Update it if songs stop playing.";
+        row(state, ui, "Stream resolver", about, |ui| {
+            if state.updating_resolver {
+                widgets::spinner(ui, &state.palette, 18.0);
+            } else if widgets::outline_button(ui, &state.palette, "Update").clicked() {
+                actions.push(Action::UpdateResolver);
+            }
+        });
+    });
+    section(state, ui, "About", |ui| {
+        let version = format!("{} {}", crate::APP_NAME, env!("CARGO_PKG_VERSION"));
+        row(state, ui, &version, &update_note(&state.update), |ui| {
+            update_button(state, ui, actions);
+            if widgets::outline_button(ui, &state.palette, "What's new").clicked() {
+                actions.push(Action::Open(Page::Changelog));
+            }
+        });
+        ui.add_space(10.0);
+        ui.label(
+            egui::RichText::new(
+                "Built with Rust and egui. Not affiliated with Spotify or YouTube.",
+            )
+            .font(theme::regular(12.5))
+            .color(state.palette.secondary),
+        );
+    });
+}
+
+/// The built-in themes and those in the themes folder, as chips. The mini
+/// player wears whichever the main window does.
+fn themes(state: &State, ui: &mut Ui, actions: &mut Vec<Action>) {
+    let palette = &state.palette;
+    let about = "Follow system uses Windows' light or dark setting. Themes in the \
+                 folder are small JSON files; copy one to make your own.";
+    row(state, ui, "Theme", about, |ui| {
+        if widgets::outline_button(ui, palette, "Reload").clicked() {
+            actions.push(Action::ReloadThemes);
+        }
+        if widgets::outline_button(ui, palette, "Open folder").clicked() {
+            actions.push(Action::OpenThemesFolder);
+        }
+    });
+    ui.add_space(8.0);
+    let custom = state.settings.custom_theme.as_deref();
+    // A custom theme whose file has gone is not worn, so none is lit.
+    let worn = custom.filter(|file| state.themes.iter().any(|theme| theme.file == *file));
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
+        for choice in crate::themes::Choice::EVERY {
+            let active = worn.is_none() && state.settings.theme == choice;
+            if widgets::chip(ui, palette, choice.label(), active).clicked() && !active {
+                actions.push(Action::SetTheme(choice));
+            }
+        }
+        for theme in &state.themes {
+            let active = worn == Some(theme.file.as_str());
+            if widgets::chip(ui, palette, &theme.label(), active).clicked() && !active {
+                actions.push(Action::SetCustomTheme(theme.file.clone()));
+            }
+        }
+    });
+}
+
+/// What the look for a newer version has come to, as a sentence.
+fn update_note(status: &Status) -> String {
+    match status {
+        Status::Idle => "Updates download in the background and install when you restart.".into(),
+        Status::Unavailable => "Only an installed copy updates itself.".into(),
+        Status::Checking => "Checking for updates…".into(),
+        Status::UpToDate => "You're on the latest version.".into(),
+        Status::Downloading(version) => format!("Downloading {version}…"),
+        Status::Ready { version, .. } => {
+            format!("Version {version} is downloaded and installs when you restart.")
+        }
+        Status::Failed(error) => format!("Could not check for updates: {error}"),
+    }
+}
+
+fn update_button(state: &State, ui: &mut Ui, actions: &mut Vec<Action>) {
+    let palette = &state.palette;
+    match &state.update {
+        Status::Ready { .. } => {
+            if widgets::pill_button(ui, palette, "Restart to update").clicked() {
+                actions.push(Action::InstallUpdate);
+            }
+        }
+        Status::Checking | Status::Downloading(_) => widgets::spinner(ui, palette, 18.0),
+        Status::Unavailable => {}
+        Status::Idle | Status::UpToDate | Status::Failed(_) => {
+            if widgets::outline_button(ui, palette, "Check for updates").clicked() {
+                actions.push(Action::CheckForUpdate);
+            }
+        }
+    }
+}
+
+/// A titled card.
+fn section(state: &State, ui: &mut Ui, title: &str, contents: impl FnOnce(&mut Ui)) {
+    cards::section_title(ui, title);
+    Frame::new()
+        .fill(state.palette.surface.gamma_multiply(0.7))
+        .stroke((1.0, state.palette.outline))
+        .corner_radius(theme::RADIUS + 2)
+        .inner_margin(Margin::symmetric(20, 16))
+        .show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            contents(ui);
+        });
+}
+
+/// A setting: what it is, what it does, and its control at the right.
+fn row(state: &State, ui: &mut Ui, label: &str, about: &str, control: impl FnOnce(&mut Ui)) {
+    ui.horizontal(|ui| {
+        ui.vertical(|ui| {
+            // Leave the control its room; the text wraps in what is left.
+            ui.set_max_width((ui.available_width() - 140.0).max(140.0));
+            ui.label(egui::RichText::new(label).font(theme::medium(14.0)));
+            ui.label(
+                egui::RichText::new(about)
+                    .font(theme::regular(12.5))
+                    .color(state.palette.secondary),
+            );
+        });
+        ui.with_layout(Layout::right_to_left(Align::Center), control);
+    });
+}
+
+fn account(state: &State, ui: &mut Ui, actions: &mut Vec<Action>) {
+    let palette = &state.palette;
+    // The library only loads for a signed-in account, so it is the witness.
+    let signed_in = matches!(state.library, Loadable::Loaded(_));
+    let name = state.account.as_ref().map(|account| account.name.as_str());
+    let (label, about) = if signed_in {
+        (
+            name.filter(|name| !name.is_empty()).unwrap_or("Signed in"),
+            "Your library, likes and playlists come from your YouTube Music account.",
+        )
+    } else {
+        (
+            "Signed out",
+            "Browsing and search work. Your library and reliable playback need an account.",
+        )
+    };
+    row(state, ui, label, about, |ui| {
+        if signed_in {
+            if widgets::outline_button(ui, palette, "Sign out").clicked() {
+                actions.push(Action::SignOut);
+            }
+        } else if state.signing_in {
+            widgets::spinner(ui, palette, 18.0);
+        } else {
+            if widgets::pill_button(ui, palette, "Sign in").clicked() {
+                actions.push(Action::SignIn);
+            }
+            if state.import_source.is_some()
+                && widgets::outline_button(ui, palette, "Import sign-in").clicked()
+            {
+                actions.push(Action::ImportSignIn);
+            }
+        }
+    });
+    // Most accounts hold one channel, and then there is nothing to choose.
+    if signed_in && state.channels.len() > 1 {
+        ui.add_space(10.0);
+        let about = "Each channel of your account has its own library and likes.";
+        row(state, ui, "Channel", about, |ui| {
+            channel_choice(state, ui, actions)
+        });
+    }
+    let note = if let Some(error) = &state.import_error {
+        Some((error.as_str(), palette.danger))
+    } else if state.signing_in {
+        Some((
+            "Sign in to YouTube Music in the browser window. It closes by itself when you are in.",
+            palette.secondary,
+        ))
+    } else if !signed_in && state.import_source.is_some() {
+        Some((
+            "Sign in opens your browser on a fresh profile. Import copies the sign-in \
+             from Youtube Music Spotified on this computer.",
+            palette.dim,
+        ))
+    } else {
+        None
+    };
+    if let Some((text, color)) = note {
+        ui.label(
+            egui::RichText::new(text)
+                .font(theme::regular(12.0))
+                .color(color),
+        );
+    }
+}
+
+fn channel_choice(state: &State, ui: &mut Ui, actions: &mut Vec<Action>) {
+    let current = state
+        .channels
+        .iter()
+        .find(|channel| channel.id == state.channel_id)
+        .map_or("Choose", |channel| channel.name.as_str());
+    egui::ComboBox::from_id_salt("channel")
+        .selected_text(current)
+        .show_ui(ui, |ui| {
+            for channel in &state.channels {
+                let chosen = channel.id == state.channel_id;
+                if ui.selectable_label(chosen, &channel.name).clicked() && !chosen {
+                    actions.push(Action::SwitchChannel(channel.id.clone()));
+                }
+            }
+        });
+}
+
+/// Shapes to start from. Each is decibels for the ten bands, low to high.
+const PRESETS: [(&str, [f32; 10]); 5] = [
+    ("Flat", [0.0; 10]),
+    (
+        "Bass boost",
+        [6.0, 5.0, 4.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+    ),
+    (
+        "Treble boost",
+        [0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 2.0, 4.0, 5.0, 6.0],
+    ),
+    (
+        "Vocal",
+        [-2.0, -2.0, -1.0, 1.0, 3.0, 4.0, 3.0, 1.0, 0.0, -1.0],
+    ),
+    (
+        "Loudness",
+        [5.0, 4.0, 2.0, 0.0, -1.0, -1.0, 0.0, 2.0, 4.0, 5.0],
+    ),
+];
+
+fn equalizer(state: &State, ui: &mut Ui, actions: &mut Vec<Action>) {
+    let on = state.settings.equalizer_on;
+    let label = "Equalizer";
+    let about = "Raise or lower ten bands, from deep bass on the left to treble on the right.";
+    row(state, ui, label, about, |ui| {
+        if widgets::switch(ui, &state.palette, on, label).clicked() {
+            actions.push(Action::SetEqualizerOn(!on));
+        }
+    });
+    ui.add_space(8.0);
+    ui.horizontal_wrapped(|ui| {
+        for (name, gains) in PRESETS {
+            let active = on && state.settings.equalizer == gains;
+            if widgets::chip(ui, &state.palette, name, active).clicked() {
+                actions.push(Action::SetEqualizer(gains));
+            }
+        }
+    });
+    ui.add_space(12.0);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 18.0;
+        for (band, hz) in spotified_audio::eq::BANDS.into_iter().enumerate() {
+            ui.vertical(|ui| {
+                // The view may not change state, so it moves a copy and asks.
+                let mut decibels = state.settings.equalizer[band];
+                let range = -spotified_audio::eq::RANGE_DB..=spotified_audio::eq::RANGE_DB;
+                let slider = egui::Slider::new(&mut decibels, range)
+                    .vertical()
+                    .show_value(false)
+                    .step_by(0.5);
+                if ui.add(slider).changed() {
+                    actions.push(Action::SetEqualizerBand(band, decibels));
+                }
+                let name = if hz >= 1000.0 {
+                    format!("{}k", hz / 1000.0)
+                } else {
+                    format!("{hz}")
+                };
+                ui.label(
+                    egui::RichText::new(name)
+                        .font(theme::regular(11.5))
+                        .color(state.palette.secondary),
+                );
+            });
+        }
+    });
+}
+
+fn shortcuts(state: &State, ui: &mut Ui) {
+    egui::Grid::new("shortcuts")
+        .num_columns(2)
+        .spacing([32.0, 10.0])
+        .show(ui, |ui| {
+            for shortcut in keys::SHORTCUTS {
+                let combination = egui::KeyboardShortcut::new(shortcut.modifiers, shortcut.key);
+                ui.label(
+                    egui::RichText::new(ui.ctx().format_shortcut(&combination))
+                        .font(theme::semibold(13.0)),
+                );
+                ui.label(
+                    egui::RichText::new(shortcut.description)
+                        .font(theme::regular(13.5))
+                        .color(state.palette.secondary),
+                );
+                ui.end_row();
+            }
+        });
+}

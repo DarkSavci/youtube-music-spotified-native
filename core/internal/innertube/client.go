@@ -1,0 +1,556 @@
+// Package innertube is the transport to YouTube Music's private JSON API.
+//
+// It is a shared internal module: catalog, identity and resolver all build on
+// it. It is not a Plane and appears in no public interface — callers outside
+// those three should be talking to a domain module instead.
+//
+// The package deliberately returns raw JSON. Translating renderer nodes into
+// domain types is the renderers package's job, and keeping the two separate
+// means transport can be exercised against recorded responses.
+package innertube
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"regexp"
+	"strings"
+	"sync/atomic"
+	"time"
+
+	"spotifier/internal/ratelimit"
+)
+
+const (
+	// Origin is the value request signatures are computed over. A signature
+	// computed for a different origin will not authorize, even with valid
+	// Credentials.
+	Origin = "https://music.youtube.com"
+
+	// ClientName identifies the YouTube Music web client.
+	ClientName = "WEB_REMIX"
+
+	// clientNameID is ClientName as the web client's X-Youtube-Client-Name
+	// header numbers it.
+	clientNameID = "67"
+
+	defaultUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+		"(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+
+	// configTTL bounds how long a scraped config is reused. The client version
+	// changes on YouTube's release cadence; a stale one is tolerated by the
+	// server for a while but not indefinitely.
+	configTTL = 6 * time.Hour
+
+	// homeFresh bounds how long the Home page embedded in a scraped homepage
+	// may stand in for a browse. It is a cold-start saving, not a cache: the
+	// response cache upstream of this package keeps answers for longer.
+	homeFresh = 60 * time.Second
+)
+
+// Config is the per-session configuration scraped from the web client.
+//
+// None of it is secret: the API key is the public web-client key, identical
+// for every user. It is scraped rather than hardcoded so that a rotation does
+// not require shipping a new build.
+type Config struct {
+	APIKey        string
+	ClientVersion string
+	VisitorData   string
+	scrapedAt     time.Time
+
+	// home is the first page of Home the homepage came with, until taken.
+	home atomic.Pointer[json.RawMessage]
+}
+
+// Client performs InnerTube calls.
+//
+// The zero value is not usable; construct with New. A Client is safe for
+// concurrent use.
+type Client struct {
+	http      *http.Client
+	creds     *Credentials
+	userAgent string
+	language  string
+	region    string
+
+	gov     *ratelimit.Governor
+	configs *configStore
+}
+
+// Option configures a Client.
+type Option func(*Client)
+
+// WithHTTPClient injects the transport. Tests use this to serve recorded
+// responses; production leaves it alone.
+func WithHTTPClient(h *http.Client) Option {
+	return func(c *Client) { c.http = h }
+}
+
+// WithCredentials attaches a signed-in session. Without it the Client makes
+// signed-out calls, which is correct for the Catalog plane.
+func WithCredentials(creds *Credentials) Option {
+	return func(c *Client) { c.creds = creds }
+}
+
+// WithLocale sets the language and region sent in the request context. These
+// also form part of every cache key upstream of this package.
+func WithLocale(language, region string) Option {
+	return func(c *Client) { c.language, c.region = language, region }
+}
+
+// New builds a Client.
+func New(opts ...Option) *Client {
+	c := &Client{
+		http:      &http.Client{Timeout: 30 * time.Second},
+		userAgent: defaultUserAgent,
+		language:  "en",
+		region:    "US",
+	}
+	defaults.mu.Lock()
+	c.gov, c.configs = defaults.governor, defaults.configs
+	defaults.mu.Unlock()
+	for _, o := range opts {
+		o(c)
+	}
+	if c.configs == nil {
+		c.configs = newConfigStore()
+	}
+	return c
+}
+
+// Authenticated reports whether Credentials are attached and well-formed. It
+// does not prove the session is live — see SessionState.
+func (c *Client) Authenticated() bool { return c.creds.authenticated() }
+
+/*
+GetSigned performs a plain authenticated GET.
+
+YouTube's playback reporting does not go through InnerTube: the player
+response hands out pre-signed URLs on s.youtube.com and the client pings them
+directly. They carry their own parameters and need only the session cookies,
+so this is deliberately thin — no JSON body, no client context, no parsing.
+
+The one thing added is the client's identity. The signed URLs do not say which
+player they were issued to, and a ping that does not name one is attributed to
+plain YouTube — so the play lands in YouTube's watch history rather than
+YouTube Music's. YouTube Music's own player sends c and cver, and so does this.
+
+Returns the status so the caller can tell a refusal from a network fault; the
+body is discarded because these endpoints answer with nothing worth reading.
+*/
+func (c *Client) GetSigned(ctx context.Context, rawURL string) (int, error) {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return 0, err
+	}
+	q := u.Query()
+	q.Set("c", ClientName)
+	// A missing version degrades to an unversioned ping rather than none.
+	if cfg, err := c.config(ctx); err == nil && cfg.ClientVersion != "" {
+		q.Set("cver", cfg.ClientVersion)
+	}
+	u.RawQuery = q.Encode()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	if err != nil {
+		return 0, err
+	}
+	req.Header.Set("Cookie", c.creds.cookie())
+	req.Header.Set("User-Agent", c.userAgent)
+	req.Header.Set("Origin", Origin)
+	req.Header.Set("Referer", Origin+"/")
+	if auth := c.creds.authorization(Origin); auth != "" {
+		req.Header.Set("Authorization", auth)
+		req.Header.Set("X-Origin", Origin)
+	}
+	resp, err := c.send(req, "signed", u.Path)
+	if resp != nil {
+		defer func() {
+			_, _ = io.Copy(io.Discard, resp.Body)
+			_ = resp.Body.Close()
+		}()
+	}
+	if err != nil {
+		if resp != nil {
+			return resp.StatusCode, err
+		}
+		return 0, err
+	}
+	return resp.StatusCode, nil
+}
+
+// ---------- errors ----------
+
+// HTTPError is a non-2xx response from InnerTube.
+type HTTPError struct {
+	Status   int
+	Endpoint string
+	Message  string
+}
+
+func (e *HTTPError) Error() string {
+	if e.Message != "" {
+		return fmt.Sprintf("innertube %s: HTTP %d: %s", e.Endpoint, e.Status, e.Message)
+	}
+	return fmt.Sprintf("innertube %s: HTTP %d", e.Endpoint, e.Status)
+}
+
+// ---------- config ----------
+
+var (
+	reAPIKey      = regexp.MustCompile(`"INNERTUBE_API_KEY":"([^"]+)"`)
+	reClientVer   = regexp.MustCompile(`"INNERTUBE_CLIENT_VERSION":"([^"]+)"`)
+	reVisitorData = regexp.MustCompile(`"VISITOR_DATA":"([^"]+)"`)
+	rePageHL      = regexp.MustCompile(`"INNERTUBE_CONTEXT_HL":"([^"]+)"`)
+	rePageGL      = regexp.MustCompile(`"INNERTUBE_CONTEXT_GL":"([^"]+)"`)
+)
+
+// config returns a usable Config, scraping and caching as needed.
+func (c *Client) config(ctx context.Context) (*Config, error) {
+	return c.configs.get(ctx, c.creds.cookie()+"|"+c.language, c.scrape)
+}
+
+// scrape fetches the homepage and reads the config out of it.
+func (c *Client) scrape(ctx context.Context) (*Config, error) {
+	// Asked for in the locale every call is made in, so that the Home page it
+	// comes with is the one a browse would have answered with.
+	page := Origin + "/?" + url.Values{"hl": {c.language}, "gl": {c.region}}.Encode()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, page, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", c.userAgent)
+	req.Header.Set("Accept-Language", c.language)
+	req.Header.Set("Cookie", c.creds.cookie())
+
+	resp, err := c.send(req, "config", "")
+	if resp != nil {
+		defer resp.Body.Close()
+	}
+	if err != nil {
+		if resp != nil {
+			// Upstream answered, with a rate limit: remembered.
+			return nil, &scrapeFailure{fmt.Errorf("scrape config: %w", err)}
+		}
+		return nil, fmt.Errorf("scrape config: %w", err)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		// A consent page or an error page has no config in it, and reading
+		// one as if it had is how a failure turned into a second request
+		// before every call.
+		return nil, &scrapeFailure{fmt.Errorf("scrape config: %w", &HTTPError{Status: resp.StatusCode, Endpoint: "config"})}
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	if err != nil {
+		return nil, fmt.Errorf("scrape config: %w", err)
+	}
+	html := string(body)
+
+	pick := func(re *regexp.Regexp) string {
+		if m := re.FindStringSubmatch(html); len(m) > 1 {
+			return m[1]
+		}
+		return ""
+	}
+	next := &Config{
+		APIKey:        pick(reAPIKey),
+		ClientVersion: pick(reClientVer),
+		VisitorData:   pick(reVisitorData),
+		scrapedAt:     time.Now(),
+	}
+	if next.ClientVersion == "" {
+		return nil, &scrapeFailure{fmt.Errorf("scrape config: no client version in %d bytes", len(html))}
+	}
+	// A page served in another locale than was asked for carries a Home the
+	// parsers would misread; a browse asks in the right one.
+	if strings.EqualFold(pick(rePageHL), c.language) && strings.EqualFold(pick(rePageGL), c.region) {
+		if home := embeddedBrowse(html, "FEmusic_home"); home != nil {
+			next.home.Store(&home)
+			// Kept no longer than it can be used: a restart served Home
+			// from the response cache never takes it.
+			time.AfterFunc(homeFresh, func() { next.home.Store(nil) })
+		}
+	}
+	return next, nil
+}
+
+/*
+InitialHome hands over the first page of Home the web client's homepage came
+with, as the raw browse response, if the homepage was fetched within the last
+minute and nobody has taken it yet.
+
+The homepage is fetched for the config anyway, and a cold start asks for Home
+straight after: taking it from there saves that browse. It is handed out once,
+so a later visit to Home asks YouTube as it always did.
+*/
+func (c *Client) InitialHome(ctx context.Context) (json.RawMessage, bool) {
+	cfg, err := c.config(ctx)
+	if err != nil {
+		return nil, false
+	}
+	// Taken either way: a stale one is of no further use.
+	home := cfg.home.Swap(nil)
+	if home == nil || time.Since(cfg.scrapedAt) >= homeFresh {
+		return nil, false
+	}
+	return *home, true
+}
+
+// ---------- calls ----------
+
+/*
+ClientContext identifies the client a request claims to be.
+
+Almost everything is asked for as the web client, but not everything is served
+to it: timed lyrics are returned only to YouTube's mobile clients, and asking
+as the web client gets the same words with no timings at all. The difference is
+the request context, so it has to be selectable per call.
+*/
+type ClientContext struct {
+	Name      string
+	Version   string
+	UserAgent string
+	// Extra carries the device fields a mobile context is expected to have.
+	Extra map[string]any
+}
+
+// MobileMusic is the context that receives timed lyrics.
+var MobileMusic = ClientContext{
+	Name:      "IOS_MUSIC",
+	Version:   "7.21.1",
+	UserAgent: "com.google.ios.youtubemusic/7.21.1 (iPhone16,2; U; CPU iOS 17_5_1 like Mac OS X)",
+	Extra: map[string]any{
+		"deviceMake":  "Apple",
+		"deviceModel": "iPhone16,2",
+		"osName":      "iPhone",
+		"osVersion":   "17.5.1.21F90",
+	},
+}
+
+// Call posts to an InnerTube endpoint and returns the raw JSON response.
+//
+// body is merged with the request context; callers supply only the
+// endpoint-specific fields. The context always wins on key collisions.
+func (c *Client) Call(ctx context.Context, endpoint string, body map[string]any) (json.RawMessage, error) {
+	return c.CallAs(ctx, endpoint, body, nil)
+}
+
+// CallAs is Call, as a different client. A nil context means the web client.
+func (c *Client) CallAs(ctx context.Context, endpoint string, body map[string]any, as *ClientContext) (json.RawMessage, error) {
+	cfg, err := c.config(ctx)
+	if err != nil {
+		return nil, err
+	}
+	asked := body
+
+	// Only the web client's shape is known well enough to copy; any other
+	// context keeps the one it has always had.
+	query := "alt=json"
+	if as == nil {
+		query = webQuery(endpoint, body)
+		if strings.HasPrefix(query, "ctoken=") {
+			// The token travels in the URL; the body is the context alone.
+			body = nil
+		}
+	}
+
+	payload := make(map[string]any, len(body)+1)
+	for k, v := range body {
+		payload[k] = v
+	}
+	client := map[string]any{
+		"clientName":    ClientName,
+		"clientVersion": cfg.ClientVersion,
+		"hl":            c.language,
+		"gl":            c.region,
+	}
+	if cfg.VisitorData != "" {
+		client["visitorData"] = cfg.VisitorData
+	}
+	if as != nil {
+		client["clientName"] = as.Name
+		client["clientVersion"] = as.Version
+		for k, v := range as.Extra {
+			client[k] = v
+		}
+		// A mobile context with the web client's visitor data is inconsistent,
+		// and the response is served without timings.
+		delete(client, "visitorData")
+	}
+	requestContext := map[string]any{"client": client}
+	if c.creds != nil && c.creds.OnBehalfOfUser != "" {
+		requestContext["user"] = map[string]any{"onBehalfOfUser": c.creds.OnBehalfOfUser}
+	}
+	payload["context"] = requestContext
+	requestOrigin := Origin
+	web := as == nil || as.Name == "WEB"
+	if as != nil && as.Name == "WEB" {
+		requestOrigin = "https://www.youtube.com"
+	}
+
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+
+	/*
+	 * No key. The web client stopped sending one, and a signed-out browse is
+	 * served without it; the scraped key is kept only in the Config. A mobile
+	 * context never had it: the key belongs to the web client, and upstream
+	 * answers that mix with "invalid argument".
+	 */
+	target := requestOrigin + "/youtubei/v1/" + endpoint + "?" + query
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(raw))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if as != nil && as.UserAgent != "" {
+		req.Header.Set("User-Agent", as.UserAgent)
+	} else {
+		// A mobile context served by a browser user agent is refused the timed
+		// payload, so the two have to travel together.
+		if as != nil && as.UserAgent != "" {
+			req.Header.Set("User-Agent", as.UserAgent)
+		} else {
+			req.Header.Set("User-Agent", c.userAgent)
+		}
+	}
+	req.Header.Set("Origin", requestOrigin)
+	req.Header.Set("Referer", requestOrigin+"/")
+	req.Header.Set("Accept-Language", c.language)
+	req.Header.Set("Cookie", c.creds.cookie())
+	/*
+	 * A mobile context travels with cookies alone.
+	 *
+	 * The visitor id, the API key and the request signature all identify the
+	 * web client, and sending them alongside a mobile context is a
+	 * contradiction upstream answers with HTTP 400. Cookies are enough: they
+	 * authenticate the account, which is all the mobile lyrics call needs.
+	 */
+	if web {
+		if cfg.VisitorData != "" {
+			req.Header.Set("X-Goog-Visitor-Id", cfg.VisitorData)
+		}
+		if auth := c.creds.authorization(requestOrigin); auth != "" {
+			req.Header.Set("Authorization", auth)
+			req.Header.Set("X-Origin", requestOrigin)
+		}
+		if c.creds != nil {
+			for k, v := range c.creds.Extra {
+				if strings.HasPrefix(k, "x-goog-") {
+					req.Header.Set(k, v)
+				}
+			}
+		}
+	}
+
+	// The web client names itself in headers too, and says whether the page
+	// it runs in was signed in.
+	if as == nil {
+		req.Header.Set("X-Youtube-Client-Name", clientNameID)
+		req.Header.Set("X-Youtube-Client-Version", cfg.ClientVersion)
+		if c.creds.authenticated() {
+			req.Header.Set("X-Youtube-Bootstrap-Logged-In", "true")
+		}
+	}
+
+	resp, err := c.send(req, endpoint, describe(asked))
+	if resp != nil {
+		defer resp.Body.Close()
+	}
+	if err != nil {
+		if resp != nil {
+			// Rate limited: keep upstream's message with it.
+			out, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+			return nil, fmt.Errorf("innertube %s: %w", endpoint, withCause(err, &HTTPError{
+				Status: resp.StatusCode, Endpoint: endpoint, Message: errorMessage(out),
+			}))
+		}
+		return nil, fmt.Errorf("innertube %s: %w", endpoint, err)
+	}
+
+	out, err := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
+	if err != nil {
+		return nil, fmt.Errorf("innertube %s: read: %w", endpoint, err)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, &HTTPError{
+			Status:   resp.StatusCode,
+			Endpoint: endpoint,
+			Message:  errorMessage(out),
+		}
+	}
+	return out, nil
+}
+
+// Continue fetches the next page of a paginated response.
+//
+// Every list surface pages this way, so it lives here rather than being
+// reimplemented per parser.
+func (c *Client) Continue(ctx context.Context, endpoint, token string) (json.RawMessage, error) {
+	if token == "" {
+		return nil, fmt.Errorf("innertube %s: empty continuation", endpoint)
+	}
+	return c.Call(ctx, endpoint, map[string]any{"continuation": token})
+}
+
+/*
+webQuery is the query string the web client sends a call with.
+
+A browse continuation goes the way the web client sends one: the token in the
+URL twice, as ctoken and continuation, with type=next, and nothing in the body
+but the context. Every other call carries only prettyPrint=false.
+*/
+func webQuery(endpoint string, body map[string]any) string {
+	if endpoint == "browse" && len(body) == 1 {
+		if tok, ok := body["continuation"].(string); ok && tok != "" {
+			t := url.QueryEscape(tok)
+			return "ctoken=" + t + "&continuation=" + t + "&type=next&prettyPrint=false"
+		}
+	}
+	return "prettyPrint=false"
+}
+
+// describe names what a call asked for, for the logs: the page, not the
+// user's words, so a search is logged as a search and nothing more.
+func describe(body map[string]any) string {
+	if _, ok := body["continuation"]; ok {
+		return "continuation"
+	}
+	for _, k := range []string{"browseId", "videoId", "playlistId"} {
+		if v, ok := body[k].(string); ok && v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// withCause attaches the upstream response to a rate-limit error.
+func withCause(err error, cause error) error {
+	var rl *ratelimit.Error
+	if errors.As(err, &rl) && rl.Cause == nil {
+		return &ratelimit.Error{RetryAfter: rl.RetryAfter, Cause: cause}
+	}
+	return err
+}
+
+// errorMessage lifts error.message out of an InnerTube error body, if present.
+func errorMessage(body []byte) string {
+	var doc struct {
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(body, &doc); err != nil {
+		return ""
+	}
+	return doc.Error.Message
+}

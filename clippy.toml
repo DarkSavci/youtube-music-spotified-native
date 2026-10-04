@@ -1,0 +1,3 @@
+# Tests may assert with expect and unwrap; shipped code may not.
+allow-expect-in-tests = true
+allow-unwrap-in-tests = true

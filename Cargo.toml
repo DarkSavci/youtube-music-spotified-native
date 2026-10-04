@@ -1,0 +1,32 @@
+[workspace]
+resolver = "3"
+members = ["crates/app", "crates/audio", "crates/client"]
+
+[workspace.package]
+version = "0.3.2"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/DarkSavci/youtube-music-spotified-native"
+rust-version = "1.90"
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[workspace.lints.clippy]
+unwrap_used = "warn"
+expect_used = "warn"
+dbg_macro = "warn"
+todo = "warn"
+
+# Dependencies are optimised even in debug builds: an unoptimised egui and
+# image decoder make the development window too slow to judge by.
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
+# A panic is a bug with nothing to unwind to; the hook in logging.rs has
+# already written it to the log by the time the process aborts.
+panic = "abort"

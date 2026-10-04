@@ -1,0 +1,37 @@
+# Build output: Rust's, the Go core's, and the packaged app.
+/target/
+/dist/
+*.exe
+
+# yt-dlp and deno, fetched by scripts/fetch-tools.ps1.
+/vendor/
+
+# What a running copy keeps beside itself. None of it belongs in the
+# repository, and some of it is a signed-in session.
+credentials.json
+yt-dlp-cookies.txt
+settings.json
+*.db
+*.db-*
+*.log
+*.part
+instance.lock
+instance.port
+
+# Editors and the system.
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Fixtures recorded from a real account: the recording person's own
+# library, history and likes. The catalogue fixtures are committed; these
+# never are.
+core/testdata/fixtures/liked.json
+core/testdata/fixtures/history.json
+core/testdata/fixtures/library_*.json
+core/testdata/fixtures/account.json
+core/testdata/fixtures/player.json

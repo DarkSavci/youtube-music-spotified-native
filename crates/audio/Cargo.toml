@@ -1,0 +1,27 @@
+[package]
+name = "spotified-audio"
+description = "Decoding, mixing and output for Youtube Music Spotified"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# Demuxes YouTube's two audio containers (WebM and MP4) and decodes AAC.
+symphonia = { version = "0.6", default-features = false, features = ["aac", "isomp4", "mkv"] }
+# Decodes Opus, which symphonia does not, with the reference libopus built
+# into the binary. The pure-Rust `opus-decoder` was measured first: correct,
+# but four times real time, a quarter of a core while playing.
+symphonia-adapter-libopus = "0.3"
+# The sound device.
+cpal = "0.18"
+# The lock-free queue between the engine and the device callback.
+rtrb = "0.4"
+# Reads the track from the core.
+ureq = { version = "3", default-features = false }
+# Hands audio and seeks between a deck's thread and the engine.
+crossbeam-channel = "0.5"
+log = "0.4"

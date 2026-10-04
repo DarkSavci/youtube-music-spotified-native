@@ -1,0 +1,17 @@
+[package]
+name = "spotified-client"
+description = "HTTP client and models for the Youtube Music Spotified core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# Blocking HTTP. Every request is to the core on localhost, from a worker
+# thread, so an async runtime would be weight without benefit.
+ureq = { version = "3", default-features = false, features = ["json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

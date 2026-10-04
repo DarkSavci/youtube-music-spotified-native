@@ -1,0 +1,209 @@
+//! A window onto what is being played, for drawing it.
+//!
+//! The engine copies the audio it hands to the device into a small ring
+//! here; the app reads the latest stretch and turns it into a spectrum.
+//! Nothing is copied unless someone has asked to look.
+
+use std::f32::consts::PI;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::{Mutex, OnceLock};
+
+/// Samples a spectrum is made from. A power of two, for the transform, and
+/// long enough to tell bass notes apart: about 23 Hz a step at 48 kHz.
+pub const WINDOW: usize = 2048;
+
+pub struct Tap {
+    watching: AtomicBool,
+    /// The rate the samples are at: the device's.
+    sample_rate: AtomicU32,
+    /// The latest mono samples, and where the next one goes.
+    ring: Mutex<([f32; WINDOW], usize)>,
+}
+
+impl Default for Tap {
+    fn default() -> Self {
+        Self {
+            watching: AtomicBool::new(false),
+            sample_rate: AtomicU32::new(48_000),
+            ring: Mutex::new(([0.0; WINDOW], 0)),
+        }
+    }
+}
+
+impl Tap {
+    /// Whether anyone is looking. The engine skips the copy when not.
+    pub fn set_watching(&self, watching: bool) {
+        self.watching.store(watching, Ordering::Relaxed);
+    }
+
+    pub fn set_sample_rate(&self, rate: u32) {
+        self.sample_rate.store(rate, Ordering::Relaxed);
+    }
+
+    /// Called by the engine with interleaved stereo on its way out.
+    pub fn write(&self, stereo: &[f32]) {
+        if !self.watching.load(Ordering::Relaxed) {
+            return;
+        }
+        let Ok(mut ring) = self.ring.lock() else {
+            return;
+        };
+        let (samples, at) = &mut *ring;
+        for frame in stereo.as_chunks::<2>().0 {
+            samples[*at] = (frame[0] + frame[1]) * 0.5;
+            *at = (*at + 1) % WINDOW;
+        }
+    }
+
+    /// How loud each of `bars` bands is right now, low to high, from 0 to 1. The bands are spaced as pitch is heard: evenly in octaves.
+    pub fn spectrum(&self, bars: usize) -> Vec<f32> {
+        let mut real = [0.0f32; WINDOW];
+        {
+            let Ok(ring) = self.ring.lock() else {
+                return vec![0.0; bars];
+            };
+            let (samples, at) = &*ring;
+            let window = &tables().window;
+            for (index, slot) in real.iter_mut().enumerate() {
+                // Oldest first, shaped so the ends of the stretch do not
+                // show up as a splash across every band.
+                *slot = samples[(at + index) % WINDOW] * window[index];
+            }
+        }
+        let magnitudes = magnitudes(&mut real);
+        bands(&magnitudes, bars, self.sample_rate.load(Ordering::Relaxed))
+    }
+}
+
+/// What the transform needs on every run and that never changes, worked
+/// out once: thousands of sines a frame are the costly part otherwise.
+struct Tables {
+    /// A Hann window.
+    window: [f32; WINDOW],
+    /// The sine and cosine of each step of half a turn backwards.
+    turns: [(f32, f32); WINDOW / 2],
+}
+
+fn tables() -> &'static Tables {
+    static TABLES: OnceLock<Tables> = OnceLock::new();
+    TABLES.get_or_init(|| {
+        let step = 2.0 * PI / WINDOW as f32;
+        Tables {
+            window: std::array::from_fn(|index| 0.5 - 0.5 * (step * index as f32).cos()),
+            turns: std::array::from_fn(|index| (-step * index as f32).sin_cos()),
+        }
+    })
+}
+
+/// The strength of each frequency in `real`: an in-place radix-2 transform.
+fn magnitudes(real: &mut [f32; WINDOW]) -> [f32; WINDOW / 2] {
+    let mut imaginary = [0.0f32; WINDOW];
+    // Reorder by bit-reversed index, then combine in doubling spans.
+    let bits = WINDOW.trailing_zeros();
+    for index in 0..WINDOW {
+        let reversed = index.reverse_bits() >> (usize::BITS - bits);
+        if reversed > index {
+            real.swap(index, reversed);
+        }
+    }
+    let turns = &tables().turns;
+    let mut span = 2;
+    while span <= WINDOW {
+        // A span's turns are every `stride`th of the whole window's.
+        let stride = WINDOW / span;
+        for start in (0..WINDOW).step_by(span) {
+            for offset in 0..span / 2 {
+                let (sin, cos) = turns[offset * stride];
+                let (even, odd) = (start + offset, start + offset + span / 2);
+                let twisted_real = real[odd] * cos - imaginary[odd] * sin;
+                let twisted_imaginary = real[odd] * sin + imaginary[odd] * cos;
+                real[odd] = real[even] - twisted_real;
+                imaginary[odd] = imaginary[even] - twisted_imaginary;
+                real[even] += twisted_real;
+                imaginary[even] += twisted_imaginary;
+            }
+        }
+        span *= 2;
+    }
+    let mut out = [0.0f32; WINDOW / 2];
+    for (index, slot) in out.iter_mut().enumerate() {
+        // Scaled so a full-scale tone reads about 1.
+        *slot = real[index].hypot(imaginary[index]) / (WINDOW as f32 / 4.0);
+    }
+    out
+}
+
+/// Gathers the transform's evenly spaced frequencies into `bars` bands
+/// spaced evenly in octaves, from the bass to the top of hearing.
+fn bands(magnitudes: &[f32; WINDOW / 2], bars: usize, sample_rate: u32) -> Vec<f32> {
+    const LOWEST_HZ: f32 = 50.0;
+    const HIGHEST_HZ: f32 = 16_000.0;
+    /// The quietest level that still shows.
+    const FLOOR_DB: f32 = -50.0;
+    let hz_per_bin = sample_rate as f32 / WINDOW as f32;
+    let edge = |bar: usize| {
+        let hz = LOWEST_HZ * (HIGHEST_HZ / LOWEST_HZ).powf(bar as f32 / bars as f32);
+        ((hz / hz_per_bin) as usize).clamp(1, WINDOW / 2 - 1)
+    };
+    (0..bars)
+        .map(|bar| {
+            let (from, to) = (edge(bar), edge(bar + 1).max(edge(bar) + 1));
+            let loudest = magnitudes[from..to.min(WINDOW / 2)]
+                .iter()
+                .fold(0.0f32, |loudest, level| loudest.max(*level));
+            // In decibels, as loudness is heard: music spreads its energy
+            // thinly, and drawn in proportion only the kick would show.
+            let decibels = 20.0 * loudest.max(f32::MIN_POSITIVE).log10();
+            (1.0 - decibels / FLOOR_DB).clamp(0.0, 1.0)
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const RATE: u32 = 48_000;
+
+    fn tone(hz: f32) -> Vec<f32> {
+        (0..WINDOW * 2)
+            .flat_map(|frame| {
+                let value = (2.0 * PI * hz * frame as f32 / RATE as f32).sin();
+                [value, value]
+            })
+            .collect()
+    }
+
+    #[test]
+    fn nothing_is_copied_until_someone_looks() {
+        let tap = Tap::default();
+        tap.write(&tone(1000.0));
+        assert!(tap.spectrum(32).iter().all(|level| *level == 0.0));
+    }
+
+    #[test]
+    fn a_tone_lights_the_band_it_falls_in() {
+        let tap = Tap::default();
+        tap.set_watching(true);
+        tap.write(&tone(1000.0));
+        let spectrum = tap.spectrum(32);
+        let loudest = spectrum
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1.total_cmp(b.1))
+            .map(|(bar, _)| bar)
+            .expect("bars");
+        // 1 kHz sits a little past half way from 50 Hz to 16 kHz in octaves.
+        assert!((15..=18).contains(&loudest), "bar {loudest}");
+        assert!(spectrum[loudest] > 0.6);
+        assert!(spectrum[2] < 0.1 && spectrum[30] < 0.1);
+    }
+
+    #[test]
+    fn silence_is_flat() {
+        let tap = Tap::default();
+        tap.set_watching(true);
+        tap.write(&vec![0.0; WINDOW * 2]);
+        assert!(tap.spectrum(16).iter().all(|level| *level == 0.0));
+    }
+}

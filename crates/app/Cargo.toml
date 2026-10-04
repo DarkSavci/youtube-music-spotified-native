@@ -1,0 +1,54 @@
+[package]
+name = "spotified"
+description = "Youtube Music Spotified, native"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# The whole UI. glow keeps the binary and the dependency tree small; wgpu is
+# not needed for a 2D music client. default_fonts supplies the emoji fallback
+# behind Inter.
+eframe = { version = "0.36", default-features = false, features = ["glow", "default_fonts"] }
+# Rasterises the SVG icons at the size they are drawn.
+egui_extras = { version = "0.36", default-features = false, features = ["svg"] }
+# Decodes artwork and encodes the --screenshot PNG.
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
+# Fetches artwork. TLS is the system's own (schannel on Windows), which
+# needs no C crypto library.
+ureq = { version = "3", default-features = false, features = ["native-tls"] }
+spotified-client = { path = "../client" }
+spotified-audio = { path = "../audio" }
+# Media keys and the system's now-playing card.
+souvlaki = "0.8"
+# The window's native handle, which the media controls attach to.
+raw-window-handle = "0.6"
+# The notification-area icon and its menu.
+tray-icon = { version = "0.26", default-features = false }
+# WebSockets: the DevTools protocol to a browser on this computer, to read
+# the cookies of a sign-in, and a Listen Together relay over the system's
+# TLS.
+tungstenite = { version = "0.30", default-features = false, features = ["handshake", "native-tls"] }
+# Backend-to-UI events. The standard channel has no select, which the worker
+# pools need.
+crossbeam-channel = "0.5"
+# Roaming and local application data directories.
+directories = "6"
+log = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Checks a downloaded update against the checksum its release states.
+sha2 = "0.10"
+
+[dev-dependencies]
+# Drives the views without a window: finds controls by their accessible
+# names and clicks them.
+egui_kittest = { version = "0.36", default-features = false }
+
+[build-dependencies]
+# Embeds the icon and version details in the Windows executable.
+winresource = "0.1"
