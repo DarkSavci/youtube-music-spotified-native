@@ -36,6 +36,12 @@ pub enum CoreStatus {
 pub struct SidecarConfig {
     pub credentials: PathBuf,
     pub database: PathBuf,
+    /// Where the songs played are kept. One place whoever is signed in: a
+    /// song is the same song for every account.
+    pub cache: PathBuf,
+    /// A yt-dlp newer than the one that came with the app, when an update
+    /// has put one in place.
+    pub resolver: Option<PathBuf>,
     /// Serve recorded responses from this directory instead of YouTube.
     pub fixtures: Option<PathBuf>,
 }
@@ -64,6 +70,8 @@ pub fn spawn(
         .arg(&config.credentials)
         .arg("-db")
         .arg(&config.database)
+        .arg("-cache")
+        .arg(&config.cache)
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::piped());
@@ -75,8 +83,9 @@ pub fn spawn(
     // yt-dlp resolves streams and needs deno to run YouTube's player code.
     // Without them the core looks on PATH, and playback fails if they are
     // not there either.
-    for (flag, tool) in [("-ytdlp", YTDLP), ("-deno", DENO)] {
-        match locate(tool) {
+    let resolver = config.resolver.clone().or_else(bundled_resolver);
+    for (flag, tool, found) in [("-ytdlp", YTDLP, resolver), ("-deno", DENO, locate(DENO))] {
+        match found {
             Some(path) => {
                 command.arg(flag).arg(path);
             }
@@ -135,11 +144,13 @@ fn follow_log(log: impl BufRead, report: impl Fn(CoreStatus)) {
             });
         }
     }
-    if !ready {
-        report(CoreStatus::Failed(
-            "The playback service stopped before it was ready.".into(),
-        ));
-    }
+    // The log ends when the core does. One that was stopped on purpose
+    // says this to nobody: the app has stopped listening to it by then.
+    report(CoreStatus::Failed(if ready {
+        "The playback service stopped. Restart the app to carry on.".into()
+    } else {
+        "The playback service stopped before it was ready.".into()
+    }));
 }
 
 /// The address in the core's `msg="spotifier listening" addr=…` line.
@@ -151,26 +162,41 @@ fn listening_addr(line: &str) -> Option<&str> {
         .find_map(|field| field.strip_prefix("addr="))
 }
 
-/// Runs yt-dlp's own updater and returns what it said. YouTube changes
-/// often enough that an old yt-dlp stops finding streams.
-pub fn update_resolver() -> Result<String, String> {
-    let program = locate(YTDLP).ok_or("yt-dlp is not next to the app")?;
+/// Runs the core for one job instead of as a server, and returns the line
+/// of JSON it answers with; or what it said went wrong.
+pub fn one_shot(arguments: &[(&str, &Path)]) -> Result<String, String> {
+    let program = locate(CORE_BINARY).ok_or("the playback service is not next to the app")?;
     let mut command = Command::new(program);
-    command.arg("-U");
+    for (flag, path) in arguments {
+        command.arg(flag).arg(path);
+    }
+    command.stdin(Stdio::null());
     hide_console(&mut command);
     let output = command.output().map_err(|error| error.to_string())?;
-    let said = |bytes: &[u8]| {
-        String::from_utf8_lossy(bytes)
-            .lines()
-            .rev()
-            .find(|line| !line.trim().is_empty())
-            .map(|line| line.trim().to_owned())
-    };
     if output.status.success() {
-        Ok(said(&output.stdout).unwrap_or_else(|| "yt-dlp is up to date".to_owned()))
+        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
     } else {
-        Err(said(&output.stderr).unwrap_or_else(|| output.status.to_string()))
+        // Its last line is the reason; the rest is the log leading to it.
+        let said = String::from_utf8_lossy(&output.stderr);
+        let reason = said.lines().rev().find(|line| !line.trim().is_empty());
+        Err(reason
+            .unwrap_or("the playback service gave no reason")
+            .to_owned())
     }
+}
+
+/// The yt-dlp that came with the app.
+pub fn bundled_resolver() -> Option<PathBuf> {
+    locate(YTDLP)
+}
+
+/// Whether this copy was put together to be run, with the core beside the
+/// executable, as against built in a working tree.
+pub fn packaged() -> bool {
+    std::env::current_exe()
+        .ok()
+        .and_then(|exe| Some(exe.parent()?.join(CORE_BINARY).exists()))
+        .unwrap_or(false)
 }
 
 /// Finds a file shipped with the app: beside the executable when installed,
@@ -230,12 +256,21 @@ mod tests {
     #[test]
     fn readiness_is_reported_once() {
         let log = format!("level=INFO msg=starting\n{LISTENING}\n{LISTENING}\n");
-        assert_eq!(
-            statuses(&log),
-            [CoreStatus::Ready {
-                origin: "http://127.0.0.1:63152".into()
-            }]
-        );
+        let seen = statuses(&log);
+        let ready = CoreStatus::Ready {
+            origin: "http://127.0.0.1:63152".into(),
+        };
+        assert_eq!(seen.iter().filter(|status| **status == ready).count(), 1);
+        assert_eq!(seen.first(), Some(&ready));
+    }
+
+    #[test]
+    fn a_core_that_stops_while_in_use_is_said_to_have_stopped() {
+        let seen = statuses(&format!("{LISTENING}\n"));
+        assert!(matches!(
+            seen.as_slice(),
+            [CoreStatus::Ready { .. }, CoreStatus::Failed(_)]
+        ));
     }
 
     #[test]

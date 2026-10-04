@@ -57,8 +57,13 @@ func main() {
 		denoBin       = flag.String("deno", "", "path to deno, the JavaScript runtime yt-dlp needs (default: found on PATH)")
 		cacheDir      = flag.String("cache", "", "song cache directory (default: beside the credentials)")
 		exitWithStdin = flag.Bool("exit-with-stdin", false, "shut down when stdin closes (the native app holds the pipe)")
+		inspectPath   = flag.String("migrate-inspect", "", "print what another profile's database holds, as JSON, and exit")
+		mergePath     = flag.String("migrate-from", "", "merge another profile's database into -db, print what was added as JSON, and exit")
 	)
 	flag.Parse()
+	if *inspectPath != "" || *mergePath != "" {
+		os.Exit(migrate(*inspectPath, *mergePath, *dbPath))
+	}
 
 	level := slog.LevelInfo
 	if *verbose {

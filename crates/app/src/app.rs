@@ -7,20 +7,21 @@ use crossbeam_channel::{Receiver, Sender};
 use eframe::egui::{self, ColorImage};
 use spotified_client::session::Command;
 
+use crate::accounts::{AccountStore, SavedAccount};
 use crate::actions::{self, Action};
 use crate::backend::{Backend, Response};
 use crate::images::ImageLoader;
 use crate::paths::Paths;
-use crate::platform::autostart;
 use crate::platform::media_keys::MediaKeys;
+use crate::platform::taskbar::{Taskbar, ThumbAction};
 use crate::platform::tray::{Tray, TrayAction};
 use crate::screenshot::Screenshot;
 use crate::session::{self, Session};
 use crate::settings::{self, Settings};
-use crate::sidecar::{self, CoreStatus, Sidecar, SidecarConfig};
+use crate::sidecar::{self, CoreStatus, Sidecar};
 use crate::single_instance::InstanceGuard;
-use crate::state::{Playback, State};
-use crate::{changelog, channel, import, theme, themes, together, update, views};
+use crate::state::{Notice, Page, Playback, State};
+use crate::{changelog, migrate, resolver, theme, themes, together, update, views};
 
 /// Recorded responses for `--demo`, relative to the repository root.
 const FIXTURES: &str = "core/testdata/fixtures";
@@ -36,27 +37,44 @@ const UPDATE_CHECK_EVERY: Duration = Duration::from_secs(6 * 60 * 60);
 const TOGETHER_TICK: Duration = Duration::from_secs(1);
 /// How long typing must pause before a search is sent.
 const SEARCH_DEBOUNCE: Duration = Duration::from_millis(280);
+/// As `SEARCH_DEBOUNCE`, for the search inside a Listen Together room.
+const ROOM_SEARCH_DEBOUNCE: Duration = Duration::from_millis(300);
 
 /// What background threads tell the UI thread.
 pub enum Event {
-    Core(CoreStatus),
+    /// What the core started for this run says of itself. The number
+    /// tells it from the last words of a core that was stopped on purpose.
+    Core(u64, CoreStatus),
     /// An answer from the backend started for this run of the core. The
     /// number tells it from a late answer by an earlier run.
     Api(u64, Box<Response>),
-    /// The old core has stopped; a new one may start.
+    /// No core is running, and one may start: the old one has stopped,
+    /// or what had to be done before the first has been.
     CoreStopped,
     Session(session::Update),
     /// A media key, or a button on the system's now-playing card.
     Media(Action),
     Tray(TrayAction),
-    /// The browser sign-in ended: well, or with a sentence saying why not.
-    SignedIn(Result<(), String>),
-    /// yt-dlp's updater ended, with what it said.
+    /// A button on the taskbar thumbnail.
+    Thumb(ThumbAction),
+    /// The browser sign-in ended: with the account it made, or with a
+    /// sentence saying why not.
+    SignedIn(Result<SavedAccount, String>),
+    /// A look for a newer yt-dlp that was asked for ended, with what there
+    /// is to say of it.
     ResolverUpdated(Result<String, String>),
+    /// The problem report is made, or could not be.
+    ReportSaved(Result<PathBuf, String>),
+    /// The system has said whether the app starts with it.
+    StartsAtLogin(bool),
     /// Where looking for a newer version of the app has got to.
     Update(update::Status),
     /// The line to a Listen Together relay has something to say.
     Together(together::Event),
+    /// A test of a relay's address ended.
+    TogetherProbed(Result<(), String>),
+    /// The Electron app's profile was looked at, or brought from.
+    Migration(migrate::Report),
     /// Artwork for a URL, or `None` if it could not be had.
     Image(String, Option<ColorImage>),
 }
@@ -70,6 +88,8 @@ pub struct Launch {
     pub screenshot: Option<PathBuf>,
     /// Start without showing the window.
     pub hidden: bool,
+    /// Where the Electron app's profile is, when not in the usual place.
+    pub old_profile: Option<PathBuf>,
     /// What to do at once, as `--open` gives it: pages to open, a track
     /// to play.
     pub open: Vec<String>,
@@ -77,10 +97,16 @@ pub struct Launch {
     pub started: Instant,
 }
 
+mod accounts;
+mod closing;
+mod desktop;
 mod effects;
+mod migration;
 mod open;
+mod script;
 
-use open::opening_action;
+use open::{opening_action, opening_commands, waits};
+use script::Script;
 
 pub struct App {
     state: State,
@@ -105,19 +131,50 @@ pub struct App {
     media_keys: Option<MediaKeys>,
     /// `None` where the system has no notification area.
     tray: Option<Tray>,
+    /// `None` where the taskbar offers no buttons on a thumbnail.
+    taskbar: Option<Taskbar>,
+    /// What the tray and the taskbar were last told, as a hash of it.
+    desktop_shown: Option<u64>,
+    /// The main window is on screen rather than away in the tray.
+    window_shown: bool,
+    /// The opening of the flyout whose window has had its corners rounded.
+    flyout_rounded: Option<Instant>,
+    /// The windows of the flyout and of the mini player exist.
+    flyout_made: bool,
+    mini_made: bool,
+    /// The saved accounts, and the folders they keep their files in.
+    accounts: AccountStore,
+    /// What is to change about them once the core has stopped.
+    pending_change: Option<accounts::Change>,
+    /// The Electron app's profile, and what has been brought from it.
+    mover: migration::Mover,
+    /// When to look for a newer yt-dlp next; `None` for a copy that leaves
+    /// the one it came with alone.
+    resolver_due: Option<Instant>,
+    /// Where a problem report goes instead of the Downloads folder, for a
+    /// run that is only being looked at.
+    report_folder: Option<PathBuf>,
     /// Quit was chosen: the next close is a real one.
     quitting: bool,
     /// Held so no second copy opens this profile.
     _instance: InstanceGuard,
     /// Commands waiting for the session to start.
     held_commands: Vec<Command>,
+    /// The speed the engine was last told to play at.
+    speed_applied: f32,
     images: ImageLoader,
     /// When the search on screen is to be sent, if typing has not resumed.
     search_due: Option<Instant>,
+    /// As `search_due`, for the search inside a Listen Together room.
+    room_search_due: Option<Instant>,
+    /// The installer is already running: the update was asked for now.
+    installing: bool,
+    /// As `search_due`, for the lookup in Your listening.
+    lookup_due: Option<Instant>,
     /// Requests sent to the backend and not yet answered.
     requests_in_flight: usize,
     /// Asked for by `--open` and waiting for the player to be up.
-    deferred: Vec<Action>,
+    script: Script,
     /// The line to a Listen Together relay, while there is one.
     together: Option<together::Connection>,
     /// When the player was last checked against the room.
@@ -146,19 +203,24 @@ impl App {
         let theme = &state.settings;
         let custom = theme.custom_theme.as_deref();
         state.palette = themes::palette(theme.theme, custom, &state.themes, true);
-        // A demo shows no account, so it offers none to copy.
-        if !launch.demo {
-            state.import_source = import::electron_credentials();
-        }
-        state.channel_id = channel::active(&launch.paths.credentials_file());
+        let mover = migration::Mover {
+            old_profile: migrate::old_profile(launch.old_profile.as_deref(), launch.demo),
+            record: migrate::Record::load(&launch.paths.config),
+        };
+        let accounts = AccountStore::load(&launch.paths.config);
+        state.accounts = accounts.list.clone();
+        state.channel_id = accounts
+            .list
+            .active()
+            .map(|account| account.channel.clone())
+            .unwrap_or_default();
         // A version that has not run here before, on a profile that has
         // run another, is an update: say so once.
         if state.settings.last_seen_version != changelog::VERSION {
             if !state.settings.last_seen_version.is_empty() {
                 let version = changelog::VERSION;
-                state.toast(format!(
-                    "Updated to {version}. What's new is in the account menu."
-                ));
+                let said = format!("Updated to {version}");
+                state.toast_with_link(said, "See what's new", Page::Changelog);
             }
             state.settings.last_seen_version = changelog::VERSION.to_owned();
             if let Err(error) = settings::save(&launch.paths.settings_file(), &state.settings) {
@@ -172,6 +234,7 @@ impl App {
             None
         };
         theme::install(&context.egui_ctx, &state.palette);
+        crate::platform::identity::dress_menus(state.palette.dark);
         let (events_tx, events) = crossbeam_channel::unbounded();
         let deliver = waking(&context.egui_ctx, &events_tx, |(url, image)| {
             Event::Image(url, image)
@@ -188,6 +251,8 @@ impl App {
         if let Err(error) = launch.instance.listen(move || show(())) {
             log::warn!("later launches cannot reach this one: {error}");
         }
+        let on_thumb = waking(&context.egui_ctx, &events_tx, Event::Thumb);
+        let taskbar = Taskbar::attach(context, on_thumb);
         // A screenshot run closes for real when it is done.
         let tray = launch
             .screenshot
@@ -196,21 +261,31 @@ impl App {
             .flatten();
         // Started at sign-in: stay out of the way, in the tray. Without a
         // tray there would be no way back to the window, so it shows.
-        if launch.hidden && tray.is_some() {
+        let hidden = launch.hidden && tray.is_some();
+        if hidden {
             context
                 .egui_ctx
                 .send_viewport_cmd(egui::ViewportCommand::Visible(false));
         }
-        state.starts_at_login = !launch.demo && autostart::is_enabled();
-        // What `--open` asks of a room waits for the player: a room is
-        // entered with the music that is playing, or with none.
-        let (deferred, actions) = launch
+        // Only a copy put together to be run keeps yt-dlp current: a build
+        // in a working tree uses the one fetched for it.
+        let resolver_due = (!launch.demo && sidecar::packaged())
+            .then(|| launch.started + resolver::FIRST_CHECK_AFTER);
+        let report_folder = launch
+            .demo
+            .then(|| launch.paths.cache.with_file_name("reports"));
+        // The times a room shows are this computer's, not Greenwich's. Where
+        // the system will not say how far apart they are, Greenwich's it is.
+        state.together.zone_minutes = time::UtcOffset::current_local_offset()
+            .map_or(0, |offset| i32::from(offset.whole_minutes()));
+        // Some of what `--open` asks for waits until the app has settled.
+        let (deferred, at_once) = launch
             .open
             .iter()
-            .filter_map(|spec| Some((spec.starts_with("together-"), opening_action(spec)?)))
-            .partition::<Vec<_>, _>(|(for_a_room, _)| *for_a_room);
-        let strip = |list: Vec<(bool, Action)>| list.into_iter().map(|(_, action)| action);
-        let (deferred, actions) = (strip(deferred).collect(), strip(actions).collect());
+            .partition::<Vec<_>, _>(|spec| waits(spec));
+        let actions = at_once.into_iter().filter_map(|spec| opening_action(spec));
+        let actions = actions.collect();
+        let script = Script::new(deferred.into_iter().cloned());
         Self {
             state,
             actions,
@@ -224,38 +299,34 @@ impl App {
             backend: None,
             core_run: 0,
             session: None,
-            held_commands: Vec::new(),
+            held_commands: opening_commands(&launch.open),
+            speed_applied: 1.0,
             media_keys,
             tray,
+            taskbar,
+            desktop_shown: None,
+            window_shown: !hidden,
+            flyout_rounded: None,
+            flyout_made: false,
+            mini_made: false,
+            accounts,
+            pending_change: None,
+            mover,
+            resolver_due,
+            report_folder,
             quitting: false,
             _instance: launch.instance,
             images,
             search_due: None,
+            room_search_due: None,
+            installing: false,
+            lookup_due: None,
             requests_in_flight: 0,
             update_due,
-            deferred,
+            script,
             together: None,
             together_ticked: launch.started,
             screenshot: launch.screenshot.map(Screenshot::new),
-        }
-    }
-
-    fn start_core(&mut self, ctx: &egui::Context) {
-        let config = SidecarConfig {
-            credentials: self.paths.credentials_file(),
-            database: self.paths.database_file(),
-            fixtures: self.demo.then(|| sidecar::locate(FIXTURES)).flatten(),
-        };
-        let report = waking(ctx, &self.events_tx, Event::Core);
-        match sidecar::spawn(&config, report) {
-            Ok(sidecar) => self.sidecar = Some(sidecar),
-            Err(error) => {
-                log::error!("the playback service could not start: {error}");
-                self.actions
-                    .push(Action::CoreChanged(CoreStatus::Failed(format!(
-                        "The playback service could not start: {error}."
-                    ))));
-            }
         }
     }
 
@@ -269,62 +340,44 @@ impl App {
         if palette != self.state.palette {
             self.state.palette = palette;
             theme::apply(ctx, &palette);
+            crate::platform::identity::dress_menus(palette.dark);
         }
+    }
+
+    /// Stills the animations when the settings ask for that, and lets them
+    /// move again when they do not. egui's own (a switch's knob, a scroll
+    /// brought to a line) follow its style; the app's read the same figure.
+    fn keep_motion(&self, ctx: &egui::Context) {
+        let still = self.state.settings.reduce_motion;
+        if still == views::widgets::still(ctx) {
+            return;
+        }
+        ctx.all_styles_mut(|style| {
+            style.animation_time = if still { 0.0 } else { theme::ANIMATION_TIME };
+            style.scroll_animation = if still {
+                egui::style::ScrollAnimation::none()
+            } else {
+                egui::style::ScrollAnimation::default()
+            };
+        });
     }
 
     /// Closing the window hides it instead, when there is a tray to live in
     /// and the setting asks for that. Quit, from the tray, closes for real.
-    fn close_to_tray(&self, ctx: &egui::Context) {
+    fn close_to_tray(&mut self, ctx: &egui::Context) {
         let closing = ctx.input(|input| input.viewport().close_requested());
         if closing && !self.quitting && self.tray.is_some() && self.state.settings.close_to_tray {
+            self.window_shown = false;
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
         }
     }
 
-    /// Stops the core and starts it again, to pick up new credentials. The
-    /// stop can take a moment (the core saves its state), so it happens on
-    /// another thread, and the new core starts only once the old has gone:
-    /// the two must never share the database.
-    fn restart_core(&mut self, ctx: &egui::Context) {
-        self.backend = None;
-        self.session = None;
-        self.core_run += 1;
-        self.requests_in_flight = 0;
-        let Some(old) = self.sidecar.take() else {
-            self.forget_cached_answers();
-            self.start_core(ctx);
-            return;
-        };
-        let stopped = waking(ctx, &self.events_tx, |()| Event::CoreStopped);
-        let spawned = std::thread::Builder::new()
-            .name("core-stop".into())
-            .spawn(move || {
-                drop(old);
-                stopped(());
-            });
-        if let Err(error) = spawned {
-            log::error!("the playback service could not be restarted: {error}");
-        }
-    }
-
-    /// Deletes the answers the core kept from YouTube. They belong to the
-    /// account and channel that asked; another must not be shown them. Only
-    /// done while no core is running, since it holds the file open.
-    fn forget_cached_answers(&self) {
-        for suffix in ["", "-wal", "-shm"] {
-            let file = self.paths.config.join(format!("responses.db{suffix}"));
-            if let Err(error) = std::fs::remove_file(&file)
-                && error.kind() != std::io::ErrorKind::NotFound
-            {
-                log::warn!("{} could not be deleted: {error}", file.display());
-            }
-        }
-    }
-
     fn take_in(&mut self, ctx: &egui::Context, event: Event) {
         match event {
-            Event::Core(status) => {
+            // The last words of a core that was stopped on purpose.
+            Event::Core(run, _) if run != self.core_run => {}
+            Event::Core(_, status) => {
                 log::info!("playback service: {status:?}");
                 if let CoreStatus::Ready { origin } = &status {
                     let run = self.core_run;
@@ -337,10 +390,9 @@ impl App {
                     let normalise = self.state.settings.normalise_volume;
                     match Session::start(origin, device_id, normalise, updates) {
                         Ok(session) => {
-                            let settings = &self.state.settings;
-                            session.set_equalizer(settings.equalizer_on, settings.equalizer);
-                            session.set_crossfade(settings.crossfade_seconds);
-                            session.tap().set_watching(settings.visualizer);
+                            // Before anything is asked to play, so the first
+                            // track is loaded as the settings have it.
+                            effects::apply_audio_settings(&session, &self.state);
                             for command in self.held_commands.drain(..) {
                                 session.send(command);
                             }
@@ -358,52 +410,36 @@ impl App {
                     self.actions.push(Action::Loaded(response));
                 }
             }
-            Event::CoreStopped => {
-                self.forget_cached_answers();
-                self.start_core(ctx);
-            }
+            Event::CoreStopped => self.core_stopped(ctx),
+            Event::ReportSaved(result) => self.actions.push(Action::ReportSaved(result)),
+            Event::StartsAtLogin(on) => self.actions.push(Action::StartAtLoginKnown(on)),
+            Event::Thumb(action) => self.thumb_asked(action),
             Event::ResolverUpdated(result) => self.actions.push(Action::ResolverUpdated(result)),
             Event::Update(status) => self.actions.push(Action::UpdateChanged(status)),
-            Event::Together(event) => {
-                match &event {
-                    together::Event::Room { room, .. } => log::debug!(
-                        "listen together: room at revision {}, {} in it, {} queued, playing: {}",
-                        room.revision,
-                        room.members.len(),
-                        room.queue.len(),
-                        room.playing
-                    ),
-                    other => log::debug!("listen together: {other:?}"),
-                }
-                self.actions.push(Action::TogetherEvent(Box::new(event)));
+            Event::TogetherProbed(result) => {
+                self.actions
+                    .push(Action::Room(together::Ask::Tested(result)));
             }
+            Event::Together(event) => self.heard_from_relay(event),
             Event::Media(action) => self.actions.push(action),
-            Event::SignedIn(Ok(())) => {
+            Event::SignedIn(Ok(account)) => {
                 log::info!("signed in; restarting the playback service");
-                self.restart_core(ctx);
-                self.actions.push(Action::AccountChanged);
+                self.change_account(ctx, accounts::Change::Add(account));
             }
             Event::SignedIn(Err(reason)) => {
                 log::warn!("sign-in failed: {reason}");
                 self.actions.push(Action::SignInFailed(reason));
             }
-            Event::Tray(TrayAction::Show) => {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
-                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
-                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
-            }
-            Event::Tray(TrayAction::Quit) => {
-                self.quitting = true;
-                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-            }
-            Event::Tray(TrayAction::TogglePlay) => self.actions.push(Action::TogglePlay),
-            Event::Tray(TrayAction::Next) => self.actions.push(Action::Next),
-            Event::Tray(TrayAction::Previous) => self.actions.push(Action::Previous),
+            Event::Tray(action) => self.tray_asked(ctx, action),
             Event::Session(session::Update::Projection(projection)) => {
                 self.actions.push(Action::SessionChanged(projection));
             }
             // Shown to the person once there are toasts to show it in.
             Event::Session(session::Update::Refused(reason)) => log::warn!("{reason}"),
+            Event::Session(session::Update::RateLimited) => {
+                self.actions.push(Action::Notify(Notice::RateLimited));
+            }
+            Event::Migration(report) => self.migration_reported(ctx, report),
             Event::Image(url, image) => self.state.images.loaded(ctx, url, image),
         }
     }
@@ -423,8 +459,12 @@ impl App {
     fn settled(&self) -> bool {
         self.state.core != CoreStatus::Starting
             && self.requests_in_flight == 0
+            && self.script.is_done()
             && self.search_due.is_none()
+            && self.room_search_due.is_none()
+            && self.lookup_due.is_none()
             && !self.state.images.loading()
+            && self.state.migration.running.is_none()
             && self.heard_if_playing()
     }
 }
@@ -457,12 +497,17 @@ impl eframe::App for App {
                 "first frame after {} ms",
                 self.started.elapsed().as_millis()
             );
-            self.start_core(ctx);
+            self.first_start(ctx);
+            self.look_for_old_app(ctx);
+            if !self.demo {
+                self.ask_start_at_login(ctx);
+            }
         }
         self.frames += 1;
 
         self.close_to_tray(ctx);
         self.wear_theme(ctx);
+        self.keep_motion(ctx);
         while let Ok(event) = self.events.try_recv() {
             self.take_in(ctx, event);
         }
@@ -476,12 +521,11 @@ impl eframe::App for App {
                 ctx.request_repaint_after(due - now);
             }
         }
+        self.keep_resolver_current(ctx);
         let settled = self.state.playback.as_ref().is_some_and(|playback| {
             self.held_commands.is_empty() && (playback.current().is_none() || playback.is_playing())
         });
-        if settled && !self.deferred.is_empty() {
-            self.actions.append(&mut self.deferred);
-        }
+        self.run_script(ctx, settled);
         if self.state.together.in_room() {
             if self.together_ticked.elapsed() >= TOGETHER_TICK {
                 self.together_ticked = Instant::now();
@@ -489,41 +533,40 @@ impl eframe::App for App {
             }
             ctx.request_repaint_after(TOGETHER_TICK);
         }
-        if self.search_due.is_some_and(|due| Instant::now() >= due) {
-            self.search_due = None;
-            self.actions.push(Action::RunSearch);
-        }
+        self.send_due_searches();
         for action in std::mem::take(&mut self.actions) {
             for effect in actions::apply(&mut self.state, action) {
                 self.run(ctx, effect);
             }
         }
+        // Entering a room holds the speed to normal and leaving one lets
+        // it go, neither of which is a change to the settings.
+        let speed = self.state.speed();
+        if speed != self.speed_applied
+            && let Some(session) = &self.session
+        {
+            session.set_speed(speed);
+            self.speed_applied = speed;
+        }
         if let Some(media_keys) = &mut self.media_keys {
             media_keys.show(self.state.playback.as_ref());
         }
+        self.show_on_desktop(ctx);
         // A toast leaves by the clock, so the window must wake to see it go.
         if let Some(next) = self.state.expire_toasts(Instant::now()) {
             ctx.request_repaint_after(next);
         }
 
         if let Some(mut screenshot) = self.screenshot.take() {
-            screenshot.step(ctx, self.settled());
+            screenshot.step(ctx, self.settled(), !self.script.is_done());
             self.screenshot = Some(screenshot);
         }
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         views::show(&self.state, ui, &mut self.actions);
-        // The mini player is a window of its own, drawn from here so it
-        // reads the same state and asks through the same actions.
-        if self.state.mini_player {
-            let (state, actions) = (&self.state, &mut self.actions);
-            let builder = views::mini::builder(state);
-            ui.ctx()
-                .show_viewport_immediate(views::mini::viewport(), builder, |ui, _| {
-                    views::mini::show(state, ui, actions);
-                });
-        }
+        self.show_mini(ui);
+        self.show_flyout(ui);
         self.state.images.end_frame(&self.images);
         if self
             .state
@@ -543,20 +586,15 @@ impl eframe::App for App {
         }
     }
 
+    fn raw_input_hook(&mut self, _ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        self.script.feed(raw_input);
+    }
+
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
         self.state.palette.window.to_normalized_gamma_f32()
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
-        // What moved since the last save, such as the mini player's place.
-        if let Err(error) = settings::save(&self.paths.settings_file(), &self.state.settings) {
-            log::warn!("settings could not be saved: {error}");
-        }
-        // Stop the core here, while the log is still open to say so.
-        self.session = None;
-        self.backend = None;
-        self.sidecar = None;
-        log::info!("closed");
-        log::logger().flush();
+        self.shut_down();
     }
 }

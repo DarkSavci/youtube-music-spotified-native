@@ -1,7 +1,7 @@
 //! The pages YouTube Music lays out itself: explore, the moods and genres,
 //! one mood's page, the whole of a shelf. And what the account played lately.
 
-use eframe::egui::{self, Align2, Color32, Sense, Ui, vec2};
+use eframe::egui::{self, Color32, Sense, Ui, vec2};
 use spotified_client::models::{BrowsePage, MoodChip, Shelf, Track};
 
 use super::{cards, pages, tracks, widgets};
@@ -15,17 +15,18 @@ const TILE_GAP: f32 = 16.0;
 const TILE_PADDING: f32 = 16.0;
 /// How many tiles may ask for their picture on one frame.
 const TILE_ART_PER_FRAME: usize = 2;
-/// How many earlier searches the empty search page offers.
-const RECENT_SEARCHES: usize = 8;
 
 pub fn surface(state: &State, ui: &mut Ui, actions: &mut Vec<Action>, surface: &Surface) {
-    pages::loaded(state, ui, state.surfaces.get(&surface.key()), |ui, page| {
+    let skeleton = pages::Skeleton::Tracks(4);
+    let page = state.surfaces.get(&surface.key());
+    pages::loaded_or(state, ui, page, skeleton, |ui, page| {
         let title = if page.title.is_empty() {
             &surface.title
         } else {
             &page.title
         };
-        pages::title(ui, title, 30.0);
+        ui.add_space(8.0);
+        pages::title(ui, title, 24.0);
         let shown: Vec<&Shelf> = shown_shelves(page).collect();
         if page.moods.is_empty() && shown.is_empty() {
             let text = "YouTube Music sent nothing this app can show here.";
@@ -53,16 +54,16 @@ pub fn surface(state: &State, ui: &mut Ui, actions: &mut Vec<Action>, surface: &
         // A page that is one shelf is the whole of something: a grid reads
         // better than a single row to scroll.
         if let [only] = shown[..] {
-            cards::section_title(ui, &only.title);
-            ui.horizontal_wrapped(|ui| {
-                ui.spacing_mut().item_spacing = vec2(7.0, 14.0);
-                for item in &only.items {
-                    cards::item(state, ui, actions, item);
-                }
+            // Named after the page it is on, it would only say so twice.
+            if !same_title(&only.title, title) {
+                cards::section_title(ui, &only.title);
+            }
+            cards::grid(ui, only.items.len(), |ui, index| {
+                cards::item(state, ui, actions, &only.items[index]);
             });
         } else {
             // What there is to hear, with its covers, before the tiles.
-            shelves(state, ui, actions, page, &surface.id);
+            shelves(state, ui, actions, &page.shelves, "surface");
         }
         if !moods.is_empty() {
             if !shown.is_empty() {
@@ -74,21 +75,29 @@ pub fn surface(state: &State, ui: &mut Ui, actions: &mut Vec<Action>, surface: &
     });
 }
 
+/// Whether two titles are the same once case, and the room YouTube pads
+/// them with, are set aside.
+fn same_title(a: &str, b: &str) -> bool {
+    !a.trim().is_empty() && a.trim().eq_ignore_ascii_case(b.trim())
+}
+
 /// A shelf with nothing this client can show is left out.
 fn shown_shelves(page: &BrowsePage) -> impl Iterator<Item = &Shelf> {
     page.shelves.iter().filter(|shelf| !shelf.items.is_empty())
 }
 
-/// A page's shelves, each a row to scroll, with a way to the whole of it
-/// where YouTube Music has more. `salt` tells one page's rows from another's.
+/// Shelves, each a row of as many cards as fit, with a way to the whole
+/// of it where YouTube Music has more. `group` tells these shelves from
+/// any others on the page: two may share a title.
 pub fn shelves(
     state: &State,
     ui: &mut Ui,
     actions: &mut Vec<Action>,
-    page: &BrowsePage,
-    salt: &str,
+    shelves: &[Shelf],
+    group: &str,
 ) {
-    for (index, shelf) in shown_shelves(page).enumerate() {
+    let shown = shelves.iter().filter(|shelf| !shelf.items.is_empty());
+    for (index, shelf) in shown.enumerate() {
         let whole = (!shelf.show_all_id.is_empty()).then(|| {
             Page::Browse(Surface {
                 id: shelf.show_all_id.clone(),
@@ -96,11 +105,16 @@ pub fn shelves(
                 title: shelf.title.clone(),
             })
         });
-        cards::linked_title(state, ui, actions, &shelf.title, whole);
-        cards::row(ui, (salt, index), |ui| {
-            for item in &shelf.items {
-                cards::item(state, ui, actions, item);
+        ui.push_id((group, index), |ui| {
+            // A row of cards with nothing said over it still stands apart.
+            if shelf.title.is_empty() {
+                ui.add_space(16.0);
+            } else {
+                cards::linked_title(state, ui, actions, (&shelf.title, "Show all"), whole);
             }
+            cards::row(ui, shelf.items.len(), |ui, index| {
+                cards::item(state, ui, actions, &shelf.items[index]);
+            });
         });
     }
 }
@@ -108,7 +122,7 @@ pub fn shelves(
 /// Moods and genres as Spotify shows its categories: a wall of coloured
 /// tiles, each in the colour YouTube Music gives it, with a cover from its
 /// page tipped into the corner.
-fn mood_tiles(state: &State, ui: &mut Ui, actions: &mut Vec<Action>, moods: &[&MoodChip]) {
+pub fn mood_tiles(state: &State, ui: &mut Ui, actions: &mut Vec<Action>, moods: &[&MoodChip]) {
     if moods.is_empty() {
         return;
     }
@@ -169,9 +183,9 @@ fn tile(
     );
     widgets::artwork_tipped(ui, state, art, picture, rect);
     let width = rect.width() * 0.7 - TILE_PADDING;
-    let font = theme::bold(18.0);
+    let font = theme::bold(20.0);
     let galley = widgets::elided(ui, &mood.title, font, Color32::WHITE, width, 2);
-    let at = rect.left_top() + vec2(TILE_PADDING, TILE_PADDING - 2.0);
+    let at = rect.left_top() + vec2(TILE_PADDING, TILE_PADDING);
     // A soft dark copy under the name keeps it readable over a cover.
     ui.painter().galley(
         at + vec2(0.0, 1.0),
@@ -183,7 +197,7 @@ fn tile(
 
 /// The ways onward that head Browse all, ahead of the moods and genres:
 /// the app's own tiles, in colours of its choosing.
-fn first_tiles() -> [MoodChip; 3] {
+pub fn first_tiles() -> [MoodChip; 3] {
     let tile = |id: &str, title: &str, color: &str| MoodChip {
         id: id.to_owned(),
         params: String::new(),
@@ -209,32 +223,10 @@ fn hex_color(text: &str) -> Option<Color32> {
     ))
 }
 
-/// The search page before anything is typed.
-pub fn search_start(state: &State, ui: &mut Ui, actions: &mut Vec<Action>) {
-    if !state.search.recent.is_empty() {
-        pages::title(ui, "Recent searches", 20.0);
-        ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing = vec2(8.0, 8.0);
-            for query in state.search.recent.iter().take(RECENT_SEARCHES) {
-                if widgets::chip(ui, &state.palette, query, false).clicked() {
-                    actions.push(Action::Search(query.clone()));
-                }
-            }
-        });
-        ui.add_space(20.0);
-    }
-    pages::title(ui, "Browse all", 20.0);
-    let moods = state.surfaces.get(&Surface::moods().key());
-    pages::loaded(state, ui, moods, |ui, page| {
-        let first = first_tiles();
-        let moods: Vec<&MoodChip> = first.iter().chain(&page.moods).collect();
-        mood_tiles(state, ui, actions, &moods);
-    });
-}
-
 /// What the account played lately, on any device.
 pub fn history(state: &State, ui: &mut Ui, actions: &mut Vec<Action>) {
-    pages::title(ui, "Recently played", 30.0);
+    ui.add_space(8.0);
+    pages::title(ui, "Recently played", 24.0);
     pages::loaded(state, ui, &state.history, |ui, played| {
         if played.is_empty() {
             let text = "Songs you play show up here.";
@@ -250,50 +242,10 @@ pub fn history(state: &State, ui: &mut Ui, actions: &mut Vec<Action>) {
                 cover: true,
                 album: true,
             },
+            mode: tracks::Mode::List,
         };
-        tracks::rows(state, ui, actions, list);
+        tracks::table(state, ui, actions, list);
     });
-}
-
-/// Ways the query on screen might go on, to search for with a click.
-pub fn suggestions(state: &State, ui: &mut Ui, actions: &mut Vec<Action>) {
-    let typed = state.search.query.trim();
-    let mut others = state
-        .search
-        .suggestions
-        .iter()
-        .filter(|suggestion| !suggestion.eq_ignore_ascii_case(typed))
-        .peekable();
-    if others.peek().is_none() {
-        return;
-    }
-    ui.horizontal_wrapped(|ui| {
-        ui.spacing_mut().item_spacing = vec2(8.0, 6.0);
-        for suggestion in others {
-            let font = theme::medium(13.0);
-            let color = state.palette.secondary;
-            let galley = ui.painter().layout_no_wrap(suggestion.clone(), font, color);
-            let size = galley.size() + vec2(22.0, 8.0);
-            let (rect, response) = ui.allocate_exact_size(size, Sense::click());
-            widgets::name(ui, &response, suggestion);
-            let lift = widgets::hover(ui, &response);
-            let color = crate::tint::blend(color, state.palette.text, lift);
-            let icon = egui::Rect::from_min_size(rect.left_top(), vec2(16.0, rect.height()));
-            widgets::paint_icon(ui, Icon::Search, icon, 13.0, color);
-            widgets::text_at(
-                ui,
-                rect.left_center() + vec2(20.0, 0.0),
-                Align2::LEFT_CENTER,
-                suggestion,
-                theme::medium(13.0),
-                color,
-            );
-            if response.clicked() {
-                actions.push(Action::Search(suggestion.clone()));
-            }
-        }
-    });
-    ui.add_space(8.0);
 }
 
 #[cfg(test)]

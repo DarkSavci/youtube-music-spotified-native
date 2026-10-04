@@ -1,13 +1,14 @@
 //! The engine's thread: the decks, the device, and the loop that keeps
 //! them matching the target.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, RecvTimeoutError};
 
 use super::{Decks, Event, Op, Target, crossfade_due, gain_for, reconcile};
+use crate::clock::Clock;
 use crate::deck::{Deck, DeckError, Poll};
 use crate::eq::{self, Equalizer};
 use crate::loudness::Gain;
@@ -32,104 +33,34 @@ const DEVICE_CHECK: Duration = Duration::from_secs(2);
 /// no audio ready during a fade.
 const LATE_BLOCK: usize = 2048;
 
-/// The deck that is playing, and how far along it is.
-struct Playing {
-    deck: Deck,
-    ready: bool,
-    duration_ms: u64,
-    /// Where the audio handed to the device so far reaches.
-    fed_until_ms: u64,
-    /// A chunk partly handed over, and how much of it has been.
-    pending: Option<(Vec<f32>, usize)>,
-    ended: bool,
-    /// Where the music ends, once a crossfade has wanted to know.
-    tail: Option<Tail>,
-    /// Frames of silence still to be passed over at the start: set for a
-    /// track that is faded into, and spent at its first sound.
-    quiet_to_skip: u64,
-}
-
-impl Playing {
-    fn new(deck: Deck, start_ms: u64) -> Self {
-        Self {
-            deck,
-            ready: false,
-            duration_ms: 0,
-            fed_until_ms: start_ms,
-            pending: None,
-            ended: false,
-            tail: None,
-            quiet_to_skip: 0,
-        }
-    }
-}
-
-impl Playing {
-    /// The next frame of this deck, or silence if it has none ready. For a
-    /// deck that is fading out under another.
-    fn next_frame(&mut self) -> [f32; 2] {
-        loop {
-            if let Some((samples, sent)) = &mut self.pending {
-                if *sent + 1 < samples.len() {
-                    let frame = [samples[*sent], samples[*sent + 1]];
-                    *sent += 2;
-                    return frame;
-                }
-                self.pending = None;
-            }
-            match self.deck.poll() {
-                Poll::Chunk { samples, .. } => self.pending = Some((samples, 0)),
-                _ => return [0.0; 2],
-            }
-        }
-    }
-}
-
-/// One track fading out under the next. Both follow equal-power curves, so
-/// the loudness holds steady through the middle of the fade.
-struct Fade {
-    outgoing: Playing,
-    /// The fade's length and how far along it is, in frames.
-    total: u64,
-    done: u64,
-}
-
-impl Fade {
-    /// The gains for the incoming and the outgoing track at this point.
-    fn gains(&self) -> (f32, f32) {
-        let progress = (self.done as f32 / self.total.max(1) as f32).min(1.0);
-        let angle = progress * std::f32::consts::FRAC_PI_2;
-        (angle.sin(), angle.cos())
-    }
-
-    /// Fades `incoming` in, in place, with the outgoing track under it.
-    fn mix_into(&mut self, incoming: &mut [f32]) {
-        for frame in incoming.as_chunks_mut::<2>().0 {
-            let (rising, falling) = self.gains();
-            let old = self.outgoing.next_frame();
-            frame[0] = frame[0] * rising + old[0] * falling;
-            frame[1] = frame[1] * rising + old[1] * falling;
-            self.done += 1;
-        }
-    }
-
-    fn finished(&self) -> bool {
-        self.done >= self.total
-    }
-}
-
+mod playing;
 mod watch;
+
+use playing::{Fade, Playing};
+
+/// What the app sets while the engine runs, read by the engine's thread.
+pub(super) struct Dials {
+    /// Whether tracks loaded from now on are evened out in loudness.
+    pub normalise: AtomicBool,
+    /// The loudness they are evened out to, in LUFS, as `f32` bits.
+    pub loudness_target: AtomicU32,
+    /// How fast the music plays, as `f32` bits; 1 is normal.
+    pub speed: AtomicU32,
+    /// The equalizer's settings, as the app last set them.
+    pub equalizer: Mutex<eq::Settings>,
+}
 
 pub(super) struct Worker {
     origin: String,
-    /// Whether tracks loaded from now on are evened out in loudness.
-    normalise: Arc<AtomicBool>,
-    /// The equalizer's settings, as the app last set them.
-    equalizer_settings: Arc<Mutex<eq::Settings>>,
+    dials: Arc<Dials>,
+    /// The speed in force, as last read from the dials.
+    speed: f32,
     /// Built with the device, whose sample rate its filters depend on.
     equalizer: Option<Equalizer>,
     /// Where what is played can be watched from.
     tap: Arc<Tap>,
+    /// Where the track has reached, for whatever keeps time with it.
+    clock: Arc<Clock>,
     /// Audio on its way to the device, copied here to be equalized.
     shaped: Vec<f32>,
     emit: Box<dyn Fn(Event)>,
@@ -162,18 +93,19 @@ pub(super) struct Worker {
 impl Worker {
     pub(super) fn new(
         origin: String,
-        normalise: Arc<AtomicBool>,
-        equalizer_settings: Arc<Mutex<eq::Settings>>,
+        dials: Arc<Dials>,
         tap: Arc<Tap>,
+        clock: Arc<Clock>,
         emit: Box<dyn Fn(Event)>,
     ) -> Self {
         let now = Instant::now();
         Self {
             origin,
-            normalise,
-            equalizer_settings,
+            dials,
+            speed: 1.0,
             equalizer: None,
             tap,
+            clock,
             shaped: Vec::new(),
             emit,
             agent: source::agent(),
@@ -209,6 +141,7 @@ impl Worker {
                 Err(RecvTimeoutError::Disconnected) => return,
             }
             self.tick();
+            self.tell_clock();
         }
     }
 
@@ -223,8 +156,11 @@ impl Worker {
         let Some(playing) = &self.current else {
             return 0;
         };
+        // What waits at the device is that long in the hearing, and longer
+        // or shorter than that in the track.
         let queued_ms = self.output.as_ref().map_or(0, |output| {
-            output.queued_frames() as u64 * 1000 / u64::from(output.sample_rate())
+            let heard = output.queued_frames() as f64 * 1000.0 / f64::from(output.sample_rate());
+            (heard * f64::from(self.speed)) as u64
         });
         playing.fed_until_ms.saturating_sub(queued_ms)
     }
@@ -296,7 +232,7 @@ impl Worker {
                 if let Some(playing) = &mut self.current {
                     playing.deck.seek(position_ms);
                     playing.fed_until_ms = position_ms;
-                    playing.pending = None;
+                    playing.clear();
                     playing.ended = false;
                 }
                 self.restart_watches();
@@ -331,9 +267,10 @@ impl Worker {
         let rate = self.output.as_ref()?.sample_rate();
         let query = if preload { "?preload=1" } else { "" };
         let url = format!("{}/v1/stream/{video_id}{query}", self.origin);
-        let gain = if self.normalise.load(Ordering::Relaxed) {
+        let gain = if self.dials.normalise.load(Ordering::Relaxed) {
             let url = format!("{}/v1/tracks/{video_id}/loudness", self.origin);
-            Gain::fetch(self.agent.clone(), url)
+            let target = f32::from_bits(self.dials.loudness_target.load(Ordering::Relaxed));
+            Gain::fetch(self.agent.clone(), url, target)
         } else {
             Gain::unity()
         };
@@ -375,11 +312,11 @@ impl Worker {
     }
 
     fn tick(&mut self) {
-        if let (Some(equalizer), Ok(settings)) =
-            (&mut self.equalizer, self.equalizer_settings.lock())
+        if let (Some(equalizer), Ok(settings)) = (&mut self.equalizer, self.dials.equalizer.lock())
         {
             equalizer.set(*settings);
         }
+        self.speed = f32::from_bits(self.dials.speed.load(Ordering::Relaxed));
         if self.suspend_at.is_some_and(|at| Instant::now() >= at) {
             self.suspend_at = None;
             if let Some(output) = &self.output {
@@ -407,6 +344,7 @@ impl Worker {
             return;
         };
         let mut failure = None;
+        let (rate, speed) = (output.sample_rate(), self.speed);
         loop {
             if playing.pending.is_none() {
                 match playing.deck.poll() {
@@ -415,8 +353,8 @@ impl Worker {
                         position_ms,
                     } => {
                         let frames = (samples.len() / 2) as u64;
-                        playing.fed_until_ms =
-                            position_ms + frames * 1000 / u64::from(output.sample_rate());
+                        let ends_ms = position_ms + frames * 1000 / u64::from(rate);
+                        playing.fed_until_ms = ends_ms;
                         let quiet = match playing.quiet_to_skip {
                             0 => 0,
                             _ => silence::leading_quiet(&samples),
@@ -427,7 +365,13 @@ impl Worker {
                             continue;
                         }
                         playing.quiet_to_skip = 0;
-                        playing.pending = Some((samples, quiet));
+                        playing.take(samples, quiet, rate, speed);
+                        // What is held back to change its speed has not
+                        // been handed on, and is not counted as fed.
+                        playing.fed_until_ms = ends_ms.saturating_sub(playing.held_ms(rate));
+                        if playing.pending.is_none() {
+                            continue;
+                        }
                     }
                     Poll::Ready { duration_ms } => {
                         playing.ready = true;
@@ -444,7 +388,10 @@ impl Worker {
                     Poll::Pending => break,
                     Poll::Ended => {
                         playing.ended = true;
-                        break;
+                        playing.take_rest();
+                        if playing.pending.is_none() {
+                            break;
+                        }
                     }
                     Poll::Failed(error) => {
                         failure = Some(error);
@@ -479,7 +426,7 @@ impl Worker {
                 None => break,
             }
             if let Some(fade) = &mut self.fading_out {
-                fade.mix_into(&mut self.shaped);
+                fade.mix_into(&mut self.shaped, rate, speed);
                 if fade.finished() {
                     self.fading_out = None;
                 }
@@ -496,7 +443,11 @@ impl Worker {
         }
         if let Some(error) = failure {
             self.fail(error);
-        } else if self.current.as_ref().is_some_and(|playing| playing.ended) {
+        } else if self
+            .current
+            .as_ref()
+            .is_some_and(|playing| playing.ended && playing.pending.is_none())
+        {
             self.finish();
         }
     }
@@ -538,16 +489,18 @@ impl Worker {
             playing.fed_until_ms,
             music_ends_ms,
             self.target.crossfade_ms,
+            self.speed,
         );
         let (true, true, Some(output)) = (next_is_ready, due, &self.output) else {
             return;
         };
         let rate = u64::from(output.sample_rate());
         let total = self.target.crossfade_ms * rate / 1000;
-        let incoming = self.next.take().map(|deck| Playing {
-            quiet_to_skip: silence::MOST_LEAD_MS * rate / 1000,
-            ..Playing::new(deck, 0)
-        });
+        let quiet = silence::MOST_LEAD_MS * rate / 1000;
+        let incoming = self
+            .next
+            .take()
+            .map(|deck| Playing::faded_into(deck, quiet));
         if let Some(outgoing) = std::mem::replace(&mut self.current, incoming) {
             self.fading_out = Some(Fade {
                 outgoing,
@@ -572,7 +525,8 @@ impl Worker {
             .next
             .as_ref()
             .is_some_and(|deck| deck.video_id() == self.target.preload_video_id);
-        if next_is_ready {
+        // Without gapless the core is waited for, as it is for any track.
+        if next_is_ready && self.target.gapless {
             self.current = self.next.take().map(|deck| Playing::new(deck, 0));
             self.restart_watches();
             (self.emit)(Event::Ended {

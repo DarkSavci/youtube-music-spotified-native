@@ -549,7 +549,12 @@ func parseTopResult(n Node) (domain.ShelfItem, bool) {
 		return domain.ShelfItem{}, false
 	}
 	subtitle := textOf(n.Child("subtitle"))
-	art := n.FindArtwork()
+	// The card's own picture. A search of the whole card walks a map, and
+	// so turned up the cover of one of the songs inside it as often as not.
+	art := n.Child("thumbnail").FindArtwork()
+	if len(art) == 0 {
+		art = n.FindArtwork()
+	}
 
 	browseID, pageType, videoID := topResultTarget(n)
 

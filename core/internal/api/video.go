@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -103,7 +104,13 @@ type videoFlight struct {
 	err    error
 }
 
-func (s *Server) resolveVideo(ctx context.Context, id string, refresh bool) (domain.Stream, error) {
+func (s *Server) resolveVideo(ctx context.Context, video string, pick resolver.VideoPick, refresh bool) (domain.Stream, error) {
+	// Each pick is its own entry: the H.264 stream one client asked for must
+	// not be handed to another that asked for the default.
+	id := video
+	if pick != (resolver.VideoPick{}) {
+		id = fmt.Sprintf("%s|%s|%d", video, pick.Codec, pick.MaxHeight)
+	}
 	s.videoMu.Lock()
 	if entry, ok := s.videos[id]; ok && !refresh && entry.usable(time.Now()) {
 		s.videoMu.Unlock()
@@ -136,17 +143,24 @@ func (s *Server) resolveVideo(ctx context.Context, id string, refresh bool) (dom
 	provider, ok := s.deps.Resolver.(interface {
 		ResolveVideo(context.Context, string) (domain.Stream, error)
 	})
+	picker, picks := s.deps.Resolver.(interface {
+		ResolveVideoAs(context.Context, string, resolver.VideoPick) (domain.Stream, error)
+	})
 	if cooling, left := s.streamGov.Cooling(); cooling {
 		// Same limit as audio: a video lookup during it only extends it.
 		flight.err = fmt.Errorf("%w: %w", resolver.ErrRateLimited, &ratelimit.Error{RetryAfter: left})
-	} else if !ok {
+	} else if !ok || (!picks && pick != (resolver.VideoPick{})) {
 		flight.err = errors.New("video playback is unavailable with this resolver")
 	} else {
 		// Other requests share this result, so one of them going away must
 		// not cancel it for the rest. It still needs a bound of its own.
 		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
 		defer cancel()
-		flight.stream, flight.err = provider.ResolveVideo(rctx, id)
+		if picks {
+			flight.stream, flight.err = picker.ResolveVideoAs(rctx, video, pick)
+		} else {
+			flight.stream, flight.err = provider.ResolveVideo(rctx, video)
+		}
 		if errors.Is(flight.err, resolver.ErrRateLimited) {
 			s.streamGov.CoolDown(0)
 		}
@@ -208,6 +222,27 @@ func (s *Server) allowVideoRequest(w http.ResponseWriter, r *http.Request) bool 
 	return false
 }
 
+// videoPick reads what a client says it can play. No parameters is the
+// default pick, which is what the Electron app's <video> element gets.
+func videoPick(q url.Values) (resolver.VideoPick, bool) {
+	pick := resolver.VideoPick{}
+	switch q.Get("codec") {
+	case "":
+	case "h264":
+		pick.Codec = "h264"
+	default:
+		return pick, false
+	}
+	if raw := q.Get("height"); raw != "" {
+		height, err := strconv.Atoi(raw)
+		if err != nil || height < 144 || height > 1080 {
+			return pick, false
+		}
+		pick.MaxHeight = height
+	}
+	return pick, true
+}
+
 func (s *Server) handleVideoStream(w http.ResponseWriter, r *http.Request) {
 	if !s.allowVideoRequest(w, r) {
 		return
@@ -217,8 +252,13 @@ func (s *Server) handleVideoStream(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid video id", http.StatusBadRequest)
 		return
 	}
+	pick, ok := videoPick(r.URL.Query())
+	if !ok {
+		http.Error(w, "unknown video codec or height", http.StatusBadRequest)
+		return
+	}
 	for attempt := 0; attempt < 2; attempt++ {
-		st, err := s.resolveVideo(r.Context(), id, attempt > 0)
+		st, err := s.resolveVideo(r.Context(), id, pick, attempt > 0)
 		if err != nil {
 			status := http.StatusBadGateway
 			if errors.Is(err, resolver.ErrRateLimited) {

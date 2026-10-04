@@ -1,9 +1,20 @@
 //! The rules in `apply`, each stated as what a person would see.
 
 mod account;
+mod accounts;
+mod desktop;
 mod library;
+mod listening;
+mod migration;
+mod pages;
 mod playback;
+mod preferences;
+mod room;
+mod room_playback;
+mod room_radio;
+mod room_servers;
 mod search;
+mod shell;
 mod together;
 
 use spotified_client::ApiError;
@@ -52,14 +63,6 @@ pub(super) fn results(query: &str) -> SearchResults {
 }
 
 #[test]
-pub(super) fn hiding_the_sidebar_is_remembered() {
-    let mut state = state();
-    let effects = apply(&mut state, Action::ToggleSidebar);
-    assert!(!state.settings.sidebar_visible);
-    assert_eq!(effects, [Effect::SaveSettings]);
-}
-
-#[test]
 pub(super) fn a_sidebar_width_is_held_to_its_limits() {
     let mut state = state();
     apply(&mut state, Action::ResizeSidebar(5000.0));
@@ -90,11 +93,6 @@ pub(super) fn a_page_is_fetched_once() {
     );
     apply(&mut state, Action::Open(Page::Home));
     assert!(apply(&mut state, open()).is_empty());
-}
-
-#[test]
-pub(super) fn there_is_nothing_to_import_without_a_source() {
-    assert!(apply(&mut state(), Action::ImportSignIn).is_empty());
 }
 
 pub(super) fn playing() -> State {

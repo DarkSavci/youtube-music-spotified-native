@@ -291,6 +291,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /v1/me/folders", s.handleCreateFolder)
 	s.mux.HandleFunc("DELETE /v1/me/folders/{id}", s.handleDeleteFolder)
 	s.mux.HandleFunc("POST /v1/me/library/organise", s.handleOrganise)
+	s.mux.HandleFunc("POST /v1/migrate/history", s.handleMigrateHistory)
+	s.mux.HandleFunc("POST /v1/migrate/cache", s.handleMigrateCache)
 
 	// Session: projections stream out, commands come in. The same transport
 	// serves the local device and, later, a remote one.

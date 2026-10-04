@@ -84,12 +84,15 @@ impl Paths {
         self.config.join("settings.json")
     }
 
-    pub fn credentials_file(&self) -> PathBuf {
-        self.config.join("credentials.json")
+    /// Where the songs played are kept, whoever is signed in.
+    pub fn audio_cache(&self) -> PathBuf {
+        self.config.join("audio-cache")
     }
 
-    pub fn database_file(&self) -> PathBuf {
-        self.config.join("spotified.db")
+    /// Where newer copies of yt-dlp are kept. Beside the cache, not in the
+    /// roaming profile: they are large and can be fetched again.
+    pub fn resolver_folder(&self) -> PathBuf {
+        self.cache.with_file_name("yt-dlp")
     }
 
     pub fn instance_lock(&self) -> PathBuf {

@@ -1,6 +1,10 @@
 //! Listen Together, as the app's state sees it: entering and leaving a
 //! room, hearing the room, and keeping the player with it.
 
+mod radio;
+mod room;
+mod servers;
+
 use std::time::{Duration, Instant};
 
 use serde_json::json;
@@ -9,8 +13,11 @@ use spotified_client::session::Command;
 use super::{Action, Effect};
 use crate::state::State;
 use crate::together::protocol::{MOST_TRACKS, checked_address, tracks_json};
-use crate::together::sync::{self, Local};
-use crate::together::{Enter, Event, Field, Options, Phase, Seed};
+use crate::together::sync::{self, Local, Standing};
+use crate::together::{Enter, Event, Field, Options, Phase, Seed, ServerForm, rules};
+
+pub(super) use radio::{answered, start_radio};
+pub(super) use room::{asked, confirmed};
 
 /// How often the room is told again that this player reached a song's end,
 /// until the room moves on.
@@ -23,9 +30,8 @@ pub(super) fn together(state: &mut State, action: Action) -> Vec<Effect> {
         Action::TogetherField(field, text) => {
             let kept = |most: usize| text.chars().take(most).collect::<String>();
             match field {
-                Field::Server => state.settings.together_server = kept(300),
                 Field::Name => state.settings.together_name = kept(50),
-                Field::RoomName => state.together.form.room_name = kept(80),
+                Field::RoomName => state.settings.together_room_name = kept(80),
                 Field::Pin => {
                     let digits = text.chars().filter(char::is_ascii_digit).take(8);
                     state.together.form.pin = digits.collect();
@@ -34,13 +40,13 @@ pub(super) fn together(state: &mut State, action: Action) -> Vec<Effect> {
             Vec::new()
         }
         Action::TogetherMode(mode) => {
-            state.together.form.mode = mode;
+            state.settings.together_mode = mode;
             Vec::new()
         }
         Action::TogetherCreate => {
             let enter = Enter::Create {
-                mode: state.together.form.mode,
-                room_name: state.together.form.room_name.trim().to_owned(),
+                mode: state.settings.together_mode,
+                room_name: state.settings.together_room_name.trim().to_owned(),
             };
             enter_room(state, enter)
         }
@@ -64,26 +70,35 @@ fn enter_room(state: &mut State, enter: Enter) -> Vec<Effect> {
     if state.together.phase != Phase::Idle {
         return Vec::new();
     }
+    // With no server chosen the way in is to save one: the form opens.
+    let Some(server) = state.settings.together_server() else {
+        state.together.manage = Some(ServerForm::default());
+        return Vec::new();
+    };
     if !state.core_ready() {
         return refuse(
             state,
-            "Wait for the music service to start, then try again.",
+            "Wait for the local music service to connect, then try again.",
         );
     }
-    let url = match checked_address(&state.settings.together_server) {
+    let url = match checked_address(&server.url) {
         Ok(url) => url,
         Err(why) => return refuse(state, why),
     };
     if matches!(&enter, Enter::Join { pin } if pin.len() != 8) {
         return refuse(state, "A room's PIN has eight digits.");
     }
+    let account = state.account.as_ref();
     let typed = state.settings.together_name.trim();
     let name = if !typed.is_empty() {
         typed.to_owned()
     } else {
-        let account = state.account.as_ref().map(|account| account.name.clone());
-        account.unwrap_or_else(|| "Listener".to_owned())
+        account.map_or_else(|| "Listener".to_owned(), |account| account.name.clone())
     };
+    let avatar = account
+        .filter(|_| state.settings.together_share_picture)
+        .map(|account| account.avatar_url.clone())
+        .unwrap_or_default();
     // A room made while music plays starts with that music.
     state.together.seed = match (&enter, &state.playback) {
         (Enter::Create { .. }, Some(playback)) if playback.current().is_some() => {
@@ -100,10 +115,14 @@ fn enter_room(state: &mut State, enter: Enter) -> Vec<Effect> {
     };
     state.together.phase = Phase::Connecting;
     state.together.error = None;
-    vec![
-        Effect::SaveSettings,
-        Effect::TogetherConnect(Options { url, name, enter }),
-    ]
+    state.together.manage = None;
+    let options = Options {
+        url,
+        name,
+        avatar,
+        enter,
+    };
+    vec![Effect::SaveSettings, Effect::TogetherConnect(options)]
 }
 
 /// Leaves the room, or gives up entering one. The music carries on from
@@ -140,22 +159,53 @@ fn heard(state: &mut State, event: Event) -> Vec<Effect> {
             if room.revision < newest {
                 return Vec::new();
             }
-            state.together.room = Some(*room);
+            let previous = state.together.room.replace(*room);
             state.together.offset_ms = offset_ms;
             state.together.phase = Phase::Joined;
-            keep_up(state)
+            if let Some(previous) = previous {
+                room_changed(state, &previous);
+            }
+            let mut effects = keep_up(state);
+            effects.extend(radio::add_radio(state));
+            effects.extend(radio::top_up(state));
+            effects
         }
         Event::Refused(why) => {
+            // Whatever was refused, a radio on its way is not waited for.
+            state.together.radio.busy = false;
+            state.together.radio.found = None;
             state.toast_error(why);
             Vec::new()
         }
-        Event::Ended(reason) => {
-            if !reason.is_empty() {
-                state.toast(reason);
-            }
-            leave(state, None)
-        }
+        Event::Ended(reason) => leave(state, Some(reason).filter(|reason| !reason.is_empty())),
         Event::Failed(why) => leave(state, Some(why)),
+    }
+}
+
+/// The room has gone from `previous` to what is now held: say what this
+/// listener should hear of it, and note what the room has played.
+fn room_changed(state: &mut State, previous: &crate::together::Room) {
+    let together = &mut state.together;
+    let Some(room) = &together.room else {
+        return;
+    };
+    rules::remember_heard(&mut together.heard, room);
+    // Someone sought: follow at once, not as drift that may wait.
+    if rules::jumped(previous, room) {
+        together.corrected_at = None;
+    }
+    // The limit on screen is the room's again once the room has a new one.
+    if previous.limit != room.limit {
+        together.limit_text = None;
+    }
+    let mut news = rules::request_news(previous, room, &together.me, &mut together.withdrawn);
+    let latest = room.activity.last();
+    let happened = latest.map(|last| &last.id) != previous.activity.last().map(|last| &last.id);
+    if news.is_empty() && happened && state.settings.together_notifications {
+        news.extend(latest.map(|last| last.text.clone()));
+    }
+    for line in news {
+        state.toast(line);
     }
 }
 
@@ -169,6 +219,7 @@ fn keep_up(state: &mut State) -> Vec<Effect> {
         return seed_step(state);
     }
     let server_now = state.together.server_now();
+    let stuck = state.notice.is_some();
     let together = &mut state.together;
     let (Some(room), Some(playback)) = (&together.room, &state.playback) else {
         return Vec::new();
@@ -192,14 +243,43 @@ fn keep_up(state: &mut State) -> Vec<Effect> {
     let since = together.corrected_at.map(|at| now.duration_since(at));
     let applied = together.applied_entry.as_deref();
     let mut effects = Vec::new();
+    // The room's song is the one in the player and it will not play:
+    // asking for it again each second would not make it, so the room is
+    // told instead, and "Retry playback" is how it is asked for again.
+    let the_rooms = room.current().is_some_and(|(_, entry)| {
+        applied == Some(entry.id.as_str()) && local.current == Some(entry.track.id.as_str())
+    });
+    let unplayable = playback.current().is_some_and(|track| !track.playable);
+    if the_rooms && (stuck || unplayable) {
+        together.standing = Standing::Unavailable;
+        let status = Standing::Unavailable.wire(room.playing);
+        return vec![Effect::TogetherStatus(status, room.current.clone())];
+    }
+    // The length as it was measured here, where the room's is missing or
+    // a little out: the room ends a song by its length. Said once for
+    // each song, by someone the room lets steer it.
+    if let (Some((entry, measured)), Some((_, current))) = (&playback.room_length, room.current())
+        && *entry == current.id
+        && local.current == Some(current.track.id.as_str())
+        && room.may_control(&together.me)
+        && sync::length_worth_telling(current.track.duration_ms.max(0.0) as u64, *measured)
+    {
+        let told = format!("{entry}:{}", current.track.id);
+        if together.length_told.as_deref() != Some(told.as_str()) {
+            together.length_told = Some(told);
+            let fields = json!({ "entry": entry, "durationMs": measured });
+            effects.push(Effect::TogetherCommand("duration", fields));
+        }
+    }
+    // The room moves on when a player says the song is over; it is said
+    // again until it does, in case the first was lost.
+    let ended_here = playback.room_ended.is_some() && playback.room_ended == room.current;
+    let standing = Standing::of(room, server_now, &local, ended_here);
     if let Some(command) = sync::follow(room, server_now, &local, applied, since) {
         together.applied_entry.clone_from(&room.current);
         together.corrected_at = Some(now);
         effects.push(Effect::Command(command));
     }
-    // The room moves on when a player says the song is over; it is said
-    // again until it does, in case the first was lost.
-    let ended_here = playback.room_ended.is_some() && playback.room_ended == room.current;
     let due = together
         .ended_sent
         .is_none_or(|at| now.duration_since(at) >= ENDED_EVERY);
@@ -208,11 +288,8 @@ fn keep_up(state: &mut State) -> Vec<Effect> {
         let fields = json!({ "current": room.current });
         effects.push(Effect::TogetherCommand("ended", fields));
     }
-    let status = match (settled, room.playing) {
-        (false, _) => "buffering",
-        (true, true) => "listening",
-        (true, false) => "paused",
-    };
+    together.standing = standing;
+    let status = standing.wire(room.playing);
     effects.push(Effect::TogetherStatus(status, room.current.clone()));
     effects
 }

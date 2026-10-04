@@ -4,8 +4,10 @@
 //! the app can tell a signed-out account from an outage from a rate limit,
 //! and each has a sentence fit to show.
 
+pub mod migrate;
 pub mod models;
 pub mod session;
+mod stats;
 
 use std::fmt;
 use std::io::Read;
@@ -17,8 +19,13 @@ use serde_json::{Value, json};
 
 use models::{
     Account, Album, Artist, BrowsePage, CacheUsage, Channel, Folder, LibraryItem, LibraryKind,
-    Lyrics, Mix, Playlist, Podcast, SearchFilter, SearchResults, Stats, Track,
+    Lyrics, Mix, Playlist, PlaylistPage, Podcast, RemoteQueue, SearchFilter, SearchHistoryEntry,
+    SearchResults, Track,
 };
+
+/// The most pages a playlist is read through: the bound the core itself
+/// uses for a whole playlist.
+const PLAYLIST_PAGES_MOST: usize = 60;
 
 /// The core answers from cache in milliseconds, but a miss waits on YouTube
 /// behind its rate governor.
@@ -95,8 +102,20 @@ impl Client {
         }
     }
 
-    pub fn home(&self) -> Result<BrowsePage, ApiError> {
-        self.get("/v1/home")
+    /// Home, or Home read through one of its mood chips when `mood` is
+    /// that chip's params.
+    pub fn home(&self, mood: &str) -> Result<BrowsePage, ApiError> {
+        if mood.is_empty() {
+            self.get("/v1/home")
+        } else {
+            self.get(&format!("/v1/home?mood={}", encode(mood)))
+        }
+    }
+
+    /// The next few shelves of Home, from the token its last page ended
+    /// with.
+    pub fn home_more(&self, continuation: &str) -> Result<BrowsePage, ApiError> {
+        self.get(&format!("/v1/home?continuation={}", encode(continuation)))
     }
 
     /// Any other surface: explore, the moods, one mood's page, the whole
@@ -118,13 +137,20 @@ impl Client {
 
     /// What the account searched for lately, newest first. Empty when
     /// signed out.
-    pub fn recent_searches(&self) -> Result<Vec<String>, ApiError> {
-        #[derive(Deserialize)]
-        struct Entry {
-            query: String,
-        }
-        let entries: Vec<Entry> = self.get("/v1/me/search-history")?;
-        Ok(entries.into_iter().map(|entry| entry.query).collect())
+    pub fn search_history(&self) -> Result<Vec<SearchHistoryEntry>, ApiError> {
+        let entries: Option<Vec<SearchHistoryEntry>> = self.get("/v1/me/search-history")?;
+        Ok(entries.unwrap_or_default())
+    }
+
+    /// Removes earlier searches from the account, by the tokens they came
+    /// with.
+    pub fn forget_searches(&self, tokens: &[String]) -> Result<(), ApiError> {
+        self.post_empty("/v1/me/search-history/forget", &json!({ "tokens": tokens }))
+    }
+
+    /// The queue the account has on its other devices; empty signed out.
+    pub fn remote_queue(&self) -> Result<RemoteQueue, ApiError> {
+        self.get("/v1/me/remote-queue")
     }
 
     pub fn cache_usage(&self) -> Result<CacheUsage, ApiError> {
@@ -167,8 +193,53 @@ impl Client {
         self.get(&format!("/v1/playlists/{}", encode(id)))
     }
 
+    /// Some of a playlist's songs: its first page, or the one a token
+    /// from the page before fetches.
+    pub fn playlist_page(&self, id: &str, continuation: &str) -> Result<PlaylistPage, ApiError> {
+        let mut path = format!("/v1/playlists/{}?paged=1", encode(id));
+        if !continuation.is_empty() {
+            path.push_str(&format!("&continuation={}", encode(continuation)));
+        }
+        self.get(&path)
+    }
+
+    /// The rest of a playlist, read page by page from `next` on. A token
+    /// seen before would go round for ever; the list ends there.
+    pub fn playlist_rest(&self, id: &str, next: &str) -> Result<Vec<Track>, ApiError> {
+        let mut tracks = Vec::new();
+        let mut seen = vec![next.to_owned()];
+        let mut cursor = next.to_owned();
+        for _ in 0..PLAYLIST_PAGES_MOST {
+            if cursor.is_empty() {
+                break;
+            }
+            let page = self.playlist_page(id, &cursor)?;
+            tracks.extend(page.playlist.tracks);
+            if seen.contains(&page.next) {
+                break;
+            }
+            seen.push(page.next.clone());
+            cursor = page.next;
+        }
+        Ok(tracks)
+    }
+
+    /// A whole playlist, however many pages it takes.
+    pub fn complete_playlist(&self, id: &str) -> Result<Playlist, ApiError> {
+        let first = self.playlist_page(id, "")?;
+        let mut playlist = first.playlist;
+        playlist.tracks.extend(self.playlist_rest(id, &first.next)?);
+        Ok(playlist)
+    }
+
     pub fn podcast(&self, id: &str) -> Result<Podcast, ApiError> {
         self.get(&format!("/v1/podcasts/{}", encode(id)))
+    }
+
+    /// Songs like this one, as its radio would play them.
+    pub fn radio_of(&self, track_id: &str) -> Result<Vec<Track>, ApiError> {
+        let tracks: Option<Vec<Track>> = self.get(&format!("/v1/radio/{}", encode(track_id)))?;
+        Ok(tracks.unwrap_or_default())
     }
 
     pub fn search(&self, query: &str, filter: SearchFilter) -> Result<SearchResults, ApiError> {
@@ -219,14 +290,6 @@ impl Client {
     /// is enough history to make them from.
     pub fn mixes(&self) -> Result<Vec<Mix>, ApiError> {
         self.get("/v1/me/mixes")
-    }
-
-    /// The most played songs and artists of the last `days` days.
-    pub fn stats(&self, days: u32) -> Result<Stats, ApiError> {
-        Ok(Stats {
-            tracks: self.get(&format!("/v1/me/stats/tracks?days={days}&limit=25"))?,
-            artists: self.get(&format!("/v1/me/stats/artists?days={days}&limit=10"))?,
-        })
     }
 
     /// Every liked song, as the playlist YouTube Music keeps them in.

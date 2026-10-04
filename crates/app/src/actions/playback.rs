@@ -3,12 +3,12 @@
 use std::time::Instant;
 
 use spotified_client::models::Track;
-use spotified_client::session::{Command, PlayState};
+use spotified_client::session::{Command, PlayState, Projection};
 
 use super::{Action, Effect};
 use crate::backend::Request;
 use crate::settings::RightPanel;
-use crate::state::{Loadable, MiniPanel, Playback, State, TrackLyrics};
+use crate::state::{Loadable, MiniPanel, Notice, Playback, State, TrackLyrics};
 
 /// Asks for the lyrics of what is playing, if the lyrics panel is open and
 /// they are not already here or on their way.
@@ -65,6 +65,7 @@ pub(super) fn enqueue(state: &mut State, tracks: Vec<Track>, next: bool) -> Vec<
 /// at once, ahead of the core's answer, so nothing waits on a round trip;
 /// the answer then replaces the guess.
 pub(super) fn control(state: &mut State, action: Action) -> Vec<Effect> {
+    let loudest = state.settings.max_volume();
     let Some(playback) = &mut state.playback else {
         return Vec::new();
     };
@@ -105,7 +106,8 @@ pub(super) fn control(state: &mut State, action: Action) -> Vec<Effect> {
             Command::Seek(position_ms)
         }
         Action::SetVolume(volume) => {
-            let volume = volume.clamp(0.0, 1.0);
+            // Past 100% only with boost on.
+            let volume = volume.clamp(0.0, loudest);
             playback.session.volume = volume;
             Command::SetVolume(volume)
         }
@@ -130,4 +132,100 @@ pub(super) fn control(state: &mut State, action: Action) -> Vec<Effect> {
         _ => return Vec::new(),
     };
     vec![Effect::Command(command)]
+}
+
+/// Plays a song, then songs like it. The song already playing is not
+/// started over: a click on it only sets it going again if it had stopped.
+pub(super) fn start_radio(state: &mut State, track: Track) -> Vec<Effect> {
+    // In a room the song and its radio are the room's, not this player's.
+    if state.together.in_room() {
+        return super::together::start_radio(state, track);
+    }
+    let current = state
+        .playback
+        .as_ref()
+        .filter(|playback| playback.current().is_some_and(|now| now.id == track.id));
+    if let Some(playback) = current {
+        return if playback.wants_to_play() {
+            Vec::new()
+        } else {
+            vec![Effect::Command(Command::Toggle)]
+        };
+    }
+    vec![Effect::Fetch(Request::StartRadio {
+        device_id: state.settings.device_id.clone(),
+        track: Box::new(track),
+    })]
+}
+
+/// The core's session changed: what is playing is replaced by what it says,
+/// and what stands in the way of playback is said or unsaid.
+pub(super) fn session_changed(state: &mut State, projection: Projection) -> Vec<Effect> {
+    let was_offline = state
+        .playback
+        .as_ref()
+        .is_some_and(|playback| playback.offline);
+    let playback = Playback {
+        session: projection.state,
+        received: Instant::now(),
+        offline: projection.offline,
+        following_room: projection.following_room,
+        room_length: projection
+            .room
+            .as_ref()
+            .filter(|room| room.duration_ms > 0)
+            .map(|room| (room.entry.clone(), room.duration_ms)),
+        room_ended: projection
+            .room
+            .filter(|room| room.ended)
+            .map(|room| room.entry),
+        speed: state.speed(),
+    };
+    let paused = !playback.wants_to_play();
+    let offline = playback.offline;
+    state.playback = Some(playback);
+    note_connection(state, was_offline, offline, paused);
+    want_lyrics(state)
+}
+
+/// Says that the connection has gone for as long as it has, unless the
+/// listener dismissed it, and never over a different notice.
+fn note_connection(state: &mut State, was_offline: bool, offline: bool, paused: bool) {
+    let about_connection = matches!(state.notice, None | Some(Notice::Offline { .. }));
+    if offline {
+        if !was_offline {
+            state.offline_dismissed = false;
+        }
+        if !state.offline_dismissed && about_connection {
+            state.notice = Some(Notice::Offline { paused });
+        }
+        return;
+    }
+    if was_offline {
+        state.offline_dismissed = false;
+        if matches!(state.notice, Some(Notice::Offline { .. })) {
+            state.notice = None;
+        }
+    }
+}
+
+/// Gives the window, and the screen, to what is playing, or takes them
+/// back. There must be something playing to give them to.
+pub(super) fn fullscreen_player(state: &mut State, action: Action) -> Vec<Effect> {
+    let on = match action {
+        Action::SetFullscreenPlayer(on) => on,
+        _ => !state.fullscreen_player,
+    };
+    let has_track = state
+        .playback
+        .as_ref()
+        .and_then(Playback::current)
+        .is_some();
+    let on = on && has_track;
+    if on == state.fullscreen_player {
+        return Vec::new();
+    }
+    state.fullscreen_player = on;
+    // Closed over full-screen lyrics, the screen stays theirs.
+    vec![Effect::SetFullscreen(on || state.lyrics_fullscreen)]
 }

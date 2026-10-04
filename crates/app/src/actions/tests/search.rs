@@ -85,7 +85,7 @@ fn the_empty_search_page_asks_for_the_moods_and_the_recent_searches() {
     let moods = Request::Browse("FEmusic_moods_and_genres".into(), String::new());
     assert_eq!(
         effects,
-        [Effect::Fetch(moods), Effect::Fetch(Request::RecentSearches)]
+        [Effect::Fetch(moods), Effect::Fetch(Request::SearchHistory)]
     );
 }
 
@@ -155,4 +155,81 @@ fn tile_pictures_are_fetched_two_at_a_time_and_each_only_once() {
     assert_eq!(want(&mut state, "c").len(), 1);
     // One that came back with no picture is not asked for again.
     assert!(want(&mut state, "a").is_empty());
+}
+
+/// The recent searches as the page lists them.
+fn recent(state: &State) -> Vec<&str> {
+    let rows = state.search.recent.iter();
+    rows.map(|row| row.query.as_str()).collect()
+}
+
+/// A search for `query`, sent.
+fn searched(state: &mut State, query: &str) {
+    apply(state, Action::SetSearchQuery(query.into()));
+    apply(state, Action::RunSearch);
+}
+
+#[test]
+fn what_one_account_searched_for_here_is_not_shown_to_the_next() {
+    let mut state = ready();
+    let ada = crate::accounts::new_account("Ada");
+    let ada_id = ada.id.clone();
+    state.accounts.add(ada);
+    searched(&mut state, "bonobo");
+    assert_eq!(recent(&state), ["bonobo"]);
+
+    state.accounts.add(crate::accounts::new_account("Grace"));
+    state.refresh_recent_searches();
+    assert!(recent(&state).is_empty());
+    searched(&mut state, "air");
+    assert_eq!(recent(&state), ["air"]);
+
+    // Back to the first, and to what the first looked for.
+    state.accounts.activate(&ada_id);
+    state.refresh_recent_searches();
+    assert_eq!(recent(&state), ["bonobo"]);
+}
+
+#[test]
+fn a_channel_of_an_account_has_searches_of_its_own() {
+    let mut state = ready();
+    state.accounts.add(crate::accounts::new_account("Ada"));
+    searched(&mut state, "bonobo");
+    state.accounts.select_channel("123");
+    state.refresh_recent_searches();
+    assert!(recent(&state).is_empty());
+    assert_eq!(state.search_scope().rsplit(':').next(), Some("123"));
+}
+
+#[test]
+fn the_searches_from_before_they_were_kept_apart_go_to_whoever_searches_first() {
+    let mut state = ready();
+    state.settings.recent_searches = vec!["moby".into()];
+    state.accounts.add(crate::accounts::new_account("Ada"));
+    state.refresh_recent_searches();
+    // Shown to whoever is here, and theirs once they search.
+    assert_eq!(recent(&state), ["moby"]);
+    searched(&mut state, "air");
+    assert_eq!(recent(&state), ["air", "moby"]);
+    assert!(state.settings.recent_searches.is_empty());
+
+    state.accounts.add(crate::accounts::new_account("Grace"));
+    state.refresh_recent_searches();
+    assert!(recent(&state).is_empty());
+}
+
+#[test]
+fn clearing_the_recent_searches_clears_only_this_accounts() {
+    let mut state = ready();
+    let ada = crate::accounts::new_account("Ada");
+    let ada_id = ada.id.clone();
+    state.accounts.add(ada);
+    searched(&mut state, "bonobo");
+    state.accounts.add(crate::accounts::new_account("Grace"));
+    searched(&mut state, "air");
+    apply(&mut state, Action::ClearSearches);
+    assert!(recent(&state).is_empty());
+    state.accounts.activate(&ada_id);
+    state.refresh_recent_searches();
+    assert_eq!(recent(&state), ["bonobo"]);
 }

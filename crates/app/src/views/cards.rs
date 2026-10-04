@@ -1,32 +1,43 @@
 //! Cards and the shelves that hold them.
 
-use eframe::egui::{self, Align, Layout, Rect, Response, Sense, Ui, pos2, vec2};
+use eframe::egui::{self, Rect, Response, Sense, Ui, pos2, vec2};
 use spotified_client::models::{
     Album, Artist, Artwork, Item, Mix, Playlist, Podcast, Track, join_names,
 };
 
-use super::format::bulleted;
 use super::menus;
+use super::widgets::menu::{self, Entry, Menu};
 use super::widgets::{self, ArtShape};
 use crate::actions::Action;
 use crate::state::{Page, State};
 use crate::theme::{self, Icon};
 
-const WIDTH: f32 = 172.0;
+/// The narrowest a card in a row gets; a row holds as many as fit at this
+/// width, between the least and the most, and they share it evenly.
+const ROW_CARD_MIN: f32 = 168.0;
+const ROW_CARDS: std::ops::RangeInclusive<usize> = 2..=8;
+/// The same for a grid, which wraps instead of stopping.
+const GRID_CARD_MIN: f32 = 180.0;
+const GAP: f32 = 16.0;
 const PADDING: f32 = 12.0;
-const IMAGE: f32 = WIDTH - PADDING * 2.0;
 const TITLE_HEIGHT: f32 = 18.0;
 /// Two lines are reserved whether or not the subtitle fills them, so a row
 /// of cards keeps one baseline.
 const SUBTITLE_HEIGHT: f32 = 34.0;
-const HEIGHT: f32 = PADDING + IMAGE + 10.0 + TITLE_HEIGHT + 2.0 + SUBTITLE_HEIGHT + PADDING;
-const SHELF_GAP: f32 = 7.0;
+/// What a card has beside its square cover: the room around it, and its
+/// two captions.
+const BESIDE_COVER: f32 = PADDING + 12.0 + TITLE_HEIGHT + 2.0 + SUBTITLE_HEIGHT + PADDING;
 const PLAY_BUTTON: f32 = 44.0;
 /// How far below its place the play button starts as it fades in.
 const PLAY_RISE: f32 = 8.0;
 /// How far in from the cover's bottom right corner the play button's
 /// centre sits.
-const PLAY_INSET: f32 = 26.0;
+const PLAY_INSET: f32 = 30.0;
+
+/// How tall a card `width` wide is.
+fn height(width: f32) -> f32 {
+    width - PADDING * 2.0 + BESIDE_COVER
+}
 
 struct Card<'a> {
     art: &'a [Artwork],
@@ -46,9 +57,13 @@ struct CardResponse {
     play: bool,
 }
 
+/// A card as wide as the room it is given: a row or a grid hands each of
+/// its cards a place of the width they share.
 fn card(state: &State, ui: &mut Ui, card: Card<'_>) -> CardResponse {
     let palette = &state.palette;
-    let (rect, response) = ui.allocate_exact_size(vec2(WIDTH, HEIGHT), Sense::click());
+    let width = ui.available_width();
+    let side = width - PADDING * 2.0;
+    let (rect, response) = ui.allocate_exact_size(vec2(width, height(width)), Sense::click());
     widgets::name(ui, &response, card.title);
     if !ui.is_rect_visible(rect) {
         return CardResponse {
@@ -56,7 +71,7 @@ fn card(state: &State, ui: &mut Ui, card: Card<'_>) -> CardResponse {
             play: false,
         };
     }
-    let image = Rect::from_min_size(rect.min + vec2(PADDING, PADDING), vec2(IMAGE, IMAGE));
+    let image = Rect::from_min_size(rect.min + vec2(PADDING, PADDING), vec2(side, side));
     // The button sits over the card, so the card's own hover would flicker
     // off as the pointer reached it; the pointer being anywhere inside the
     // card is what counts.
@@ -67,28 +82,21 @@ fn card(state: &State, ui: &mut Ui, card: Card<'_>) -> CardResponse {
     let inside = ui.rect_contains_pointer(rect);
     let lift = widgets::hover_of(ui, response.id, inside);
     if lift > 0.0 {
-        ui.painter()
-            .rect_filled(rect, theme::RADIUS, widgets::wash(ui, lift));
+        let fill = palette.surface.gamma_multiply(lift);
+        ui.painter().rect_filled(rect, theme::RADIUS, fill);
     }
     widgets::artwork(ui, state, card.art, image, card.shape, card.placeholder);
 
-    let title_top = image.bottom() + 10.0;
-    let title = widgets::elided(
-        ui,
-        card.title,
-        theme::semibold(14.0),
-        palette.text,
-        IMAGE,
-        1,
-    );
+    let title_top = image.bottom() + 12.0;
+    let title = widgets::elided(ui, card.title, theme::semibold(14.0), palette.text, side, 1);
     ui.painter()
         .galley(pos2(image.left(), title_top), title, palette.text);
     let subtitle = widgets::elided(
         ui,
         &card.subtitle,
-        theme::regular(12.5),
+        theme::regular(12.0),
         palette.secondary,
-        IMAGE,
+        side,
         2,
     );
     ui.painter().galley(
@@ -129,22 +137,30 @@ fn card(state: &State, ui: &mut Ui, card: Card<'_>) -> CardResponse {
 }
 
 /// The menu on an album, a playlist or an artist.
-fn collection_menu(ui: &mut Ui, actions: &mut Vec<Action>, page: &Page, link: String) {
-    ui.set_min_width(200.0);
-    let mut chosen = None;
-    if ui.button("Play").clicked() {
-        chosen = Some(Action::PlayCollection(page.clone()));
+fn collection_menu(menu: &mut Menu<'_>, actions: &mut Vec<Action>, page: &Page, link: String) {
+    // What it is called is what the entry that opens it says, as the
+    // Electron app's did: "Open album", "Open show".
+    let (open, playable) = match page {
+        Page::Album(_) => ("Open album", true),
+        Page::Artist(_) => ("Open artist", true),
+        Page::Podcast(_) => ("Open show", false),
+        _ => ("Open playlist", true),
+    };
+    if playable && menu.entry(Entry::new("Play").named("Play this")) {
+        actions.push(Action::PlayCollection(page.clone()));
     }
-    if ui.button("Open").clicked() {
-        chosen = Some(Action::Open(page.clone()));
+    let icon = match page {
+        Page::Album(_) => Icon::Disc,
+        Page::Artist(_) => Icon::User,
+        Page::Podcast(_) => Icon::MicVocal,
+        _ => Icon::ListMusic,
+    };
+    if menu.entry(Entry::new(open).icon(icon)) {
+        actions.push(Action::Open(page.clone()));
     }
-    ui.separator();
-    if ui.button("Copy link").clicked() {
-        chosen = Some(Action::CopyLink(link));
-    }
-    if let Some(action) = chosen {
-        actions.push(action);
-        ui.close();
+    menu.separator();
+    if menu.item("Share") {
+        actions.push(Action::CopyLink(link));
     }
 }
 
@@ -159,9 +175,9 @@ fn collection_card(
     link: String,
 ) {
     let response = card(state, ui, card_spec);
-    response
-        .card
-        .context_menu(|ui| collection_menu(ui, actions, &page, link));
+    menu::context(&response.card, &state.palette, |menu| {
+        collection_menu(menu, actions, &page, link);
+    });
     if response.play {
         actions.push(Action::PlayCollection(page));
     } else if response.card.clicked() {
@@ -175,13 +191,18 @@ pub fn album(state: &State, ui: &mut Ui, actions: &mut Vec<Action>, album: &Albu
     } else {
         &album.kind
     };
+    // Whose it is; failing that when it is from, or what it is.
     let artists = join_names(&album.artists);
+    let subtitle = [artists.as_str(), &album.year, kind]
+        .into_iter()
+        .find(|text| !text.is_empty())
+        .unwrap_or_default();
     let spec = Card {
         art: &album.artwork,
-        shape: ArtShape::Rounded(theme::RADIUS_ROW),
+        shape: ArtShape::Rounded(4),
         placeholder: Icon::Music,
         title: &album.title,
-        subtitle: bulleted([album.year.as_str(), kind, &artists]),
+        subtitle: subtitle.to_owned(),
         playable: true,
     };
     let link = format!("https://music.youtube.com/browse/{}", album.id);
@@ -196,32 +217,41 @@ pub fn album(state: &State, ui: &mut Ui, actions: &mut Vec<Action>, album: &Albu
 }
 
 pub fn artist(state: &State, ui: &mut Ui, actions: &mut Vec<Action>, artist: &Artist) {
+    let who = (artist.id.as_str(), artist.name.as_str());
+    let second = or(&artist.subscribers, "Artist");
+    artist_as(state, ui, actions, who, &artist.artwork, second);
+}
+
+/// An artist's card from what is known of them, for a caller with less
+/// than a whole artist: their channel and name, a picture, and a second
+/// line of its choosing.
+pub fn artist_as(
+    state: &State,
+    ui: &mut Ui,
+    actions: &mut Vec<Action>,
+    (id, name): (&str, &str),
+    art: &[Artwork],
+    subtitle: String,
+) {
     let spec = Card {
-        art: &artist.artwork,
+        art,
         shape: ArtShape::Circle,
         placeholder: Icon::User,
-        title: &artist.name,
-        subtitle: "Artist".to_owned(),
+        title: name,
+        subtitle,
         playable: true,
     };
-    let link = format!("https://music.youtube.com/channel/{}", artist.id);
-    collection_card(
-        state,
-        ui,
-        actions,
-        spec,
-        Page::Artist(artist.id.clone()),
-        link,
-    );
+    let link = format!("https://music.youtube.com/channel/{id}");
+    collection_card(state, ui, actions, spec, Page::Artist(id.to_owned()), link);
 }
 
 pub fn playlist(state: &State, ui: &mut Ui, actions: &mut Vec<Action>, playlist: &Playlist) {
     let spec = Card {
         art: &playlist.artwork,
-        shape: ArtShape::Rounded(theme::RADIUS_ROW),
+        shape: ArtShape::Rounded(4),
         placeholder: Icon::ListMusic,
         title: &playlist.title,
-        subtitle: bulleted(["Playlist", &playlist.owner]),
+        subtitle: or(&playlist.description, "Playlist"),
         playable: true,
     };
     let link = format!("https://music.youtube.com/playlist?list={}", playlist.id);
@@ -233,7 +263,7 @@ pub fn mix(state: &State, ui: &mut Ui, actions: &mut Vec<Action>, mix: &Mix) {
     let cover = mix.tracks.first().map_or(&[][..], |track| &track.artwork);
     let spec = Card {
         art: cover,
-        shape: ArtShape::Rounded(theme::RADIUS_ROW),
+        shape: ArtShape::Rounded(4),
         placeholder: Icon::ListMusic,
         title: &mix.title,
         subtitle: mix.description.clone(),
@@ -251,10 +281,10 @@ pub fn mix(state: &State, ui: &mut Ui, actions: &mut Vec<Action>, mix: &Mix) {
 pub fn podcast(state: &State, ui: &mut Ui, actions: &mut Vec<Action>, podcast: &Podcast) {
     let spec = Card {
         art: &podcast.artwork,
-        shape: ArtShape::Rounded(theme::RADIUS_ROW),
+        shape: ArtShape::Rounded(4),
         placeholder: Icon::MicVocal,
         title: &podcast.title,
-        subtitle: bulleted(["Podcast", &podcast.author]),
+        subtitle: or(&podcast.author, "Podcast"),
         playable: true,
     };
     let link = format!("https://music.youtube.com/playlist?list={}", podcast.id);
@@ -262,34 +292,39 @@ pub fn podcast(state: &State, ui: &mut Ui, actions: &mut Vec<Action>, podcast: &
     collection_card(state, ui, actions, spec, page, link);
 }
 
-/// A song shown as a card. Clicking it plays it; the core carries on with
-/// similar songs when it ends.
+/// A song shown as a card. It has no page to open, so the whole card is
+/// the play control: a song picked from a shelf starts its radio, as
+/// YouTube Music does. An episode is played by itself.
 pub fn track(state: &State, ui: &mut Ui, actions: &mut Vec<Action>, track: &Track) {
-    playable_card(state, ui, actions, track, "Song");
+    song(state, ui, actions, track, true);
 }
 
-/// A song or an episode: something a click plays. `kind` says which.
-fn playable_card(state: &State, ui: &mut Ui, actions: &mut Vec<Action>, track: &Track, kind: &str) {
+fn song(state: &State, ui: &mut Ui, actions: &mut Vec<Action>, track: &Track, radio: bool) {
     let response = card(
         state,
         ui,
         Card {
             art: &track.artwork,
-            shape: ArtShape::Rounded(theme::RADIUS_ROW),
+            shape: ArtShape::Rounded(4),
             placeholder: Icon::Music,
             title: &track.title,
-            subtitle: bulleted([kind, &track.artist_names()]),
+            // Who it is by, and nothing more.
+            subtitle: track.artist_names(),
             playable: track.playable,
         },
     );
-    response
-        .card
-        .context_menu(|ui| menus::tracks(state, ui, actions, &[track], None));
+    menu::context(&response.card, &state.palette, |menu| {
+        menus::tracks(state, menu, actions, &[track], None);
+    });
     if (response.play || response.card.clicked()) && track.playable {
-        actions.push(Action::Play {
-            tracks: vec![track.clone()],
-            index: 0,
-            origin: track.title.clone(),
+        actions.push(if radio {
+            Action::StartRadio(track.clone())
+        } else {
+            Action::Play {
+                tracks: vec![track.clone()],
+                index: 0,
+                origin: track.title.clone(),
+            }
         });
     }
 }
@@ -301,68 +336,176 @@ pub fn item(state: &State, ui: &mut Ui, actions: &mut Vec<Action>, item: &Item) 
         Item::Artist(value) => artist(state, ui, actions, value),
         Item::Playlist(value) => playlist(state, ui, actions, value),
         Item::Podcast(value) => podcast(state, ui, actions, value),
-        Item::Episode(value) => playable_card(state, ui, actions, value, "Episode"),
+        Item::Episode(value) => song(state, ui, actions, value, false),
     }
 }
 
+/// `text`, or `otherwise` when there is none.
+fn or(text: &str, otherwise: &str) -> String {
+    if text.is_empty() { otherwise } else { text }.to_owned()
+}
+
+/// The room above a section's title, and between it and what it heads.
+const TITLE_ABOVE: f32 = 32.0;
+const TITLE_BELOW: f32 = 12.0;
+
 pub fn section_title(ui: &mut Ui, title: &str) {
-    ui.add_space(18.0);
-    ui.label(egui::RichText::new(title).font(theme::bold(17.0)));
-    ui.add_space(4.0);
+    ui.add_space(TITLE_ABOVE);
+    title_text(ui, title);
+    ui.add_space(TITLE_BELOW);
+}
+
+/// A section's title: large, and set a little tight.
+fn title_text(ui: &mut Ui, title: &str) {
+    let color = ui.visuals().text_color();
+    let room = (ui.available_width(), 1);
+    let galley = widgets::tracked(ui, title, theme::bold(24.0), color, -0.48, room);
+    let (rect, _) = ui.allocate_exact_size(galley.size(), Sense::hover());
+    ui.painter().galley(rect.min, galley, color);
 }
 
 /// A section's title, with a way to the whole of it when the section
-/// shows only a part.
+/// shows only a part. `link` is what that way is called.
 pub fn linked_title(
     state: &State,
     ui: &mut Ui,
     actions: &mut Vec<Action>,
-    title: &str,
+    (title, link): (&str, &str),
     whole: Option<Page>,
 ) {
-    ui.add_space(18.0);
-    ui.horizontal(|ui| {
-        ui.label(egui::RichText::new(title).font(theme::bold(17.0)));
-        let Some(whole) = whole else {
-            return;
-        };
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            let text = egui::RichText::new("Show all")
-                .font(theme::semibold(12.5))
-                .color(state.palette.secondary);
-            let link = ui.add(egui::Label::new(text).sense(Sense::click()));
-            if link.hovered() {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-            }
-            if link.clicked() {
-                actions.push(Action::Open(whole));
-            }
-        });
-    });
-    ui.add_space(4.0);
+    let link = whole.is_some().then_some(link);
+    if let (true, Some(whole)) = (title_with(state, ui, title, link), whole) {
+        actions.push(Action::Open(whole));
+    }
 }
 
-/// A titled row of cards that scrolls sideways. `id` tells one shelf's
-/// scroll position from another's; `cards` draws them.
-pub fn shelf(
+/// A section's title, with something to click at the right of its line
+/// when `link` names it. Returns whether that was clicked.
+pub fn title_with(state: &State, ui: &mut Ui, title: &str, link: Option<&str>) -> bool {
+    let palette = &state.palette;
+    ui.add_space(TITLE_ABOVE);
+    let line = ui.available_rect_before_wrap();
+    title_text(ui, title);
+    let mut clicked = false;
+    if let Some(link) = link {
+        // At the right, sitting on the title's line.
+        let font = theme::bold(12.0);
+        let text = widgets::tracked(ui, link, font, palette.secondary, 0.5, (f32::MAX, 1));
+        let size = text.size();
+        let bottom = ui.min_rect().bottom() - 5.0;
+        let rect = Rect::from_min_size(pos2(line.right() - size.x, bottom - size.y), size);
+        let response = ui.interact(rect, ui.id().with(("whole", title)), Sense::click());
+        widgets::name(ui, &response, link);
+        let lift = widgets::hover(ui, &response);
+        let color = crate::tint::blend(palette.secondary, palette.text, lift);
+        ui.painter().galley(rect.min, text, color);
+        if lift > 0.0 {
+            ui.painter().hline(
+                rect.x_range(),
+                rect.bottom(),
+                (1.0, color.gamma_multiply(lift)),
+            );
+        }
+        clicked = response.clicked();
+    }
+    ui.add_space(TITLE_BELOW);
+    clicked
+}
+
+/// A section's title with a note at the right of its line: small capitals
+/// that say something of the section and lead nowhere.
+pub fn noted_title(state: &State, ui: &mut Ui, title: &str, note: &str) {
+    let palette = &state.palette;
+    ui.add_space(TITLE_ABOVE);
+    let line = ui.available_rect_before_wrap();
+    title_text(ui, title);
+    let font = theme::bold(12.0);
+    let text = widgets::tracked(ui, note, font, palette.secondary, 0.5, (f32::MAX, 1));
+    let bottom = ui.min_rect().bottom() - 5.0;
+    let at = pos2(line.right() - text.size().x, bottom - text.size().y);
+    ui.painter().galley(at, text, palette.secondary);
+    ui.add_space(TITLE_BELOW);
+}
+
+/// How many cards a line `room` wide holds when none may be narrower than
+/// `least`, and how wide each then is: they fill the line exactly.
+fn fitting(room: f32, least: f32) -> (usize, f32) {
+    let count = ((room + GAP) / (least + GAP)).floor().max(1.0);
+    (
+        count as usize,
+        ((room - GAP * (count - 1.0)) / count).floor(),
+    )
+}
+
+/// A row of cards: as many as fit, never part of one, filling the row
+/// from edge to edge. What does not fit is behind the section's "Show
+/// all". `card` draws the one at an index.
+pub fn row(ui: &mut Ui, count: usize, mut card: impl FnMut(&mut Ui, usize)) {
+    let room = ui.available_width();
+    let fits = fitting(room, ROW_CARD_MIN)
+        .0
+        .clamp(*ROW_CARDS.start(), *ROW_CARDS.end());
+    let width = ((room - GAP * (fits as f32 - 1.0)) / fits as f32).floor();
+    let (area, _) = ui.allocate_exact_size(vec2(room, height(width)), Sense::hover());
+    if !ui.is_rect_visible(area) {
+        return;
+    }
+    for index in 0..count.min(fits) {
+        let left = area.left() + index as f32 * (width + GAP);
+        place(ui, pos2(left, area.top()), width, index, &mut card);
+    }
+}
+
+/// Every card, wrapping to as many lines as it takes: the page behind a
+/// "Show all", and one kind of search result.
+pub fn grid(ui: &mut Ui, count: usize, mut card: impl FnMut(&mut Ui, usize)) {
+    let room = ui.available_width();
+    let (columns, width) = fitting(room, GRID_CARD_MIN);
+    let line = height(width) + GAP;
+    let lines = count.div_ceil(columns);
+    let size = vec2(room, (lines as f32 * line - GAP).max(0.0));
+    let (area, _) = ui.allocate_exact_size(size, Sense::hover());
+    // Only the lines in sight are drawn.
+    let visible = ui.clip_rect();
+    let first = ((visible.top() - area.top()) / line).floor().max(0.0) as usize;
+    let last = ((visible.bottom() - area.top()) / line).ceil().max(0.0) as usize;
+    for index in (first * columns)..count.min(last * columns) {
+        let at = pos2(
+            area.left() + (index % columns) as f32 * (width + GAP),
+            area.top() + (index / columns) as f32 * line,
+        );
+        place(ui, at, width, index, &mut card);
+    }
+}
+
+/// Draws the card at `index` in a place of its own, `width` wide.
+fn place(
     ui: &mut Ui,
-    title: &str,
-    id: impl std::hash::Hash + std::fmt::Debug,
-    cards: impl FnOnce(&mut Ui),
+    at: egui::Pos2,
+    width: f32,
+    index: usize,
+    card: &mut impl FnMut(&mut Ui, usize),
 ) {
-    section_title(ui, title);
-    row(ui, id, cards);
+    let rect = Rect::from_min_size(at, vec2(width, height(width)));
+    let mut cell = ui.new_child(
+        egui::UiBuilder::new()
+            .id_salt(("card", index))
+            .max_rect(rect),
+    );
+    card(&mut cell, index);
 }
 
-/// A row of cards that scrolls sideways.
-pub fn row(ui: &mut Ui, id: impl std::hash::Hash + std::fmt::Debug, cards: impl FnOnce(&mut Ui)) {
-    egui::ScrollArea::horizontal()
-        .id_salt(("shelf", id))
-        .auto_shrink([false, true])
-        .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = SHELF_GAP;
-                cards(ui);
-            });
-        });
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_row_of_cards_fills_its_line_exactly() {
+        // The page at the window's usual size: four cards and three gaps.
+        let (count, width) = fitting(876.0, ROW_CARD_MIN);
+        assert_eq!((count, width), (4, 207.0));
+        assert_eq!(count as f32 * width + 3.0 * GAP, 876.0);
+        // Too narrow for one at its least width: one, as wide as there is.
+        assert_eq!(fitting(120.0, ROW_CARD_MIN), (1, 120.0));
+    }
 }

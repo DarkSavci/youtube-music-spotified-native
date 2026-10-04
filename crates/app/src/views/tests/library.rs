@@ -3,7 +3,7 @@
 use super::*;
 
 #[test]
-fn the_sidebar_leads_to_search() {
+fn the_magnifier_leads_to_search() {
     let mut harness = harness(state());
     harness.get_by_label("Search").click();
     harness.run();
@@ -16,13 +16,13 @@ fn the_sidebar_leads_to_search() {
 #[test]
 fn the_plus_in_the_sidebar_asks_for_a_new_playlist() {
     let mut harness = harness(state());
-    harness.get_by_label("Create a playlist or folder").click();
+    harness.get_by_label("Create playlist or folder").click();
     harness.run();
-    harness.get_by_label("New playlist").click();
+    harness.get_by_label("Create a playlist").click();
     harness.run();
     assert!(asked(&harness, |action| matches!(
         action,
-        Action::NewPlaylist { track_ids } if track_ids.is_empty()
+        Action::NewPlaylist { name, track_ids } if name == "My playlist" && track_ids.is_empty()
     )));
 }
 
@@ -69,7 +69,7 @@ fn a_library_item_can_be_pinned_from_its_menu() {
     let mut harness = harness(with_library());
     harness.get_by_label("Road trip").click_secondary();
     harness.run();
-    harness.get_by_label("Pin").click();
+    harness.get_by_label("Pin to top").click();
     harness.run();
     assert!(asked(&harness, |action| matches!(
         action,
@@ -91,9 +91,9 @@ fn a_folder_opens_with_a_click() {
 #[test]
 fn the_plus_in_the_sidebar_also_makes_folders() {
     let mut harness = harness(state());
-    harness.get_by_label("Create a playlist or folder").click();
+    harness.get_by_label("Create playlist or folder").click();
     harness.run();
-    harness.get_by_label("New folder").click();
+    harness.get_by_label("Create a folder").click();
     harness.run();
     assert!(asked(&harness, |action| matches!(
         action,

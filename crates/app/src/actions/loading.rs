@@ -3,7 +3,7 @@
 use spotified_client::models::Track;
 use spotified_client::session::Command;
 
-use super::Effect;
+use super::{Effect, listening, paging, songs, together};
 use crate::backend::{Request, Response};
 use crate::state::{Loadable, Page, State, Surface};
 
@@ -22,15 +22,23 @@ fn load_page(state: &mut State, page: Page) -> Vec<Effect> {
     let request = match page {
         Page::Home if state.home.needs_fetch() => {
             state.home = Loadable::Loading;
-            Request::Home
+            Request::Home(state.home_mood.clone())
         }
         Page::Album(id) if state.albums.get(&id).needs_fetch() => {
             state.albums.insert(id.clone(), Loadable::Loading);
             Request::Album(id)
         }
-        Page::Artist(id) if state.artists.get(&id).needs_fetch() => {
-            state.artists.insert(id.clone(), Loadable::Loading);
-            Request::Artist(id)
+        // The listener's own history with the artist is read on every
+        // visit: it changes as their music plays.
+        Page::Artist(id) => {
+            let mut effects = vec![Effect::Fetch(Request::Affinity(id.clone()))];
+            effects.extend(load_artist(state, id));
+            return effects;
+        }
+        Page::ArtistSongs(id) => {
+            let mut effects = load_artist(state, id.clone());
+            effects.extend(songs::opened(state, &id));
+            return effects;
         }
         Page::Playlist(id) if state.playlists.get(&id).needs_fetch() => {
             state.playlists.insert(id.clone(), Loadable::Loading);
@@ -43,10 +51,6 @@ fn load_page(state: &mut State, page: Page) -> Vec<Effect> {
         // Already here: mark it used, so it outlives pages opened earlier.
         Page::Album(id) => {
             state.albums.touch(&id);
-            return Vec::new();
-        }
-        Page::Artist(id) => {
-            state.artists.touch(&id);
             return Vec::new();
         }
         Page::Playlist(id) => {
@@ -67,14 +71,7 @@ fn load_page(state: &mut State, page: Page) -> Vec<Effect> {
         Page::Browse(surface) => return load_surface(state, &surface),
         // Opening the notes is reading them: the mark that says there are
         // new ones goes.
-        Page::Changelog => {
-            let latest = crate::changelog::latest();
-            if state.settings.release_notes_read == latest {
-                return Vec::new();
-            }
-            state.settings.release_notes_read = latest.to_owned();
-            return vec![Effect::SaveSettings];
-        }
+        Page::Changelog => return listening::mark_notes_read(state),
         // Asked afresh on every visit: it changes as music plays.
         Page::History => {
             if !matches!(state.history, Loadable::Loaded(_)) {
@@ -92,6 +89,17 @@ fn load_page(state: &mut State, page: Page) -> Vec<Effect> {
     vec![Effect::Fetch(request)]
 }
 
+/// Asks for an artist's page unless it is here or on its way.
+fn load_artist(state: &mut State, id: String) -> Vec<Effect> {
+    if !state.artists.get(&id).needs_fetch() {
+        // Already here: mark it used, so it outlives pages opened earlier.
+        state.artists.touch(&id);
+        return Vec::new();
+    }
+    state.artists.insert(id.clone(), Loadable::Loading);
+    vec![Effect::Fetch(Request::Artist(id))]
+}
+
 fn load_surface(state: &mut State, surface: &Surface) -> Vec<Effect> {
     let key = surface.key();
     if !state.surfaces.get(&key).needs_fetch() {
@@ -106,7 +114,7 @@ fn load_surface(state: &mut State, surface: &Surface) -> Vec<Effect> {
 /// lately, and the moods and genres to browse.
 fn load_search_start(state: &mut State) -> Vec<Effect> {
     let mut effects = load_surface(state, &Surface::moods());
-    effects.push(Effect::Fetch(Request::RecentSearches));
+    effects.push(Effect::Fetch(Request::SearchHistory));
     effects
 }
 
@@ -143,6 +151,7 @@ fn collection(state: &State, page: &Page) -> Option<(Vec<Track>, String)> {
         | Page::Browse(_)
         | Page::History
         | Page::Changelog
+        | Page::ArtistSongs(_)
         | Page::Together => return None,
     };
     tracks
@@ -163,11 +172,35 @@ fn play_command(tracks: Vec<Track>, origin: String) -> Effect {
 /// Plays a collection from its first playable song. If its songs are not
 /// here yet they are fetched, and it plays when they arrive.
 pub(super) fn play_collection(state: &mut State, page: Page) -> Vec<Effect> {
+    // An artist is every song of theirs, not the few their page shows.
+    if let Page::Artist(id) = page {
+        return paging::play_artist(state, id, false);
+    }
+    if let Some(effects) = play_whole_playlist(state, &page) {
+        return effects;
+    }
     if let Some((tracks, origin)) = collection(state, &page) {
         return vec![play_command(tracks, origin)];
     }
     state.pending_play = Some(page.clone());
     load_page(state, page)
+}
+
+/// A playlist with songs still to be read is read to its end, then
+/// played. `None` for anything else, which is played as it stands.
+fn play_whole_playlist(state: &mut State, page: &Page) -> Option<Vec<Effect>> {
+    let Page::Playlist(id) = page else {
+        return None;
+    };
+    if !state.playlist_tails.contains_key(id) {
+        return None;
+    }
+    let Loadable::Loaded(playlist) = state.playlists.get(id) else {
+        return None;
+    };
+    let first = playlist.tracks.iter().position(|track| track.playable)?;
+    let then = crate::state::Whole::Play(first);
+    Some(paging::whole_playlist(state, id.clone(), then))
 }
 
 /// Plays what was waiting on a fetch, if that fetch has now ended: with
@@ -189,12 +222,16 @@ fn play_pending(state: &mut State) -> Vec<Effect> {
         | Page::Browse(_)
         | Page::History
         | Page::Changelog
+        | Page::ArtistSongs(_)
         | Page::Together => false,
     };
     if still_loading {
         return Vec::new();
     }
     state.pending_play = None;
+    if let Some(effects) = play_whole_playlist(state, &page) {
+        return effects;
+    }
     match collection(state, &page) {
         Some((tracks, origin)) => vec![play_command(tracks, origin)],
         None => {
@@ -202,6 +239,19 @@ fn play_pending(state: &mut State) -> Vec<Effect> {
             Vec::new()
         }
     }
+}
+
+/// Reads Home again through a mood chip, or plainly when the chip chosen
+/// is the one already on.
+pub(super) fn choose_mood(state: &mut State, params: String) -> Vec<Effect> {
+    state.home_mood = if params == state.home_mood {
+        String::new()
+    } else {
+        params
+    };
+    state.home = Loadable::NotLoaded;
+    paging::home_arrived(state, None);
+    load_page(state, Page::Home)
 }
 
 pub(super) fn run_search(state: &mut State) -> Vec<Effect> {
@@ -224,6 +274,7 @@ pub(super) fn run_new_search(state: &mut State) -> Vec<Effect> {
     let mut effects = run_search(state);
     if !effects.is_empty() {
         let query = state.search.query.trim().to_owned();
+        effects.extend(listening::remember_search(state, &query));
         effects.push(Effect::Fetch(Request::Suggest(query)));
     }
     effects
@@ -232,11 +283,43 @@ pub(super) fn run_new_search(state: &mut State) -> Vec<Effect> {
 /// Puts an answer where it belongs. Some answers call for more: a playlist
 /// that was created or deleted changes the library, which is fetched again.
 pub(super) fn store(state: &mut State, response: Response) -> Vec<Effect> {
+    // Each topic takes the answers it asked for.
+    let mut effects = match response {
+        Response::HomeMore(..)
+        | Response::Playlist(..)
+        | Response::PlaylistMore { .. }
+        | Response::PlaylistRest { .. }
+        | Response::ArtistQueue { .. }
+        | Response::Affinity(..)
+        | Response::RemoteQueue(_) => paging::answered(state, response),
+        Response::StatsLookup(..)
+        | Response::StatDetail(..)
+        | Response::ArtistPhoto(..)
+        | Response::SearchHistory(_)
+        | Response::SearchesForgotten { .. } => listening::answered(state, response),
+        Response::SongsPage { .. } | Response::Discography { .. } | Response::Release { .. } => {
+            songs::answered(state, response)
+        }
+        Response::RoomSearch { .. } | Response::Radio(..) => {
+            return together::answered(state, response);
+        }
+        other => return store_rest(state, other),
+    };
+    effects.extend(play_pending(state));
+    effects
+}
+
+/// The answers that are not a topic's own.
+fn store_rest(state: &mut State, response: Response) -> Vec<Effect> {
     match response {
         Response::PlaylistCreated { title, result } => {
             return match result {
                 Ok(_) => {
-                    state.toast(format!("Created {title}"));
+                    let from_room = state.together.saving_history.take_if(|name| *name == title);
+                    match from_room {
+                        Some(_) => state.toast("Room history saved to your library."),
+                        None => state.toast(format!("Created {title}")),
+                    }
                     vec![Effect::Fetch(Request::Library)]
                 }
                 Err(error) => {
@@ -305,9 +388,23 @@ pub(super) fn store(state: &mut State, response: Response) -> Vec<Effect> {
         // Only a signed-in account has channels to ask after.
         Response::Account(result) => {
             state.account = result.ok().flatten();
-            return match state.account {
-                Some(_) => vec![Effect::Fetch(Request::Channels)],
-                None => Vec::new(),
+            return match &state.account {
+                Some(account) => {
+                    // The list of saved accounts learns what this one is
+                    // called, to tell it from the others.
+                    let remember = Effect::RememberAccount {
+                        name: account.name.clone(),
+                        avatar_url: account.avatar_url.clone(),
+                    };
+                    let mut effects = vec![Effect::Fetch(Request::Channels), remember];
+                    effects.extend(paging::pick_up_at_launch(state));
+                    effects
+                }
+                None => {
+                    // A signed-out launch never asks.
+                    state.launch_pickup = crate::state::LaunchPickup::Done;
+                    Vec::new()
+                }
             };
         }
         // What the library shows was changed ahead of this answer. Either
@@ -321,15 +418,42 @@ pub(super) fn store(state: &mut State, response: Response) -> Vec<Effect> {
                 Effect::Fetch(Request::Library),
             ];
         }
+        Response::Channels(result) => {
+            let answered = result.is_ok();
+            state.channels = result.unwrap_or_default();
+            // An answer that failed says nothing about which there are;
+            // one that came is noted for the list of saved accounts.
+            if answered {
+                return vec![Effect::RememberChannels(state.channels.clone())];
+            }
+        }
         other => store_data(state, other),
     }
-    play_pending(state)
+    let mut effects = play_pending(state);
+    // The artist whose songs page is open may just have arrived.
+    effects.extend(songs::advance(state));
+    effects
 }
 
 /// The answers that are simply data to hold.
 fn store_data(state: &mut State, response: Response) {
     match response {
-        Response::Home(result) => state.home = Loadable::from_result(result),
+        Response::Home(mood, result) => {
+            // An answer for a mood that is no longer the one chosen.
+            if mood != state.home_mood {
+                return;
+            }
+            // The row of moods outlives a page that fails, so the others
+            // can still be chosen.
+            if let Ok(page) = &result
+                && !page.chips.is_empty()
+            {
+                state.home_chips.clone_from(&page.chips);
+            }
+            let continuation = result.as_ref().ok().map(|page| page.continuation.as_str());
+            paging::home_arrived(state, continuation);
+            state.home = Loadable::from_result(result);
+        }
         Response::Library(result) => state.library = Loadable::from_result(result),
         Response::Browse(id, params, result) => {
             state
@@ -346,11 +470,8 @@ fn store_data(state: &mut State, response: Response) {
                 state.search.suggestions = result.unwrap_or_default();
             }
         }
-        // Signed out there are none, and none is what is shown.
-        Response::RecentSearches(result) => state.search.recent = result.unwrap_or_default(),
-        Response::Channels(result) => state.channels = result.unwrap_or_default(),
         // Handled by `store`, which is the only caller.
-        Response::Account(_) => {}
+        Response::Account(_) | Response::Channels(_) => {}
         Response::CacheUsage(result) => state.cache_usage = result.ok(),
         Response::CacheCleared(result) => match result {
             Ok(usage) => {
@@ -372,9 +493,6 @@ fn store_data(state: &mut State, response: Response) {
             let artist = result.map(|artist| *artist);
             state.artists.insert(id, Loadable::from_result(artist));
         }
-        Response::Playlist(id, result) => {
-            state.playlists.insert(id, Loadable::from_result(result));
-        }
         Response::Podcast(id, result) => {
             state.podcasts.insert(id, Loadable::from_result(result));
         }
@@ -390,6 +508,9 @@ fn store_data(state: &mut State, response: Response) {
         Response::Stats(days, result) => {
             // An answer for a period that is no longer the one chosen.
             if days == state.stats_days {
+                if let Ok(stats) = &result {
+                    state.stats_page.arrived(stats);
+                }
                 state.stats = Loadable::from_result(result);
             }
         }
@@ -431,9 +552,26 @@ fn store_data(state: &mut State, response: Response) {
             }
         },
         // Handled by `store`, which is the only caller.
-        Response::PlaylistCreated { .. }
+        Response::HomeMore(..)
+        | Response::Playlist(..)
+        | Response::PlaylistMore { .. }
+        | Response::PlaylistRest { .. }
+        | Response::Affinity(..)
+        | Response::ArtistQueue { .. }
+        | Response::SongsPage { .. }
+        | Response::Discography { .. }
+        | Response::Release { .. }
+        | Response::ArtistPhoto(..)
+        | Response::SearchHistory(_)
+        | Response::SearchesForgotten { .. }
+        | Response::RemoteQueue(_)
+        | Response::StatsLookup(..)
+        | Response::StatDetail(..)
+        | Response::PlaylistCreated { .. }
         | Response::PlaylistDeleted { .. }
         | Response::RemovedFromPlaylist { .. }
+        | Response::RoomSearch { .. }
+        | Response::Radio(..)
         | Response::FollowingSet { .. } => {}
         Response::Search { serial, result } => {
             // An answer to a query that has since been replaced, or cleared.

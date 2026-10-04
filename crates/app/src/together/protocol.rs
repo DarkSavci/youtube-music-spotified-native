@@ -5,7 +5,7 @@
 //! back after every change. Unknown fields are ignored, so a newer relay
 //! does not break an older app.
 
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Value, json};
 use spotified_client::models::{ArtistRef, Artwork, Track};
 
@@ -15,7 +15,7 @@ pub const VERSION: u64 = 2;
 pub const MOST_TRACKS: usize = 100;
 
 /// Who may steer a room.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Mode {
     /// Everyone can play, pause, skip and shape the queue.
@@ -40,7 +40,7 @@ impl Mode {
 
     pub fn title(self) -> &'static str {
         match self {
-            Mode::Collaborative => "Everyone's the DJ",
+            Mode::Collaborative => "Everyone’s the DJ",
             Mode::Contributions => "Take requests",
             Mode::Listen => "Just listen",
         }
@@ -78,6 +78,35 @@ pub struct Room {
     pub expires: f64,
     /// The queue has run out.
     pub finished: bool,
+    /// Songs that have played, oldest first.
+    pub history: Vec<Entry>,
+    /// What has happened in the room lately, oldest first.
+    pub activity: Vec<Happening>,
+    pub repeat: Repeat,
+    pub policy: Policy,
+    /// Whether a song may wait in the queue twice.
+    pub duplicates: bool,
+    /// How many songs a guest may have waiting.
+    pub limit: u32,
+    /// No one new may join.
+    pub locked: bool,
+    /// Listeners may vote the song away.
+    pub vote_skip: bool,
+    /// The members who have voted to skip this song.
+    pub votes: Vec<String>,
+    /// The leader lets each new listener in.
+    pub join_approval: bool,
+    /// Those waiting to be let in.
+    pub pending: Vec<Knock>,
+    /// A ready check, or the count to a shared start after one.
+    pub countdown: Option<Countdown>,
+    /// Songs guests asked for, waiting for the leader or a DJ.
+    pub requests: Vec<SongRequest>,
+    /// Requests go straight into the queue.
+    pub auto_accept: bool,
+    /// The last edit of the queue, while it can still be taken back.
+    pub undo: Option<Undo>,
+    pub last_controlled_by: Option<Person>,
 }
 
 impl Room {
@@ -121,6 +150,19 @@ impl Room {
                 .any(|other| other.id == member && other.role == "dj")
     }
 
+    pub fn member(&self, id: &str) -> Option<&Member> {
+        self.members.iter().find(|member| member.id == id)
+    }
+
+    /// What the room is called: its name, or whose it is.
+    pub fn title(&self) -> String {
+        if !self.name.is_empty() {
+            return self.name.clone();
+        }
+        let leader = self.leader().map_or("Your friends", |leader| &leader.name);
+        format!("{leader}’s room")
+    }
+
     /// The room's queue as tracks, for the player to mirror.
     pub fn tracks(&self) -> Vec<Track> {
         self.queue
@@ -130,11 +172,91 @@ impl Room {
     }
 }
 
+/// How a room's queue repeats.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Repeat {
+    #[default]
+    Off,
+    One,
+    All,
+}
+
+impl Repeat {
+    pub fn wire(self) -> &'static str {
+        match self {
+            Repeat::Off => "off",
+            Repeat::One => "one",
+            Repeat::All => "all",
+        }
+    }
+
+    /// The mode after this one, as the player's button steps: off, all, one.
+    pub fn next(self) -> Repeat {
+        match self {
+            Repeat::Off => Repeat::All,
+            Repeat::All => Repeat::One,
+            Repeat::One => Repeat::Off,
+        }
+    }
+}
+
+/// The order additions take in the queue.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Policy {
+    /// As they came.
+    #[default]
+    Fifo,
+    /// One from each person in turn.
+    Turns,
+}
+
+impl Policy {
+    pub const EVERY: [Policy; 2] = [Policy::Fifo, Policy::Turns];
+
+    pub fn wire(self) -> &'static str {
+        match self {
+            Policy::Fifo => "fifo",
+            Policy::Turns => "turns",
+        }
+    }
+
+    pub fn title(self) -> &'static str {
+        match self {
+            Policy::Fifo => "First in, first out",
+            Policy::Turns => "Take turns",
+        }
+    }
+}
+
+/// A picture's address as the relay passes it on, as the artwork it is
+/// drawn from; nothing for someone who shares none.
+fn picture<'de, D: Deserializer<'de>>(from: D) -> Result<Vec<Artwork>, D::Error> {
+    let url = Option::<String>::deserialize(from)?.unwrap_or_default();
+    Ok(picture_of(&url))
+}
+
+pub fn picture_of(url: &str) -> Vec<Artwork> {
+    if url.is_empty() {
+        return Vec::new();
+    }
+    vec![Artwork {
+        url: url.to_owned(),
+        width: 96,
+        height: 96,
+    }]
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 #[serde(default)]
 pub struct Member {
     pub id: String,
     pub name: String,
+    #[serde(deserialize_with = "picture")]
+    pub avatar: Vec<Artwork>,
+    /// Has answered the ready check that is on.
+    pub ready: bool,
     pub connected: bool,
     /// What their player is doing: `listening`, `paused`, `buffering`…
     pub status: String,
@@ -147,13 +269,71 @@ pub struct Member {
 pub struct Entry {
     pub id: String,
     pub track: RoomTrack,
-    pub added_by: AddedBy,
+    pub added_by: Person,
+    /// When it was added, on the relay's clock.
+    pub added_at: f64,
+    /// Added by the room's radio, not chosen by anyone.
+    pub radio: bool,
+    /// The request this came in as, if it was asked for.
+    pub request: Option<String>,
 }
 
+/// Someone in the room, as the relay names them beside what they did.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 #[serde(default)]
-pub struct AddedBy {
+pub struct Person {
+    pub id: String,
     pub name: String,
+    #[serde(deserialize_with = "picture")]
+    pub avatar: Vec<Artwork>,
+}
+
+/// A line of the room's activity.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[serde(default)]
+pub struct Happening {
+    pub id: String,
+    pub text: String,
+    /// When, on the relay's clock.
+    pub at: f64,
+}
+
+/// Someone waiting for the leader to let them in.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub struct Knock {
+    pub id: String,
+    pub name: String,
+    #[serde(deserialize_with = "picture")]
+    pub avatar: Vec<Artwork>,
+}
+
+/// A ready check. Once everyone has answered, or the leader says so, it
+/// has a moment at which the room starts.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Countdown {
+    pub expires: f64,
+    pub start_at: Option<f64>,
+}
+
+/// A song a guest asked for.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[serde(default)]
+pub struct SongRequest {
+    pub id: String,
+    pub track: RoomTrack,
+    pub by: Person,
+}
+
+/// An edit of the queue that can be taken back: by whom, until when, and
+/// only while the room is still at the revision the edit left it at.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[serde(default)]
+pub struct Undo {
+    pub revision: u64,
+    pub expires: f64,
+    pub by: String,
 }
 
 /// A song as the relay passes it on: only what it lets through.
@@ -174,6 +354,16 @@ pub struct RoomArtist {
 }
 
 impl RoomTrack {
+    /// Whose song it is, as a row writes it.
+    pub fn artist_names(&self) -> String {
+        let names: Vec<&str> = self
+            .artists
+            .iter()
+            .map(|artist| artist.name.as_str())
+            .collect();
+        names.join(", ")
+    }
+
     pub fn to_track(&self) -> Track {
         Track {
             id: self.id.clone(),
@@ -283,87 +473,4 @@ pub fn checked_address(input: &str) -> Result<String, &'static str> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_state_is_read_with_its_queue_and_ignores_what_it_does_not_know() {
-        let text = r#"{"type":"state","room":{
-            "name":"Friday","id":"r","pin":"01234567","owner":"m1","mode":"listen",
-            "members":[{"id":"m1","name":"Ada","connected":true,"status":"listening","role":"listener","statusEntry":null}],
-            "queue":[{"id":"e1","track":{"id":"abcdefghijk","title":"Song","artists":[{"name":"Band"}],"durationMs":200000,"artwork":[]},
-                      "addedBy":{"id":"m1","name":"Ada","avatar":""},"addedAt":1,"catalogueMs":200000}],
-            "current":"e1","positionMs":5000,"at":1000,"playing":true,"revision":7,"expires":99,"somethingNew":true}}"#;
-        let Ok(Incoming::State { room }) = serde_json::from_str::<Incoming>(text) else {
-            panic!("a state");
-        };
-        assert_eq!(room.mode, Mode::Listen);
-        assert_eq!(room.revision, 7);
-        assert_eq!(room.current().map(|(index, _)| index), Some(0));
-        assert_eq!(room.tracks()[0].artist_names(), "Band");
-        assert_eq!(
-            room.leader().map(|member| member.name.as_str()),
-            Some("Ada")
-        );
-    }
-
-    #[test]
-    fn the_position_runs_on_while_playing_and_stops_at_the_songs_end() {
-        let mut room = Room {
-            queue: vec![Entry {
-                id: "e1".into(),
-                track: RoomTrack {
-                    duration_ms: 10_000.0,
-                    ..RoomTrack::default()
-                },
-                ..Entry::default()
-            }],
-            current: Some("e1".into()),
-            position_ms: 2000.0,
-            at: 1000.0,
-            playing: true,
-            ..Room::default()
-        };
-        assert_eq!(room.position_at(4000.0), 5000);
-        assert_eq!(room.position_at(60_000.0), 10_000);
-        room.playing = false;
-        assert_eq!(room.position_at(4000.0), 2000);
-    }
-
-    #[test]
-    fn who_may_steer_follows_the_rooms_mode() {
-        let mut room = Room {
-            owner: "leader".into(),
-            mode: Mode::Listen,
-            members: vec![Member {
-                id: "dj".into(),
-                role: "dj".into(),
-                ..Member::default()
-            }],
-            ..Room::default()
-        };
-        assert!(room.may_control("leader"));
-        assert!(room.may_control("dj"));
-        assert!(!room.may_control("guest"));
-        room.mode = Mode::Collaborative;
-        assert!(room.may_control("guest"));
-    }
-
-    #[test]
-    fn messages_of_a_kind_this_app_does_not_know_are_passed_over() {
-        let unknown = serde_json::from_str::<Incoming>(r#"{"type":"fireworks","loud":true}"#);
-        assert_eq!(unknown.ok(), Some(Incoming::Unknown));
-        let ack = serde_json::from_str::<Incoming>(r#"{"type":"ack","op":"x","revision":3}"#);
-        assert_eq!(ack.ok(), Some(Incoming::Ack));
-    }
-
-    #[test]
-    fn a_remote_server_must_be_secure_and_a_local_one_need_not_be() {
-        assert!(checked_address("wss://listen.example.com/rooms").is_ok());
-        assert!(checked_address(" ws://localhost:8766 ").is_ok());
-        assert!(checked_address("ws://listen.example.com").is_err());
-        assert!(checked_address("https://listen.example.com").is_err());
-        assert!(checked_address("wss://user:pw@example.com").is_err());
-        assert!(checked_address("listen.example.com").is_err());
-    }
-}
+mod tests;

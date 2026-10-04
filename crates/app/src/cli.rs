@@ -16,6 +16,9 @@ pub struct Args {
     /// Keep every file under this directory instead of the usual places:
     /// a second, separate installation.
     pub profile: Option<PathBuf>,
+    /// Look for the Electron app's profile here instead of the usual
+    /// place: for trying the move from it against a copy.
+    pub old_profile: Option<PathBuf>,
     /// Open the window at this size, in points, instead of the usual one.
     pub size: Option<[f32; 2]>,
     /// Start in the tray, without showing the window: how the app is
@@ -24,7 +27,7 @@ pub struct Args {
     pub verbose: bool,
 }
 
-pub const USAGE: &str = "usage: spotified [--demo] [--profile <dir>] [--hidden] [--size <width>x<height>] [--screenshot <file.png>] [--open <kind>:<id>]... [-v]";
+pub const USAGE: &str = "usage: spotified [--demo] [--profile <dir>] [--old-profile <dir>] [--hidden] [--size <width>x<height>] [--screenshot <file.png>] [--open <kind>:<id>]... [-v]";
 
 pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
     let mut parsed = Args::default();
@@ -41,6 +44,10 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
             "--profile" => {
                 let dir = args.next().ok_or("--profile needs a directory")?;
                 parsed.profile = Some(PathBuf::from(dir));
+            }
+            "--old-profile" => {
+                let dir = args.next().ok_or("--old-profile needs a directory")?;
+                parsed.old_profile = Some(PathBuf::from(dir));
             }
             "--size" => {
                 let given = args.next().ok_or("--size needs a size, as 1240x800")?;
@@ -82,6 +89,7 @@ mod tests {
                 screenshot: Some(PathBuf::from("out.png")),
                 open: Vec::new(),
                 profile: None,
+                old_profile: None,
                 size: None,
                 hidden: false,
                 verbose: true,
@@ -96,6 +104,13 @@ mod tests {
             args,
             Ok(vec!["settings".to_owned(), "track:abc".to_owned()])
         );
+    }
+
+    #[test]
+    fn the_old_profile_can_be_looked_for_somewhere_else() {
+        let args = parse_str("--old-profile copy").map(|args| args.old_profile);
+        assert_eq!(args, Ok(Some(PathBuf::from("copy"))));
+        assert!(parse_str("--old-profile").is_err());
     }
 
     #[test]

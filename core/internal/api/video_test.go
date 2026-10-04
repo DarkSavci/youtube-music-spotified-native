@@ -240,3 +240,54 @@ func TestVideoRequiresClientTokenWhenConfigured(t *testing.T) {
 		}
 	}
 }
+
+type pickingResolver struct {
+	videoResolver
+	picks []resolver.VideoPick
+}
+
+func (v *pickingResolver) ResolveVideoAs(ctx context.Context, id string, pick resolver.VideoPick) (domain.Stream, error) {
+	v.picks = append(v.picks, pick)
+	return v.ResolveVideo(ctx, id)
+}
+
+func TestVideoStreamHonoursTheCodecAClientAsksFor(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "video/mp4")
+		w.Write(make([]byte, 10))
+	}))
+	defer upstream.Close()
+	picking := &pickingResolver{videoResolver: videoResolver{url: upstream.URL}}
+	srv := api.New(api.Deps{Resolver: picking})
+	get := func(query string) int {
+		w := httptest.NewRecorder()
+		srv.ServeHTTP(w, httptest.NewRequest("GET", "/v1/video-stream/abcdefghijk"+query, nil))
+		return w.Code
+	}
+	for _, query := range []string{"", "?codec=h264", "?codec=h264", "?codec=h264&height=720"} {
+		if code := get(query); code != 200 {
+			t.Fatalf("%q answered %d", query, code)
+		}
+	}
+	want := []resolver.VideoPick{{}, {Codec: "h264"}, {Codec: "h264", MaxHeight: 720}}
+	if len(picking.picks) != len(want) {
+		t.Fatalf("each pick should resolve once: %+v", picking.picks)
+	}
+	for i, pick := range want {
+		if picking.picks[i] != pick {
+			t.Fatalf("pick %d was %+v, want %+v", i, picking.picks[i], pick)
+		}
+	}
+	for _, query := range []string{"?codec=vp9", "?codec=h264&height=4000", "?height=tall"} {
+		if code := get(query); code != 400 {
+			t.Fatalf("%q answered %d, want 400", query, code)
+		}
+	}
+	// A resolver that cannot choose a codec must not hand over the default.
+	plain := api.New(api.Deps{Resolver: &videoResolver{url: upstream.URL}})
+	w := httptest.NewRecorder()
+	plain.ServeHTTP(w, httptest.NewRequest("GET", "/v1/video-stream/abcdefghijk?codec=h264", nil))
+	if w.Code != 502 {
+		t.Fatalf("a resolver with no codec choice answered %d", w.Code)
+	}
+}

@@ -1,9 +1,10 @@
-//! The bar across the top of the window: history, search, the account, and
-//! on Windows the window's own buttons. It is the title bar: dragging it
-//! moves the window.
+//! The bar across the top of the window: history, Home and search in the
+//! middle, and at the right what is new, Listen Together, settings and the
+//! account, then on Windows the window's own buttons. It is the title bar:
+//! dragging it moves the window.
 
 use eframe::egui::{
-    self, Align, CornerRadius, Frame, Layout, Margin, Sense, TextEdit, Ui, Vec2, vec2,
+    self, Align, CornerRadius, Frame, Layout, Margin, Rect, Sense, TextEdit, Ui, Vec2, pos2, vec2,
 };
 
 use super::{chrome, widgets};
@@ -11,14 +12,20 @@ use crate::actions::Action;
 use crate::state::{Page, State};
 use crate::theme::{self, Icon, Palette};
 
-const HISTORY_BUTTON: f32 = 32.0;
-const SEARCH_HEIGHT: f32 = 36.0;
-/// The room the Browse all button takes inside the search field.
-const BROWSE_BUTTON: f32 = 40.0;
-const MENU_WIDTH: f32 = 248.0;
-const SEARCH_WIDTH: std::ops::RangeInclusive<f32> = 160.0..=460.0;
-/// The room kept at the right of the bar for the account and settings.
-const RIGHT_CONTROLS: f32 = 190.0;
+mod account;
+
+/// A back or forward button: taller than wide, as in the Electron app.
+const HISTORY_BUTTON: Vec2 = vec2(36.0, 40.0);
+const HOME_BUTTON: f32 = 44.0;
+const SEARCH_HEIGHT: f32 = 40.0;
+/// The room the Browse all button takes at the right of the search field.
+const BROWSE_BUTTON: f32 = 48.0;
+/// The gap between the bar's groups, and between the things in them.
+const GAP: f32 = 12.0;
+/// Home and the search field together are at most this wide, and the
+/// field alone never narrower than the least.
+const SEARCH_GROUP_MOST: f32 = 560.0;
+const SEARCH_FIELD_LEAST: f32 = 120.0;
 
 pub fn show(state: &State, ui: &mut Ui, actions: &mut Vec<Action>) {
     let palette = &state.palette;
@@ -51,25 +58,20 @@ pub fn show(state: &State, ui: &mut Ui, actions: &mut Vec<Action>) {
             chrome::buttons(state, ui, window_buttons);
             let mut controls_ui = ui.new_child(
                 egui::UiBuilder::new()
-                    .max_rect(controls)
+                    .max_rect(controls.shrink2(vec2(GAP, 0.0)))
                     .layout(Layout::left_to_right(Align::Center)),
             );
             self::controls(state, &mut controls_ui, actions);
         });
 }
 
-/// History, the search field in the middle, and the account at the right.
+/// History at the left, the account and its neighbours at the right, and
+/// Home with the search field in what is between, in the middle of the
+/// window when there is room either side.
 fn controls(state: &State, ui: &mut Ui, actions: &mut Vec<Action>) {
     let palette = &state.palette;
     let bar = ui.max_rect();
-    if !state.settings.sidebar_visible {
-        if widgets::icon_button(ui, palette, Icon::PanelLeft, 19.0, "Show sidebar").clicked() {
-            actions.push(Action::ToggleSidebar);
-        }
-        if widgets::icon_button(ui, palette, Icon::House, 19.0, "Home").clicked() {
-            actions.push(Action::Open(Page::Home));
-        }
-    }
+    ui.spacing_mut().item_spacing.x = 8.0;
     let back = history_button(
         ui,
         palette,
@@ -90,48 +92,78 @@ fn controls(state: &State, ui: &mut Ui, actions: &mut Vec<Action>) {
     if forward {
         actions.push(Action::Forward);
     }
-    // The search field sits in the middle of the window when there is room
-    // either side, and otherwise in what the two ends leave it.
-    let start = ui.cursor().left() + 8.0;
-    let end = bar.right() - RIGHT_CONTROLS;
-    let width = (end - start).clamp(*SEARCH_WIDTH.start(), *SEARCH_WIDTH.end());
+    let start = ui.cursor().left() + GAP - 8.0;
+
+    // The right-hand group is laid out first, from the right, so the
+    // search field can be given exactly what it leaves.
+    let mut right = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(bar)
+            .layout(Layout::right_to_left(Align::Center)),
+    );
+    right.spacing_mut().item_spacing.x = GAP;
+    right_controls(state, &mut right, actions);
+    let end = right.min_rect().left() - GAP;
+
+    let width = (end - start).clamp(HOME_BUTTON + GAP + SEARCH_FIELD_LEAST, SEARCH_GROUP_MOST);
     let centred = ui.ctx().content_rect().center().x - width / 2.0;
     let left = centred.min(end - width).max(start);
-    ui.add_space(left - ui.cursor().left());
-    search_field(state, ui, actions, width);
-    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-        ui.add_space(theme::GUTTER.into());
-        avatar(state, ui, actions);
-        let offline = state
-            .playback
-            .as_ref()
-            .is_some_and(|playback| playback.offline);
-        if offline {
-            ui.label(
-                egui::RichText::new("Offline")
-                    .font(theme::medium(12.5))
-                    .color(palette.warning),
-            )
-            .on_hover_text("No connection to YouTube Music. Cached songs still play.");
-        }
-        if widgets::icon_button(ui, palette, Icon::Settings, 19.0, "Settings").clicked() {
-            actions.push(Action::Open(Page::Settings));
-        }
-        // Lit while in a room, so the way back to it is easy to find.
-        let together = widgets::IconButton {
-            icon: Icon::Users,
-            size: 19.0,
-            tooltip: "Listen Together",
-            active: state.together.in_room(),
-        };
-        let at = ui.allocate_space(Vec2::splat(31.0)).1.center();
-        if together.show_at(ui, palette, at).clicked() {
-            actions.push(Action::Open(Page::Together));
-        }
-    });
+    let group = Rect::from_min_size(pos2(left, bar.top()), vec2(width, bar.height()));
+    let mut middle = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(group)
+            .layout(Layout::left_to_right(Align::Center)),
+    );
+    middle.spacing_mut().item_spacing.x = GAP;
+    if home_button(state, &mut middle) {
+        actions.push(Action::Open(Page::Home));
+    }
+    search_field(state, &mut middle, actions, width - HOME_BUTTON - GAP);
 }
 
-/// A round back or forward button. Returns whether it was clicked.
+/// What sits at the right of the bar, outermost first.
+fn right_controls(state: &State, ui: &mut Ui, actions: &mut Vec<Action>) {
+    let palette = &state.palette;
+    account::show(state, ui, actions);
+    let offline = state
+        .playback
+        .as_ref()
+        .is_some_and(|playback| playback.offline);
+    if offline {
+        ui.label(
+            egui::RichText::new("Offline")
+                .font(theme::medium(12.5))
+                .color(palette.warning),
+        )
+        .on_hover_text("No connection to YouTube Music. Cached songs still play.");
+    }
+    if widgets::icon_button(ui, palette, Icon::Settings, 20.0, "Settings").clicked() {
+        actions.push(Action::Open(Page::Settings));
+    }
+    // Lit while in a room, so the way back to it is easy to find.
+    let together = widgets::IconButton {
+        icon: Icon::Headphones,
+        size: 20.0,
+        tooltip: "Listen Together",
+        active: state.together.in_room(),
+    };
+    let at = ui.allocate_space(Vec2::splat(32.0)).1.center();
+    if together.show_at(ui, palette, at).clicked() {
+        actions.push(Action::Open(Page::Together));
+    }
+    let news = widgets::icon_button(ui, palette, Icon::Gift, 20.0, "What's new");
+    // A dot says there are release notes not yet opened.
+    if state.release_notes_unread() {
+        let at = news.rect.right_top() + vec2(-6.0, 6.0);
+        ui.painter().circle_filled(at, 3.0, palette.accent);
+    }
+    // The newest notes open over the page; all of them have a page.
+    if news.clicked() {
+        actions.push(Action::ShowWhatsNew);
+    }
+}
+
+/// A back or forward chevron. Returns whether it was clicked.
 fn history_button(
     ui: &mut Ui,
     palette: &Palette,
@@ -144,184 +176,126 @@ fn history_button(
     } else {
         Sense::hover()
     };
-    let (rect, response) = ui.allocate_exact_size(Vec2::splat(HISTORY_BUTTON), sense);
+    let (rect, response) = ui.allocate_exact_size(HISTORY_BUTTON, sense);
     widgets::name(ui, &response, tooltip);
     let lift = widgets::hover(ui, &response);
-    let fill = crate::tint::blend(palette.panel, palette.surface_hover, lift);
-    ui.painter()
-        .circle_filled(rect.center(), HISTORY_BUTTON / 2.0, fill);
     let color = if enabled {
         crate::tint::blend(palette.secondary, palette.text, lift)
     } else {
         palette.dim
     };
-    widgets::paint_icon(ui, icon, rect, 20.0, color);
+    let pressed = if response.is_pointer_button_down_on() {
+        0.94
+    } else {
+        1.0
+    };
+    widgets::paint_icon(ui, icon, rect, 30.0 * pressed, color);
     response.on_hover_text(tooltip).clicked()
+}
+
+/// The round way home, beside the search field. Returns whether it was
+/// clicked.
+fn home_button(state: &State, ui: &mut Ui) -> bool {
+    let palette = &state.palette;
+    let (rect, response) = ui.allocate_exact_size(Vec2::splat(HOME_BUTTON), Sense::click());
+    widgets::name(ui, &response, "Home");
+    let lift = widgets::hover(ui, &response);
+    let fill = crate::tint::blend(palette.surface, palette.surface_active, lift);
+    let pressed = if response.is_pointer_button_down_on() {
+        0.96
+    } else {
+        1.0
+    };
+    ui.painter()
+        .circle_filled(rect.center(), HOME_BUTTON / 2.0 * pressed, fill);
+    // Lit while Home is the page on screen.
+    let at_home = state.nav.page() == &Page::Home && !state.library_expanded;
+    let color = if at_home {
+        palette.text
+    } else {
+        crate::tint::blend(palette.secondary, palette.text, lift)
+    };
+    widgets::paint_icon(ui, Icon::House, rect, 22.0, color);
+    response.on_hover_text("Home").clicked()
 }
 
 fn search_field(state: &State, ui: &mut Ui, actions: &mut Vec<Action>, width: f32) {
     let palette = &state.palette;
-    Frame::new()
-        .fill(palette.surface)
-        .corner_radius(CornerRadius::same(u8::MAX))
-        .inner_margin(Margin {
-            left: 12,
-            right: 4,
-            top: 0,
-            bottom: 0,
-        })
-        .show(ui, |ui| {
-            ui.set_height(SEARCH_HEIGHT);
-            ui.spacing_mut().item_spacing.x = 8.0;
-            ui.add(Icon::Search.image(palette.secondary, 16.0));
-            // The view may not change state, so it edits a copy and asks.
-            let mut query = state.search.query.clone();
-            let field = TextEdit::singleline(&mut query)
-                .hint_text("What do you want to play?")
-                .frame(Frame::NONE)
-                .desired_width(width - 48.0 - BROWSE_BUTTON);
-            if ui.add(field).changed() {
-                actions.push(Action::SetSearchQuery(query));
-            }
-            // Browsing is the other way to find something, so its button
-            // shares the field, behind a hairline.
-            let line = ui.cursor().left() - 2.0;
-            let reach = ui.max_rect().y_range().shrink(8.0);
-            ui.painter().vline(line, reach, (1.0, palette.outline));
-            let browse = widgets::icon_button(ui, palette, Icon::LayoutGrid, 16.0, "Browse all");
-            if browse.clicked() {
-                actions.push(Action::BrowseAll);
-            }
-        });
-}
-
-/// The account button and the menu it opens: who is signed in, and the
-/// pages that are about them.
-fn avatar(state: &State, ui: &mut Ui, actions: &mut Vec<Action>) {
-    let palette = &state.palette;
-    let (rect, response) = ui.allocate_exact_size(Vec2::splat(36.0), Sense::click());
-    widgets::name(ui, &response, "Account");
-    let lift = widgets::hover(ui, &response);
-    let fill = crate::tint::blend(palette.surface, palette.surface_active, lift);
-    ui.painter().circle_filled(rect.center(), 18.0, fill);
-    initial_or_icon(
-        state,
-        ui,
-        rect,
-        crate::tint::blend(palette.secondary, palette.text, lift),
-    );
-    // A dot says there are release notes not yet opened.
-    if state.release_notes_unread() {
-        let at = rect.right_top() + vec2(-5.0, 5.0);
-        ui.painter().circle_filled(at, 4.0, palette.accent);
+    let (rect, _) = ui.allocate_exact_size(vec2(width, SEARCH_HEIGHT), Sense::hover());
+    let id = ui.id().with("search");
+    // Asked for from the keyboard: the caret goes to the field once for
+    // each time of asking.
+    let asked = ui.data(|data| data.get_temp::<u64>(id)).unwrap_or(0);
+    if asked != state.search_focus {
+        ui.data_mut(|data| data.insert_temp(id, state.search_focus));
+        ui.memory_mut(|memory| memory.request_focus(id));
     }
-    egui::Popup::menu(&response).show(|ui| {
-        ui.set_width(MENU_WIDTH);
-        ui.spacing_mut().item_spacing.y = 2.0;
-        if let Some(action) = account_menu(state, ui) {
-            actions.push(action);
-            ui.close();
+    let focused = ui.memory(|memory| memory.has_focus(id));
+    let round = CornerRadius::same(u8::MAX);
+    ui.painter().rect_filled(rect, round, palette.surface);
+    // The whole pill shows the focus, not the text inside it.
+    if focused {
+        let kind = egui::StrokeKind::Inside;
+        ui.painter()
+            .rect_stroke(rect, round, (1.0, palette.text), kind);
+    }
+
+    // The magnifier leads to the search page and puts the caret in the
+    // field.
+    let glass = widgets::IconButton {
+        icon: Icon::Search,
+        size: 20.0,
+        tooltip: "Search",
+        active: false,
+    };
+    let glass_at = pos2(rect.left() + 16.0 + 16.0, rect.center().y);
+    if glass.show_at(ui, palette, glass_at).clicked() {
+        ui.memory_mut(|memory| memory.request_focus(id));
+        if state.nav.page() != &Page::Search {
+            actions.push(Action::Open(Page::Search));
         }
+    }
+
+    // Browsing is the other way to find something, so its button shares
+    // the field, behind a hairline.
+    let browse = Rect::from_min_max(pos2(rect.right() - BROWSE_BUTTON, rect.top()), rect.max);
+    ui.painter().vline(
+        browse.left(),
+        rect.y_range().shrink(6.0),
+        (1.0, palette.outline),
+    );
+    let button = widgets::IconButton {
+        icon: Icon::Archive,
+        size: 20.0,
+        tooltip: "Browse all",
+        active: false,
+    };
+    if button.show_at(ui, palette, browse.center()).clicked() {
+        actions.push(Action::BrowseAll);
+    }
+
+    let text = Rect::from_min_max(
+        pos2(glass_at.x + 16.0 + GAP, rect.top()),
+        pos2(browse.left() - 8.0, rect.bottom()),
+    );
+    let mut field = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(text)
+            .layout(Layout::left_to_right(Align::Center)),
+    );
+    // The view may not change state, so it edits a copy and asks.
+    let mut query = state.search.query.clone();
+    let hint = egui::RichText::new("What do you want to listen to?").color(palette.dim);
+    let edit = TextEdit::singleline(&mut query)
+        .id(id)
+        .hint_text(hint)
+        .frame(Frame::NONE)
+        .desired_width(text.width());
+    let response = field.add(edit);
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, true, "Search music")
     });
-}
-
-/// The account's initial once it is known, a figure until then.
-fn initial_or_icon(state: &State, ui: &Ui, rect: egui::Rect, color: egui::Color32) {
-    let initial = state
-        .account
-        .as_ref()
-        .and_then(|account| account.name.chars().next());
-    match initial {
-        Some(initial) => {
-            let letter: String = initial.to_uppercase().collect();
-            let font = theme::bold(rect.height() * 0.42);
-            let anchor = egui::Align2::CENTER_CENTER;
-            widgets::text_at(ui, rect.center(), anchor, &letter, font, color);
-        }
-        None => widgets::paint_icon(ui, Icon::User, rect, rect.height() * 0.5, color),
+    if response.changed() {
+        actions.push(Action::SetSearchQuery(query));
     }
-}
-
-/// What the account's menu holds. Returns what was chosen.
-fn account_menu(state: &State, ui: &mut Ui) -> Option<Action> {
-    let palette = &state.palette;
-    // Who this is: a disc, a name, and the handle or what signing in gives.
-    let (head, _) = ui.allocate_exact_size(vec2(ui.available_width(), 56.0), Sense::hover());
-    let disc = egui::Rect::from_center_size(
-        egui::pos2(head.left() + 28.0, head.center().y),
-        Vec2::splat(40.0),
-    );
-    ui.painter()
-        .circle_filled(disc.center(), 20.0, palette.accent.gamma_multiply(0.2));
-    initial_or_icon(state, ui, disc, palette.accent);
-    let (name, detail) = match &state.account {
-        Some(account) if account.handle.is_empty() => (account.name.as_str(), "YouTube Music"),
-        Some(account) => (account.name.as_str(), account.handle.as_str()),
-        None => ("Not signed in", "Sign in for your library"),
-    };
-    let left = disc.right() + 12.0;
-    let width = head.right() - left - 8.0;
-    let title = widgets::elided(ui, name, theme::semibold(14.0), palette.text, width, 1);
-    ui.painter().galley(
-        egui::pos2(left, head.center().y - 18.0),
-        title,
-        palette.text,
-    );
-    let font = theme::regular(12.0);
-    let second = widgets::elided(ui, detail, font, palette.secondary, width, 1);
-    ui.painter().galley(
-        egui::pos2(left, head.center().y + 2.0),
-        second,
-        palette.secondary,
-    );
-    ui.separator();
-
-    let mut chosen = None;
-    let unread = state.release_notes_unread();
-    let pages = [
-        (Icon::Clock, "Recently played", Page::History, false),
-        (Icon::AudioLines, "Your listening", Page::Stats, false),
-        (Icon::Users, "Listen Together", Page::Together, false),
-        (Icon::Info, "What's new", Page::Changelog, unread),
-        (Icon::Settings, "Settings", Page::Settings, false),
-    ];
-    for (icon, label, page, marked) in pages {
-        if menu_item(state, ui, icon, label, marked) {
-            chosen = Some(Action::Open(page));
-        }
-    }
-    ui.separator();
-    let (icon, label, action) = match &state.account {
-        Some(_) => (Icon::LogOut, "Sign out", Action::SignOut),
-        None => (Icon::User, "Sign in", Action::SignIn),
-    };
-    if menu_item(state, ui, icon, label, false) {
-        chosen = Some(action);
-    }
-    chosen
-}
-
-/// A row of the account's menu: an icon, a label, and a dot when there is
-/// something new behind it. Returns whether it was clicked.
-fn menu_item(state: &State, ui: &mut Ui, icon: Icon, label: &str, marked: bool) -> bool {
-    let palette = &state.palette;
-    let size = vec2(ui.available_width(), 36.0);
-    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
-    widgets::name(ui, &response, label);
-    widgets::row_hover(ui, &response, rect);
-    let lift = widgets::hover(ui, &response);
-    let color = crate::tint::blend(palette.secondary, palette.text, lift);
-    let at = egui::Rect::from_center_size(
-        egui::pos2(rect.left() + 20.0, rect.center().y),
-        Vec2::splat(17.0),
-    );
-    widgets::paint_icon(ui, icon, at, 17.0, color);
-    let anchor = egui::Align2::LEFT_CENTER;
-    let text = egui::pos2(rect.left() + 42.0, rect.center().y);
-    widgets::text_at(ui, text, anchor, label, theme::medium(13.5), palette.text);
-    if marked {
-        let dot = egui::pos2(rect.right() - 14.0, rect.center().y);
-        ui.painter().circle_filled(dot, 4.0, palette.accent);
-    }
-    response.clicked()
 }

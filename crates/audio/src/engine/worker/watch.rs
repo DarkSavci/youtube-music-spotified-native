@@ -58,6 +58,19 @@ impl Worker {
         }
     }
 
+    /// Writes where the track has reached for the picture to keep time
+    /// with. A track still loading, or one waiting for audio, is not moving.
+    pub(super) fn tell_clock(&self) {
+        let (id, moving) = match &self.current {
+            Some(playing) => (
+                playing.deck.video_id(),
+                self.target.playing && playing.ready && !playing.ended,
+            ),
+            None => ("", false),
+        };
+        self.clock.set(id, self.position_ms(), moving, self.speed);
+    }
+
     pub(super) fn report(&mut self) {
         if !self.target.playing || !self.on_target() {
             return;

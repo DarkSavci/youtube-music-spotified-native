@@ -42,6 +42,10 @@ if ($Refresh -or -not (Test-Path "$ytdlp\yt-dlp.exe")) {
     $zip = Join-Path $vendor 'yt-dlp_win.zip'
     Get-Verified "$base/yt-dlp_win.zip" "$base/SHA2-256SUMS" 'yt-dlp_win.zip' $zip
     Expand-Archive $zip -DestinationPath $ytdlp -Force
+    # Which release this is, for the app's daily look for a newer one: it
+    # downloads only when the release's archive differs from this.
+    $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+    Set-Content (Join-Path $ytdlp 'release.sha256') $hash -Encoding ascii -NoNewline
     Remove-Item $zip
     Write-Host 'yt-dlp ready'
 }

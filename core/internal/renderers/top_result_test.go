@@ -43,3 +43,25 @@ func TestTopResultIsWhatTheCardPointsAt(t *testing.T) {
 		}
 	}
 }
+
+// The card holds songs with covers of their own, and its picture is the one
+// it carries itself: a search of the whole card found a song's cover first
+// about half the time, and showed an artist with a single's sleeve.
+func TestTopResultWearsItsOwnPicture(t *testing.T) {
+	doc := loadFixture(t, "search_all")
+	card := Find(doc, NodeCardShelf)
+	want := card.Child("thumbnail").FindArtwork()
+	if len(want) == 0 {
+		t.Fatal("the fixture's card has no picture of its own")
+	}
+	for attempt := range 60 {
+		top := ParseSearch(doc, "q", ParseContext{}).TopResult
+		if top == nil || top.Artist == nil {
+			t.Fatal("no artist as the top result")
+		}
+		got := top.Artist.Artwork
+		if len(got) != len(want) || got[0].URL != want[0].URL {
+			t.Fatalf("attempt %d: got %v, want %v", attempt, got, want)
+		}
+	}
+}

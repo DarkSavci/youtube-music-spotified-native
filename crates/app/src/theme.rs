@@ -1,8 +1,9 @@
 //! Colours, sizes, fonts and icons.
 //!
-//! The palette and measurements are Spotifast's dark theme (its
-//! `src/theme.rs`). Every colour the views use comes from [`Palette`], so a
-//! light theme is a second constant, not a hunt through the views.
+//! The dark palette and the measurements are the Electron app's (its
+//! `tokens.css`): neutral greys, so that artwork carries the colour. Every
+//! colour the views use comes from [`Palette`], so a light theme is a second
+//! constant, not a hunt through the views.
 
 use std::sync::Arc;
 
@@ -10,17 +11,22 @@ use eframe::egui::{
     self, Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, Stroke, Vec2,
 };
 
+use crate::fonts::Weight;
+
 pub const RADIUS: u8 = 8;
 pub const RADIUS_ROW: u8 = 6;
 
-pub const TOP_BAR_HEIGHT: f32 = 48.0;
+pub const TOP_BAR_HEIGHT: f32 = 52.0;
 pub const PLAYER_BAR_HEIGHT: f32 = 80.0;
 /// The gap between panels, and between them and the window's edge. The
 /// window's own colour shows through it.
 pub const GUTTER: i8 = 8;
 /// Half a gutter: what each of two neighbouring panels leaves on its side.
 pub const HALF_GUTTER: i8 = GUTTER / 2;
-pub const SIDEBAR_WIDTH: f32 = 280.0;
+/// The sidebar's widths are its card's and the gutters either side of it.
+pub const SIDEBAR_WIDTH: f32 = 292.0;
+/// Collapsed to a rail of covers: a 72 point card.
+pub const SIDEBAR_RAIL_WIDTH: f32 = 84.0;
 pub const SIDEBAR_MIN_WIDTH: f32 = 210.0;
 pub const SIDEBAR_MAX_WIDTH: f32 = 600.0;
 pub const PAGE_PADDING: f32 = 24.0;
@@ -80,22 +86,24 @@ pub const LIGHT: Palette = Palette {
 
 pub const DARK: Palette = Palette {
     dark: true,
-    window: Color32::from_rgb(0x09, 0x0b, 0x0d),
-    panel: Color32::from_rgb(0x15, 0x18, 0x1c),
-    surface: Color32::from_rgb(0x1d, 0x21, 0x27),
-    surface_hover: Color32::from_rgb(0x26, 0x2b, 0x33),
-    surface_active: Color32::from_rgb(0x2f, 0x35, 0x3f),
-    outline: Color32::from_rgb(0x2a, 0x30, 0x38),
-    text: Color32::from_rgb(0xf2, 0xf4, 0xf6),
-    secondary: Color32::from_rgb(0xa9, 0xb1, 0xbc),
-    dim: Color32::from_rgb(0x6e, 0x77, 0x84),
-    // YouTube's red, as in the Electron app.
+    window: Color32::from_rgb(0x0f, 0x0f, 0x0f),
+    panel: Color32::from_rgb(0x18, 0x18, 0x18),
+    surface: Color32::from_rgb(0x21, 0x21, 0x21),
+    surface_hover: Color32::from_rgb(0x28, 0x28, 0x28),
+    // The Electron app's hover and border are white at 14 and 10 parts in
+    // a hundred; these are what that comes to on a panel.
+    surface_active: Color32::from_rgb(0x38, 0x38, 0x38),
+    outline: Color32::from_rgb(0x2f, 0x2f, 0x2f),
+    text: Color32::WHITE,
+    secondary: Color32::from_rgb(0xaa, 0xaa, 0xaa),
+    dim: Color32::from_rgb(0x71, 0x71, 0x71),
+    // YouTube's red.
     accent: Color32::from_rgb(0xff, 0x00, 0x33),
     accent_hover: Color32::from_rgb(0xff, 0x33, 0x55),
     on_accent: Color32::WHITE,
-    danger: Color32::from_rgb(0xf5, 0x71, 0x7f),
-    warning: Color32::from_rgb(0xf2, 0xb8, 0x5c),
-    overlay: Color32::from_rgb(0x22, 0x27, 0x2e),
+    danger: Color32::from_rgb(0xff, 0x4e, 0x45),
+    warning: Color32::from_rgb(0xff, 0xa4, 0x2b),
+    overlay: Color32::from_rgb(0x28, 0x28, 0x28),
     shadow: Color32::from_black_alpha(140),
 };
 
@@ -124,7 +132,7 @@ pub fn bold(size: f32) -> FontId {
 /// Installs fonts, the SVG loader and the base style. Once, at startup.
 pub fn install(ctx: &egui::Context, palette: &Palette) {
     egui_extras::install_image_loaders(ctx);
-    ctx.set_fonts(fonts());
+    ctx.set_fonts(fonts(crate::fonts::system()));
     apply(ctx, palette);
 }
 
@@ -136,7 +144,7 @@ pub fn apply(ctx: &egui::Context, palette: &Palette) {
     ctx.set_global_style(style);
 }
 
-fn fonts() -> FontDefinitions {
+fn fonts(system: &[crate::fonts::Face]) -> FontDefinitions {
     let mut fonts = FontDefinitions::default();
     // Whatever egui falls back to (emoji, symbols) stays behind each weight.
     let fallbacks = fonts
@@ -166,12 +174,24 @@ fn fonts() -> FontDefinitions {
             FontFamily::Name(BOLD.into()),
         ),
     ];
+    // Behind those, the system's fonts, for the scripts neither Inter nor
+    // egui's own can write.
+    for face in system {
+        let mut data = FontData::from_static(face.bytes);
+        data.index = face.index;
+        data.tweak.y_offset_factor = face.drop;
+        fonts.font_data.insert(face.name.clone(), Arc::new(data));
+    }
     for (name, bytes, family) in faces {
         fonts
             .font_data
             .insert(name.to_owned(), Arc::new(FontData::from_static(bytes)));
+        let heavy = matches!(name, SEMIBOLD | BOLD);
+        let weight = if heavy { Weight::Bold } else { Weight::Regular };
         let mut stack = vec![name.to_owned()];
         stack.extend(fallbacks.iter().cloned());
+        let behind = system.iter().filter(|face| face.weight == weight);
+        stack.extend(behind.map(|face| face.name.clone()));
         fonts.families.insert(family, stack);
     }
     fonts
@@ -276,8 +296,11 @@ fn apply_to_style(style: &mut egui::Style, palette: &Palette) {
     // rows, not characters.
     style.interaction.selectable_labels = false;
     style.interaction.tooltip_delay = 0.4;
-    style.animation_time = 0.12;
+    style.animation_time = ANIMATION_TIME;
 }
+
+/// How long egui's own animations take, while there are any.
+pub const ANIMATION_TIME: f32 = 0.12;
 
 macro_rules! icons {
     ($($name:ident => $file:literal),* $(,)?) => {
@@ -301,40 +324,53 @@ macro_rules! icons {
 }
 
 icons! {
+    Archive => "archive",
     AudioLines => "audio-lines",
+    Check => "check",
     ChevronDown => "chevron-down",
     ChevronLeft => "chevron-left",
     ChevronRight => "chevron-right",
+    ChevronUp => "chevron-up",
     CircleAlert => "circle-alert",
+    CircleCheck => "circle-check",
+    Copy => "copy",
+    Disc => "disc-3",
+    Ellipsis => "ellipsis",
     Expand => "expand",
     ExternalLink => "external-link",
     Folder => "folder",
+    Gift => "gift",
+    Headphones => "headphones",
     Heart => "heart",
     HeartFilled => "heart-filled",
     Clock => "clock",
     House => "house",
-    Info => "info",
     LayoutGrid => "layout-grid",
-    Library => "library",
+    List => "list",
     ListMusic => "list-music",
     LogOut => "log-out",
+    Maximize2 => "maximize-2",
     MicVocal => "mic-vocal",
+    Minimize2 => "minimize-2",
     Music => "music",
-    PanelLeft => "panel-left",
     PauseFilled => "pause-filled",
+    PictureInPicture => "picture-in-picture-2",
     Pin => "pin",
     PlayFilled => "play-filled",
     Plus => "plus",
+    Radio => "radio-receiver",
     Repeat => "repeat",
     Repeat1 => "repeat-1",
     Search => "search",
     Settings => "settings",
+    Share => "share-2",
     Shrink => "shrink",
     Shuffle => "shuffle",
     SkipBackFilled => "skip-back-filled",
     SkipForwardFilled => "skip-forward-filled",
+    SquareLibrary => "square-library",
+    Trash => "trash-2",
     User => "user",
-    Users => "users",
     Volume1 => "volume-1",
     Volume2 => "volume-2",
     VolumeX => "volume-x",
@@ -355,5 +391,73 @@ impl Icon {
             Icon::PlayFilled => Vec2::new(size * 0.03, 0.0),
             _ => Vec2::ZERO,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// What the song in the report was called, and a word in each of the
+    /// scripts Inter cannot write, beside the font that should write it.
+    const WRITTEN: [(&str, &str); 8] = [
+        ("YuGothR.ttc", "MOTIVE - 10 MG ︻デ═一"),
+        ("YuGothR.ttc", "日本語"),
+        ("msyh.ttc", "们这"),
+        ("malgun.ttf", "한국어"),
+        ("segoeui.ttf", "العربية עברית"),
+        ("LeelawUI.ttf", "ไทย"),
+        ("Nirmala.ttc", "हिन्दी"),
+        ("seguisym.ttf", "★ ♫"),
+    ];
+
+    /// A context that has taken the fonts in: they are set on one frame
+    /// and there on the next.
+    fn wearing(fonts: FontDefinitions) -> egui::Context {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(fonts);
+        let mut drawn = ctx.run_ui(egui::RawInput::default(), |_| {});
+        // No screen to hand the font atlas to.
+        drawn.textures_delta.clear();
+        ctx
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn what_inter_cannot_write_the_systems_fonts_do_in_every_weight() {
+        let Some(windows) = std::env::var_os("SystemRoot") else {
+            return;
+        };
+        let folder = std::path::Path::new(&windows).join("Fonts");
+        let system = crate::fonts::load(&folder);
+        let ctx = wearing(fonts(&system));
+        for (file, text) in WRITTEN {
+            // A computer without the font is not one this can be asked of.
+            if !folder.join(file).exists() {
+                continue;
+            }
+            for font in [regular(14.0), medium(14.0), semibold(14.0), bold(14.0)] {
+                let written = ctx.fonts_mut(|fonts| fonts.has_glyphs(&font, text));
+                assert!(written, "{text} cannot be written in {font:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn without_the_systems_fonts_inter_still_stands_first() {
+        let fonts = fonts(&[]);
+        for family in [FontFamily::Proportional, FontFamily::Name(BOLD.into())] {
+            let stack = &fonts.families[&family];
+            assert!(stack[0].starts_with("inter-"), "{stack:?}");
+        }
+    }
+
+    #[test]
+    fn inter_alone_cannot_write_the_title_that_showed_as_boxes() {
+        // The fault as it was: the test above means something only if the
+        // bundled fonts really do lack these.
+        let ctx = wearing(fonts(&[]));
+        let written = ctx.fonts_mut(|fonts| fonts.has_glyphs(&regular(14.0), "︻デ═一"));
+        assert!(!written);
     }
 }

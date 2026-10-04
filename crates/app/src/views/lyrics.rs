@@ -13,7 +13,7 @@ use spotified_client::models::Lyrics;
 use super::widgets::{self, ArtShape};
 use super::{chrome, player_bar};
 use crate::actions::Action;
-use crate::state::{Loadable, Playback, State};
+use crate::state::{Loadable, Page, Playback, State};
 use crate::theme::{self, Icon};
 
 const WIDTH: f32 = 360.0;
@@ -176,10 +176,18 @@ fn header(state: &State, ui: &mut Ui, actions: &mut Vec<Action>, area: Rect) {
     let at = pos2(text_left, area.center().y - 18.0);
     ui.painter().galley(at, title, Color32::WHITE);
     let quiet = Color32::WHITE.gamma_multiply(0.75);
-    let font = theme::regular(12.5);
-    let artists = widgets::elided(ui, &track.artist_names(), font, quiet, width, 1);
+    let artists = widgets::Artists {
+        artists: &track.artists,
+        font: theme::regular(12.5),
+        color: quiet,
+        width,
+    };
     let at = pos2(text_left, area.center().y + 2.0);
-    ui.painter().galley(at, artists, quiet);
+    if let (Some(artist), _) = artists.show(ui, ui.id().with("lyrics-artists"), at) {
+        // The page is under the lyrics, which give way to it.
+        actions.push(Action::SetLyricsFullscreen(false));
+        actions.push(Action::Open(Page::Artist(artist)));
+    }
 }
 
 /// The lyrics of what is playing, or what there is to say instead.
@@ -233,6 +241,11 @@ fn lines(
         .show(ui, |ui| {
             let margin = ui.clip_rect().height() * style.margin;
             ui.add_space(margin);
+            // The words can be selected, and stay white when they are:
+            // they lie on the cover's colour, not on the theme's.
+            widgets::selectable(ui);
+            ui.visuals_mut().selection.stroke.color = Color32::WHITE;
+            ui.visuals_mut().selection.bg_fill = Color32::from_white_alpha(60);
             ui.spacing_mut().item_spacing.y = style.gap;
             for (index, line) in lyrics.lines.iter().enumerate() {
                 let current = sung == Some(index);
@@ -242,10 +255,12 @@ fn lines(
                 } else {
                     &line.text
                 };
+                // A drag selects the words, to copy them; on a timed line
+                // a click still jumps there.
                 let sense = if lyrics.synced {
-                    Sense::click()
+                    Sense::click_and_drag()
                 } else {
-                    Sense::hover()
+                    Sense::drag()
                 };
                 // Laid out once to learn where the line sits, then painted
                 // in a colour that depends on whether the pointer is on it.
@@ -266,7 +281,7 @@ fn lines(
                 };
                 if ui.is_rect_visible(rect) {
                     let color = Color32::WHITE.gamma_multiply(strength);
-                    ui.painter().galley(rect.min, galley, color);
+                    widgets::selectable_galley(ui, &response, rect.min, galley, color);
                 }
                 if response.clicked() {
                     actions.push(Action::Seek(line.at_ms));

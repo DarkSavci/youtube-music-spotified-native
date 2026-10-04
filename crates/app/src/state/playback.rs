@@ -18,6 +18,13 @@ pub struct Playback {
     /// The room entry that has played to its end here, if the one that is
     /// current has.
     pub room_ended: Option<String>,
+    /// The room entry being played and its length as the engine measured
+    /// it, once it has: the catalogue's figure can be a little out, or
+    /// missing, and the room counts a song down by it.
+    pub room_length: Option<(String, u64)>,
+    /// How fast the track is being played: the position moves this many
+    /// times as fast as the clock between reports.
+    pub speed: f32,
 }
 
 impl Playback {
@@ -40,7 +47,8 @@ impl Playback {
     /// Where the track has reached at `now`, held to its length.
     pub fn position_ms(&self, now: Instant) -> u64 {
         let moved = if self.is_playing() {
-            now.duration_since(self.received).as_millis() as u64
+            let passed = now.duration_since(self.received).as_secs_f64() * 1000.0;
+            (passed * f64::from(self.speed)).round() as u64
         } else {
             0
         };
@@ -87,7 +95,19 @@ mod tests {
             offline: false,
             following_room: false,
             room_ended: None,
+            room_length: None,
+            speed: 1.0,
         }
+    }
+
+    #[test]
+    fn a_sped_up_track_moves_on_as_fast_as_it_is_heard() {
+        let mut playback = playback(PlayState::Playing, 4000);
+        playback.speed = 2.0;
+        let later = playback.received + Duration::from_millis(1500);
+        assert_eq!(playback.position_ms(later), 7000);
+        playback.speed = 0.5;
+        assert_eq!(playback.position_ms(later), 4750);
     }
 
     #[test]

@@ -6,9 +6,9 @@ use spotified_client::models::Track;
 use spotified_client::session::Repeat;
 
 use super::super::widgets::{self, ArtShape};
-use super::super::{chrome, format, player_bar};
+use super::super::{chrome, format, player_bar, speed, volume};
 use crate::actions::Action;
-use crate::state::{MiniPanel, Playback, State};
+use crate::state::{MiniPanel, Page, Playback, State};
 use crate::theme::{self, Icon};
 
 const WINDOW_BUTTON: f32 = 28.0;
@@ -114,10 +114,18 @@ pub(super) fn meta(
     if link.show(ui, id, pos2(rect.left(), first), true) {
         actions.push(Action::ShowMainWindow);
     }
-    let artists = track.artist_names();
-    let galley = widgets::elided(ui, &artists, theme::regular(12.0), quiet, rect.width(), 1);
-    ui.painter()
-        .galley(pos2(rect.left(), second), galley, quiet);
+    let artists = widgets::Artists {
+        artists: &track.artists,
+        font: theme::regular(12.0),
+        color: quiet,
+        width: rect.width(),
+    };
+    let id = ui.id().with("mini-artists");
+    if let (Some(artist), _) = artists.show(ui, id, pos2(rect.left(), second)) {
+        // The page is in the main window, which comes forward with it.
+        actions.push(Action::ShowMainWindow);
+        actions.push(Action::Open(Page::Artist(artist)));
+    }
 }
 
 pub(super) fn like(mini: &Mini<'_>, ui: &mut Ui, actions: &mut Vec<Action>, at: egui::Pos2) {
@@ -230,15 +238,17 @@ pub(super) fn progress(
         if !times {
             return;
         }
-        for (x, anchor, ms) in [
-            (row.left(), Align2::LEFT_CENTER, shown),
-            (row.right(), Align2::RIGHT_CENTER, duration),
-        ] {
-            let at = pos2(x, row.center().y);
-            let text = format::duration(ms);
-            let font = theme::regular(11.0);
-            widgets::text_at(ui, at, anchor, &text, font, palette.secondary);
-        }
+        let at = pos2(row.left(), row.center().y);
+        let text = format::duration(shown);
+        let font = theme::regular(11.0);
+        widgets::text_at(ui, at, Align2::LEFT_CENTER, &text, font, palette.secondary);
+        let end = player_bar::EndTime {
+            at: pos2(row.right() - 16.0, row.center().y),
+            shown,
+            duration,
+            color: palette.secondary,
+        };
+        end.show(mini.state, ui, actions);
     });
 }
 
@@ -294,37 +304,33 @@ pub(super) fn extras(
             actions.push(Action::SetMiniPanel(next));
         }
     }
-    let volume = mini
-        .playback
-        .map_or(0.0, |playback| playback.session.volume);
     let slider_width = if with_slider { VOLUME_WIDTH } else { 0.0 };
     let bar = Rect::from_min_max(
         pos2(row.right() - slider_width, y - 8.0),
         pos2(row.right(), y + 8.0),
     );
-    if with_slider {
-        let slider = widgets::slider(ui, palette, bar, volume.min(1.0), "volume");
-        if let Some(level) = slider.dragging.or(slider.released)
-            && (level - volume).abs() >= 0.01
-        {
-            actions.push(Action::SetVolume(level));
-        }
-    }
-    let icon = match volume {
-        v if v <= 0.0 => Icon::VolumeX,
-        v if v < 0.5 => Icon::Volume1,
-        _ => Icon::Volume2,
+    let control = volume::Volume {
+        bar: with_slider.then_some(bar),
+        mute_at: pos2(bar.left() - 18.0, y),
+        icon: 17.0,
     };
-    let mute = widgets::IconButton {
-        icon,
-        size: 17.0,
-        tooltip: "Mute",
-        active: false,
-    };
-    let at = pos2(bar.left() - 18.0, y);
-    if mute.show_at(ui, palette, at).clicked() {
-        actions.push(Action::ToggleMute);
-    }
+    control.show(mini.state, palette, ui, actions, mini.playback);
+}
+
+/// The playback speed, leftwards from `right_centre`: set once and left,
+/// so it lives out of the way beside the window's own buttons. Returns the
+/// width it took.
+pub(super) fn speed_button(
+    mini: &Mini<'_>,
+    ui: &mut Ui,
+    actions: &mut Vec<Action>,
+    right_centre: egui::Pos2,
+) -> f32 {
+    const WIDTH: f32 = 40.0;
+    let at = pos2(right_centre.x - WIDTH / 2.0, right_centre.y);
+    let state = mini.state;
+    speed::button(state, &state.palette, ui, actions, at);
+    WIDTH + 2.0
 }
 
 /// Keep on top, open the app, and close, laid out leftwards from

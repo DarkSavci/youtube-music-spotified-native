@@ -217,3 +217,39 @@ func TestTrackAlbumComesFromTheThirdColumn(t *testing.T) {
 		})
 	}
 }
+
+// Every artist of a song is kept, the ones YouTube links no page for too:
+// the second of two joined by "&" is an artist, while unlinked text after a
+// "•" is still metadata.
+func TestSubtitleKeepsAnUnlinkedArtistJoinedToALinkedOne(t *testing.T) {
+	const runs = `{"runs":[
+		{"text":"Motive","navigationEndpoint":{"browseEndpoint":{"browseId":"UCmotive"}}},
+		{"text":" & "},
+		{"text":"Aksan"},
+		{"text":", "},
+		{"text":"Third","navigationEndpoint":{"browseEndpoint":{"browseId":"UCthird"}}},
+		{"text":" • "},
+		{"text":"10 MG","navigationEndpoint":{"browseEndpoint":{"browseId":"MPREb_album"}}},
+		{"text":" • "},
+		{"text":"Somebody Else"},
+		{"text":" • "},
+		{"text":"2.1M plays"}
+	]}`
+	n, err := Parse(json.RawMessage(runs))
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta := parseSubtitleRuns(n.Nodes("runs"))
+	want := []domain.ArtistRef{{ID: "UCmotive", Name: "Motive"}, {Name: "Aksan"}, {ID: "UCthird", Name: "Third"}}
+	if len(meta.artists) != len(want) {
+		t.Fatalf("artists = %+v, want %+v", meta.artists, want)
+	}
+	for i := range want {
+		if meta.artists[i] != want[i] {
+			t.Errorf("artist %d = %+v, want %+v", i, meta.artists[i], want[i])
+		}
+	}
+	if meta.album == nil || meta.album.ID != "MPREb_album" {
+		t.Errorf("album = %+v", meta.album)
+	}
+}

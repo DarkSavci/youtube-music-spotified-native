@@ -7,6 +7,13 @@
 
 use serde::{Deserialize, Deserializer, Serialize};
 
+mod stats;
+
+pub use stats::{
+    Affinity, AlbumStat, ArtistStat, LookupResults, MonthPlays, StatDetail, StatKind, Stats,
+    Summary, TrackStat, channel_id, cover,
+};
+
 /// Reads `null` as the type's default, as Go writes a nil slice.
 pub(crate) fn null_as_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
 where
@@ -39,8 +46,18 @@ pub fn artwork_url(set: &[Artwork], min_width: u32) -> Option<String> {
 
 fn resized(url: &str, size: u32) -> Option<String> {
     let (base, spec) = url.rsplit_once('=')?;
-    if spec.starts_with('w') && spec.contains("-h") {
-        Some(format!("{base}=w{size}-h{size}-l90-rj"))
+    let number = |text: &str| !text.is_empty() && text.bytes().all(|byte| byte.is_ascii_digit());
+    let mut parts = spec.splitn(3, '-');
+    let width = parts.next()?.strip_prefix('w');
+    let height = parts.next().and_then(|part| part.strip_prefix('h'));
+    if let (Some(width), Some(height)) = (width, height)
+        && number(width)
+        && number(height)
+    {
+        // What follows the size says how the picture is cut and packed:
+        // an artist's is cropped square, and stays so at the new size.
+        let rest = parts.next().unwrap_or("l90-rj");
+        Some(format!("{base}=w{size}-h{size}-{rest}"))
     } else if spec.starts_with('s') {
         Some(format!("{base}=s{size}"))
     } else {
@@ -81,6 +98,10 @@ pub struct Track {
     pub play_count: String,
     /// Which entry of a playlist this is, for removing it later.
     pub playlist_item_id: String,
+    /// How long it has been listened to here, on a row of the listener's
+    /// own figures. Never from the core's catalogue, nor sent back to it.
+    #[serde(skip)]
+    pub listened_ms: Option<u64>,
 }
 
 impl Track {
@@ -115,6 +136,14 @@ pub struct Album {
     /// "Album", "Single" or "EP", as YouTube Music labels it.
     #[serde(rename = "type")]
     pub kind: String,
+    /// The first artist's picture, for the page's byline.
+    #[serde(deserialize_with = "null_as_default")]
+    pub artist_artwork: Vec<Artwork>,
+    /// What is said of the release, where YouTube Music says anything.
+    pub description: String,
+    /// The rows under the songs, such as "Releases for you".
+    #[serde(deserialize_with = "null_as_default")]
+    pub shelves: Vec<Shelf>,
 }
 
 /// The address of a surface: its id, and the params some need to be told
@@ -147,6 +176,9 @@ pub struct Artist {
     pub following: bool,
     /// What the artist says of themselves, or what is said of them.
     pub description: String,
+    /// Where the description came from, usually Wikipedia; empty when it
+    /// names no source.
+    pub description_url: String,
     /// The artist's mix, their music and music like it, and the song it
     /// starts from. YouTube makes neither list without its song.
     pub radio_id: String,
@@ -185,6 +217,15 @@ pub struct Playlist {
     pub editable: bool,
     #[serde(deserialize_with = "null_as_default")]
     pub tracks: Vec<Track>,
+}
+
+/// Some of a playlist's songs, and the token that fetches the next of
+/// them; empty once there are no more.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[serde(default)]
+pub struct PlaylistPage {
+    pub playlist: Playlist,
+    pub next: String,
 }
 
 /// A show. Its episodes are read as tracks: they queue and play as songs
@@ -306,6 +347,17 @@ pub struct MoodChip {
     pub color: String,
 }
 
+/// One of the moods across the top of Home ("Energize", "Relax"). Each
+/// reads Home again through its params.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub struct HomeChip {
+    pub title: String,
+    pub params: String,
+    /// The one the page was read through.
+    pub selected: bool,
+}
+
 /// A surface made of shelves, of mood tiles, or of both.
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 #[serde(default)]
@@ -315,6 +367,32 @@ pub struct BrowsePage {
     pub shelves: Vec<Shelf>,
     #[serde(deserialize_with = "null_as_default")]
     pub moods: Vec<MoodChip>,
+    /// Home's row of moods; other surfaces have none.
+    #[serde(deserialize_with = "null_as_default")]
+    pub chips: Vec<HomeChip>,
+    /// Fetches the next few shelves of the page; empty at its end.
+    pub continuation: String,
+}
+
+/// One of the account's earlier searches. The token removes it from the
+/// account's history; a search with none cannot be removed there.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub struct SearchHistoryEntry {
+    pub query: String,
+    pub token: String,
+}
+
+/// The queue the account has on another device: the phone, the website.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[serde(default)]
+pub struct RemoteQueue {
+    #[serde(deserialize_with = "null_as_default")]
+    pub tracks: Vec<Track>,
+    /// The entry that device was on.
+    pub index: usize,
+    /// What the queue plays from, when YouTube names it.
+    pub title: String,
 }
 
 /// One of the YouTube channels a Google account holds. Each has its own
@@ -325,6 +403,9 @@ pub struct Channel {
     pub id: String,
     pub name: String,
     pub handle: String,
+    /// The address of the channel's picture; empty when it has none.
+    #[serde(rename = "avatarUrl")]
+    pub avatar_url: String,
 }
 
 /// How much the core has kept of the songs played, to start them at once
@@ -342,6 +423,8 @@ pub struct CacheUsage {
 pub struct Account {
     pub name: String,
     pub handle: String,
+    /// The address of the account's picture; empty when it has none.
+    pub avatar_url: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
@@ -350,8 +433,29 @@ pub struct SearchResults {
     pub query: String,
     #[serde(deserialize_with = "item")]
     pub top_result: Option<Item>,
+    /// What YouTube shows inside the top result's card: an artist's top
+    /// songs, an album's songs, other versions of a song.
+    #[serde(deserialize_with = "items")]
+    pub top_result_items: Vec<Item>,
     #[serde(deserialize_with = "null_as_default")]
     pub shelves: Vec<Shelf>,
+}
+
+impl SearchResults {
+    /// The songs among the results, each once, and no more than `most`.
+    pub fn songs(self, most: usize) -> Vec<Track> {
+        let mut songs: Vec<Track> = Vec::new();
+        let found = self.shelves.into_iter().flat_map(|shelf| shelf.items);
+        for item in found {
+            if let Item::Track(track) = item
+                && songs.len() < most
+                && !songs.iter().any(|song| song.id == track.id)
+            {
+                songs.push(track);
+            }
+        }
+        songs
+    }
 }
 
 /// What a search is narrowed to.
@@ -363,15 +467,21 @@ pub enum SearchFilter {
     Albums,
     Artists,
     Playlists,
+    Videos,
+    Podcasts,
+    Episodes,
 }
 
 impl SearchFilter {
-    pub const EVERY: [SearchFilter; 5] = [
+    pub const EVERY: [SearchFilter; 8] = [
         SearchFilter::All,
         SearchFilter::Songs,
         SearchFilter::Albums,
         SearchFilter::Artists,
         SearchFilter::Playlists,
+        SearchFilter::Videos,
+        SearchFilter::Podcasts,
+        SearchFilter::Episodes,
     ];
 
     pub fn label(self) -> &'static str {
@@ -381,6 +491,9 @@ impl SearchFilter {
             SearchFilter::Albums => "Albums",
             SearchFilter::Artists => "Artists",
             SearchFilter::Playlists => "Playlists",
+            SearchFilter::Videos => "Videos",
+            SearchFilter::Podcasts => "Podcasts",
+            SearchFilter::Episodes => "Episodes",
         }
     }
 
@@ -392,6 +505,9 @@ impl SearchFilter {
             SearchFilter::Albums => "albums",
             SearchFilter::Artists => "artists",
             SearchFilter::Playlists => "playlists",
+            SearchFilter::Videos => "videos",
+            SearchFilter::Podcasts => "podcasts",
+            SearchFilter::Episodes => "episodes",
         }
     }
 }
@@ -431,6 +547,11 @@ pub struct LibraryItem {
     pub pinned: bool,
     /// The folder it is filed in; empty for none. Ours as well.
     pub folder_id: String,
+    /// When the core first saw it in the library, as RFC 3339. `None` for
+    /// what was there before the core kept track.
+    pub added_at: Option<String>,
+    /// When something of it was last played here, from the play log.
+    pub last_played_at: Option<String>,
 }
 
 /// A folder in the library, made here and kept by the core.
@@ -501,31 +622,6 @@ pub struct Mix {
     pub description: String,
     #[serde(deserialize_with = "null_as_default")]
     pub tracks: Vec<Track>,
-}
-
-/// How often a song was played, from the plays recorded on this computer.
-#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
-pub struct TrackStat {
-    pub track_id: String,
-    pub title: String,
-    pub artist: String,
-    pub plays: u32,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
-pub struct ArtistStat {
-    pub artist_id: String,
-    pub artist: String,
-    pub plays: u32,
-}
-
-/// The most played songs and artists over a period.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct Stats {
-    pub tracks: Vec<TrackStat>,
-    pub artists: Vec<ArtistStat>,
 }
 
 #[cfg(test)]

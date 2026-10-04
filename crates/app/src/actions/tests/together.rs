@@ -2,21 +2,29 @@
 
 use spotified_client::session::Command;
 
+use std::time::Instant;
+
 use super::*;
+use crate::state::Playback;
 use crate::together::protocol::{Entry, Member, Room, RoomTrack};
 use crate::together::{Enter, Event, Field, Phase, Seed};
 
-fn with_server() -> State {
+pub(super) fn with_server() -> State {
     let mut state = ready();
-    state.settings.together_server = "wss://listen.example.com".into();
+    state.settings.together_servers = vec![crate::together::SavedServer {
+        id: "server-1".into(),
+        name: "Ours".into(),
+        url: "wss://listen.example.com".into(),
+    }];
+    state.settings.together_selected = "server-1".into();
     state
 }
 
-fn hear(state: &mut State, event: Event) -> Vec<Effect> {
+pub(super) fn hear(state: &mut State, event: Event) -> Vec<Effect> {
     apply(state, Action::TogetherEvent(Box::new(event)))
 }
 
-fn room(revision: u64) -> Room {
+pub(super) fn room(revision: u64) -> Room {
     Room {
         owner: "me".into(),
         members: vec![Member {
@@ -42,7 +50,7 @@ fn room(revision: u64) -> Room {
 }
 
 /// In a room that plays one song, with a player that has not caught up.
-fn in_room() -> State {
+pub(super) fn in_room() -> State {
     let mut state = with_server();
     apply(
         &mut state,
@@ -56,13 +64,16 @@ fn in_room() -> State {
         offline: false,
         following_room: false,
         room_ended: None,
+        room_length: None,
+        speed: 1.0,
     });
     state
 }
 
 #[test]
 fn a_room_needs_a_secure_server_and_a_whole_pin() {
-    let mut state = ready();
+    let mut state = with_server();
+    state.settings.together_servers[0].url = "ws://listen.example.com".into();
     assert!(apply(&mut state, Action::TogetherCreate).is_empty());
     assert!(state.together.error.is_some());
 
@@ -113,7 +124,8 @@ fn hearing_the_room_has_the_player_follow_it() {
         &effects[0],
         Effect::Command(Command::FollowRoom { entry, playing: true, .. }) if entry == "e1"
     ));
-    assert!(matches!(effects.last(), Some(Effect::TogetherStatus(..))));
+    let told = |effect: &Effect| matches!(effect, Effect::TogetherStatus(..));
+    assert!(effects.iter().any(told));
     assert_eq!(state.together.applied_entry.as_deref(), Some("e1"));
 }
 
@@ -148,6 +160,8 @@ fn a_room_made_while_music_plays_is_given_that_music_first() {
         offline: false,
         following_room: false,
         room_ended: None,
+        room_length: None,
+        speed: 1.0,
     });
     apply(&mut state, Action::TogetherCreate);
     assert!(matches!(&state.together.seed, Seed::Wanted { tracks, .. } if tracks.len() == 2));

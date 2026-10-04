@@ -105,21 +105,33 @@ fn look(folder: &Path, report: &impl Fn(Status)) -> Result<Status, String> {
     })
 }
 
-/// Runs the installer without its windows and asks it to start the app
-/// again when it is done. The app must then quit, so its files are free.
-pub fn install(installer: &Path) -> io::Result<()> {
+/// What the installer is asked to do when it is done.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Then {
+    /// Start the app again: the update was asked for now.
+    Relaunch,
+    /// Nothing: the app was being closed anyway, and stays closed.
+    StayClosed,
+}
+
+/// Runs the installer without its windows. The app must then quit, so its
+/// files are free.
+pub fn install(installer: &Path, then: Then) -> io::Result<()> {
     std::process::Command::new(installer)
-        .args([
-            "/VERYSILENT",
-            "/SUPPRESSMSGBOXES",
-            "/NORESTART",
-            "/RELAUNCH=1",
-        ])
+        .args(install_arguments(then))
         .spawn()
         .map(drop)
 }
 
-fn agent() -> ureq::Agent {
+fn install_arguments(then: Then) -> Vec<&'static str> {
+    let mut arguments = vec!["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"];
+    if then == Then::Relaunch {
+        arguments.push("/RELAUNCH=1");
+    }
+    arguments
+}
+
+pub(crate) fn agent() -> ureq::Agent {
     ureq::Agent::config_builder()
         .timeout_global(Some(TIMEOUT * 20))
         .timeout_connect(Some(TIMEOUT))
@@ -137,7 +149,7 @@ fn agent() -> ureq::Agent {
 }
 
 /// The body at `url`; `None` if there is nothing there.
-fn fetch_text(agent: &ureq::Agent, url: &str) -> Result<Option<String>, String> {
+pub(crate) fn fetch_text(agent: &ureq::Agent, url: &str) -> Result<Option<String>, String> {
     let mut response = agent
         .get(url)
         .header(
@@ -158,7 +170,7 @@ fn fetch_text(agent: &ureq::Agent, url: &str) -> Result<Option<String>, String> 
     }
 }
 
-fn download(agent: &ureq::Agent, url: &str, to: &Path) -> io::Result<()> {
+pub(crate) fn download(agent: &ureq::Agent, url: &str, to: &Path) -> io::Result<()> {
     let response = agent
         .get(url)
         .header(
@@ -183,7 +195,7 @@ fn download(agent: &ureq::Agent, url: &str, to: &Path) -> io::Result<()> {
     std::fs::rename(&partial, to)
 }
 
-fn hash_of(file: &Path) -> io::Result<String> {
+pub(crate) fn hash_of(file: &Path) -> io::Result<String> {
     let mut file = std::fs::File::open(file)?;
     let mut hasher = Sha256::new();
     let mut buffer = vec![0u8; 1 << 16];
@@ -267,7 +279,7 @@ fn newer(candidate: &str, current: &str) -> bool {
 }
 
 /// The hash `sha256sum` wrote for `name`: `<hex>  <name>`, or `<hex> *<name>`.
-fn expected_hash(sums: &str, name: &str) -> Option<String> {
+pub(crate) fn expected_hash(sums: &str, name: &str) -> Option<String> {
     sums.lines().find_map(|line| {
         let (hash, file) = line.split_once(char::is_whitespace)?;
         (file.trim().trim_start_matches('*') == name).then(|| hash.to_lowercase())
@@ -341,5 +353,18 @@ mod tests {
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
         Ok(())
+    }
+
+    #[test]
+    fn an_update_asked_for_now_starts_the_app_again_and_one_at_quitting_does_not() {
+        let now = install_arguments(Then::Relaunch);
+        let quitting = install_arguments(Then::StayClosed);
+        assert!(now.contains(&"/RELAUNCH=1"));
+        assert!(!quitting.contains(&"/RELAUNCH=1"));
+        // Neither shows a window or asks a question.
+        for arguments in [now, quitting] {
+            assert!(arguments.contains(&"/VERYSILENT"));
+            assert!(arguments.contains(&"/SUPPRESSMSGBOXES"));
+        }
     }
 }

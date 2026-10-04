@@ -7,10 +7,11 @@ use std::time::Duration;
 
 use eframe::egui::{self, Align, Align2, Color32, Layout, Margin, Rect, Sense, Ui, pos2, vec2};
 
+use super::widgets::menu::{self, Entry, Menu};
 use super::widgets::{self, ArtShape};
 use super::{drag, format};
 use crate::actions::Action;
-use crate::state::{Playback, State};
+use crate::state::{Page, Playback, State};
 use crate::theme::{self, Icon};
 
 const WIDTH: f32 = 360.0;
@@ -54,6 +55,7 @@ pub fn show(state: &State, ui: &mut Ui, actions: &mut Vec<Action>, most: f32) {
                     }
                 });
             });
+            continue_from_remote(state, ui, actions);
             let playing = state
                 .playback
                 .as_ref()
@@ -73,6 +75,34 @@ pub fn show(state: &State, ui: &mut Ui, actions: &mut Vec<Action>, most: f32) {
     if let Some(tracks) = drag::target(state, ui, &panel.response) {
         actions.push(Action::AddToQueue(tracks));
     }
+}
+
+/// Picks up the queue the account has on another device, the phone or the
+/// website, and plays it here from where that device was. Signed in only:
+/// signed out there is no such queue. Read on the click and never before,
+/// since every read counts against the account's requests.
+fn continue_from_remote(state: &State, ui: &mut Ui, actions: &mut Vec<Action>) {
+    if state.account.is_none() {
+        return;
+    }
+    let reading = state.reading_remote_queue;
+    let label = if reading {
+        "Loading your queue…"
+    } else {
+        "Continue from YouTube Music"
+    };
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        ui.add_space(4.0);
+        ui.add_enabled_ui(!reading, |ui| {
+            let chip = widgets::chip(ui, &state.palette, label, false)
+                .on_hover_text("Replace this queue with the one on your other devices");
+            if chip.clicked() {
+                actions.push(Action::ContinueFromRemote);
+            }
+        });
+    });
+    ui.add_space(4.0);
 }
 
 /// The queue's sections, scrolling as one list in whatever room `ui` has.
@@ -154,7 +184,9 @@ fn row(
     let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_HEIGHT), sense);
     widgets::name(ui, &response, &track.title);
     if place != Place::Playing {
-        response.context_menu(|ui| menu(ui, actions, playback, index, place));
+        menu::context(&response, palette, |list| {
+            menu(list, actions, playback, index, place);
+        });
     }
     if response.drag_started() {
         response.dnd_set_drag_payload(Carried { from: index });
@@ -198,10 +230,17 @@ fn row(
     ui.painter()
         .galley(pos2(left, middle - 18.0), title, title_color);
     let quiet = palette.secondary.gamma_multiply(strength);
-    let font = theme::regular(12.5);
-    let artists = widgets::elided(ui, &track.artist_names(), font, quiet, width, 1);
-    ui.painter()
-        .galley(pos2(left, middle + 1.0), artists, quiet);
+    let artists = widgets::Artists {
+        artists: &track.artists,
+        font: theme::regular(12.5),
+        color: quiet,
+        width,
+    };
+    let id = response.id.with("artists");
+    if let (Some(artist), _) = artists.show(ui, id, pos2(left, middle + 1.0)) {
+        actions.push(Action::Open(Page::Artist(artist)));
+        return;
+    }
 
     let end = pos2(rect.right() - 22.0, middle);
     match place {
@@ -269,15 +308,20 @@ fn row_button(
     clicked
 }
 
-fn menu(ui: &mut Ui, actions: &mut Vec<Action>, playback: &Playback, index: usize, place: Place) {
-    ui.set_min_width(200.0);
+fn menu(
+    menu: &mut Menu<'_>,
+    actions: &mut Vec<Action>,
+    playback: &Playback,
+    index: usize,
+    place: Place,
+) {
     let queue = &playback.session.queue;
-    let mut chosen = None;
-    if ui.button("Play now").clicked() {
-        chosen = Some(Action::JumpTo(index));
+    if menu.item("Play now") {
+        actions.push(Action::JumpTo(index));
     }
-    if ui.button("Play next").clicked() {
-        chosen = Some(match place {
+    let first = place == Place::Upcoming && index == queue.index + 1;
+    if menu.entry(Entry::new("Play next").enabled(!first)) {
+        actions.push(match place {
             // What has played is played again; what is to come is moved up.
             Place::Played => Action::PlayNext(vec![queue.items[index].clone()]),
             Place::Playing | Place::Upcoming => Action::MoveInQueue {
@@ -287,34 +331,27 @@ fn menu(ui: &mut Ui, actions: &mut Vec<Action>, playback: &Playback, index: usiz
         });
     }
     if place == Place::Upcoming {
-        let first = index == queue.index + 1;
         let last = index + 1 == queue.items.len();
-        if ui
-            .add_enabled(!first, egui::Button::new("Move up"))
-            .clicked()
-        {
-            chosen = Some(Action::MoveInQueue {
+        let up = Entry::new("Move up").icon(Icon::ChevronUp).enabled(!first);
+        if menu.entry(up) {
+            actions.push(Action::MoveInQueue {
                 from: index,
                 to: index - 1,
             });
         }
-        if ui
-            .add_enabled(!last, egui::Button::new("Move down"))
-            .clicked()
-        {
-            chosen = Some(Action::MoveInQueue {
+        let down = Entry::new("Move down")
+            .icon(Icon::ChevronDown)
+            .enabled(!last);
+        if menu.entry(down) {
+            actions.push(Action::MoveInQueue {
                 from: index,
                 to: index + 1,
             });
         }
     }
-    ui.separator();
-    if ui.button("Remove from queue").clicked() {
-        chosen = Some(Action::RemoveFromQueue(index));
-    }
-    if let Some(action) = chosen {
-        actions.push(action);
-        ui.close();
+    menu.separator();
+    if menu.item("Remove from queue") {
+        actions.push(Action::RemoveFromQueue(index));
     }
 }
 

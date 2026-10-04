@@ -1,136 +1,230 @@
 //! Keyboard shortcuts.
 //!
-//! The same keys as Spotify's desktop app and Spotifast. Single letters and
-//! Space belong to a text field while one has the focus; the combinations
-//! with Ctrl or Alt work everywhere.
+//! The old app's table, key for key, with the sidebar's and the mini
+//! player's own added. Typing is never intercepted: while a text field has
+//! the caret every shortcut is left to it, so Space in the search field
+//! types a space and does not pause the music. And the keys must match
+//! exactly: Ctrl+Right is the next song and plain Right a seek, and neither
+//! answers to the other.
 
-use eframe::egui::{Context, Key, Modifiers};
+use eframe::egui::{Context, Event, Key, Modifiers};
 
 use crate::actions::Action;
+use crate::state::Page;
 
-const SEEK_STEP_MS: i64 = 10_000;
+const SEEK_STEP_MS: i64 = 5000;
 const VOLUME_STEP: f32 = 0.05;
+/// What a new playlist is called until it is given a name.
+const NEW_PLAYLIST_NAME: &str = "My playlist";
 
-/// One shortcut: the keys, whether typing takes precedence, what it does,
-/// and how the shortcut list describes it.
-pub struct Shortcut {
-    pub modifiers: Modifiers,
-    pub key: Key,
-    /// Left to a text field while one is being typed in.
-    pub yields_to_typing: bool,
-    pub action: fn() -> Action,
-    pub description: &'static str,
+/// What a shortcut is listed under in Settings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Group {
+    Playback,
+    Navigation,
+    Interface,
 }
 
-const fn plain(key: Key, action: fn() -> Action, description: &'static str) -> Shortcut {
-    Shortcut {
-        modifiers: Modifiers::NONE,
-        key,
-        yields_to_typing: true,
-        action,
-        description,
+impl Group {
+    pub const EVERY: [Group; 3] = [Group::Playback, Group::Navigation, Group::Interface];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Group::Playback => "Playback",
+            Group::Navigation => "Navigation",
+            Group::Interface => "Interface",
+        }
     }
 }
 
-const fn held(
+/// One shortcut: the keys, what it does, and how the list in Settings
+/// describes it.
+pub struct Shortcut {
+    pub modifiers: Modifiers,
+    pub key: Key,
+    pub action: fn() -> Action,
+    pub description: &'static str,
+    pub group: Group,
+}
+
+const ALT_SHIFT: Modifiers = Modifiers {
+    alt: true,
+    ctrl: false,
+    shift: true,
+    mac_cmd: false,
+    command: false,
+};
+
+const fn shortcut(
     modifiers: Modifiers,
     key: Key,
-    action: fn() -> Action,
+    group: Group,
     description: &'static str,
+    action: fn() -> Action,
 ) -> Shortcut {
     Shortcut {
         modifiers,
         key,
-        yields_to_typing: false,
         action,
         description,
+        group,
     }
 }
 
-/// Shift with an arrow, which in a text field selects text instead.
-const fn shifted(key: Key, action: fn() -> Action, description: &'static str) -> Shortcut {
-    Shortcut {
-        modifiers: Modifiers::SHIFT,
-        key,
-        yields_to_typing: true,
-        action,
-        description,
-    }
-}
+const NONE: Modifiers = Modifiers::NONE;
+const CTRL: Modifiers = Modifiers::COMMAND;
+const ALT: Modifiers = Modifiers::ALT;
 
 pub const SHORTCUTS: &[Shortcut] = &[
-    plain(Key::Space, || Action::TogglePlay, "Play or pause"),
-    held(
-        Modifiers::COMMAND,
-        Key::ArrowRight,
-        || Action::Next,
-        "Next song",
-    ),
-    held(
-        Modifiers::COMMAND,
+    shortcut(NONE, Key::Space, Group::Playback, "Play / pause", || {
+        Action::TogglePlay
+    }),
+    shortcut(CTRL, Key::ArrowRight, Group::Playback, "Next track", || {
+        Action::Next
+    }),
+    shortcut(
+        CTRL,
         Key::ArrowLeft,
+        Group::Playback,
+        "Previous track",
         || Action::Previous,
-        "Previous song",
     ),
-    shifted(
+    shortcut(
+        NONE,
         Key::ArrowRight,
+        Group::Playback,
+        "Seek forward 5s",
         || Action::SeekBy(SEEK_STEP_MS),
-        "Forward 10 seconds",
     ),
-    shifted(
+    shortcut(
+        NONE,
         Key::ArrowLeft,
+        Group::Playback,
+        "Seek back 5s",
         || Action::SeekBy(-SEEK_STEP_MS),
-        "Back 10 seconds",
     ),
-    held(
-        Modifiers::COMMAND,
-        Key::ArrowUp,
-        || Action::VolumeBy(VOLUME_STEP),
-        "Volume up",
+    shortcut(CTRL, Key::ArrowUp, Group::Playback, "Volume up", || {
+        Action::VolumeBy(VOLUME_STEP)
+    }),
+    shortcut(CTRL, Key::ArrowDown, Group::Playback, "Volume down", || {
+        Action::VolumeBy(-VOLUME_STEP)
+    }),
+    shortcut(NONE, Key::M, Group::Playback, "Mute", || Action::ToggleMute),
+    shortcut(NONE, Key::S, Group::Playback, "Shuffle", || {
+        Action::ToggleShuffle
+    }),
+    shortcut(NONE, Key::R, Group::Playback, "Repeat mode", || {
+        Action::CycleRepeat
+    }),
+    shortcut(
+        CTRL,
+        Key::S,
+        Group::Playback,
+        "Save the current track",
+        || Action::SaveCurrent,
     ),
-    held(
-        Modifiers::COMMAND,
-        Key::ArrowDown,
-        || Action::VolumeBy(-VOLUME_STEP),
-        "Volume down",
+    shortcut(CTRL, Key::H, Group::Navigation, "Home", || {
+        Action::Open(Page::Home)
+    }),
+    shortcut(NONE, Key::Slash, Group::Navigation, "Search", || {
+        Action::Open(Page::Search)
+    }),
+    shortcut(CTRL, Key::L, Group::Navigation, "Your library", || {
+        Action::Open(Page::Stats)
+    }),
+    shortcut(ALT, Key::ArrowLeft, Group::Navigation, "Back", || {
+        Action::Back
+    }),
+    shortcut(ALT, Key::ArrowRight, Group::Navigation, "Forward", || {
+        Action::Forward
+    }),
+    shortcut(ALT_SHIFT, Key::H, Group::Navigation, "Home", || {
+        Action::Open(Page::Home)
+    }),
+    shortcut(CTRL, Key::K, Group::Navigation, "Focus search", || {
+        Action::FocusSearch
+    }),
+    shortcut(
+        ALT_SHIFT,
+        Key::L,
+        Group::Navigation,
+        "Your listening",
+        || Action::Open(Page::Stats),
     ),
-    plain(Key::M, || Action::ToggleMute, "Mute"),
-    plain(Key::S, || Action::ToggleShuffle, "Shuffle"),
-    plain(Key::R, || Action::CycleRepeat, "Repeat"),
-    plain(Key::Q, || Action::ToggleQueue, "Queue"),
-    plain(Key::L, || Action::ToggleLyrics, "Lyrics"),
-    held(
-        Modifiers::COMMAND,
+    shortcut(CTRL, Key::Comma, Group::Navigation, "Settings", || {
+        Action::Open(Page::Settings)
+    }),
+    shortcut(NONE, Key::Q, Group::Interface, "Toggle queue", || {
+        Action::ToggleQueue
+    }),
+    shortcut(NONE, Key::L, Group::Interface, "Lyrics", || {
+        Action::ToggleLyrics
+    }),
+    shortcut(
+        NONE,
+        Key::F,
+        Group::Interface,
+        "Now playing, full screen",
+        || Action::ToggleFullscreenPlayer,
+    ),
+    // "M" is mute; "P" for picture-in-picture, which is what it is.
+    shortcut(NONE, Key::P, Group::Interface, "Mini player", || {
+        Action::ToggleMiniPlayer
+    }),
+    shortcut(CTRL, Key::M, Group::Interface, "Mini player", || {
+        Action::ToggleMiniPlayer
+    }),
+    shortcut(CTRL, Key::N, Group::Interface, "New playlist", || {
+        Action::NewPlaylist {
+            name: NEW_PLAYLIST_NAME.to_owned(),
+            track_ids: Vec::new(),
+        }
+    }),
+    shortcut(
+        CTRL,
         Key::B,
+        Group::Interface,
+        "Collapse or widen the sidebar",
         || Action::ToggleSidebar,
-        "Show or hide the sidebar",
-    ),
-    held(
-        Modifiers::COMMAND,
-        Key::M,
-        || Action::ToggleMiniPlayer,
-        "Mini player",
-    ),
-    held(Modifiers::ALT, Key::ArrowLeft, || Action::Back, "Back"),
-    held(
-        Modifiers::ALT,
-        Key::ArrowRight,
-        || Action::Forward,
-        "Forward",
     ),
 ];
 
+/// The shortcut these keys are, if they are one. Ctrl is Cmd on a Mac.
+fn matching(modifiers: Modifiers, key: Key) -> Option<&'static Shortcut> {
+    SHORTCUTS
+        .iter()
+        .find(|shortcut| shortcut.key == key && modifiers.matches_exact(shortcut.modifiers))
+}
+
 pub fn handle(ctx: &Context, actions: &mut Vec<Action>) {
-    let typing = ctx.egui_wants_keyboard_input();
+    // The caret is in a field: every key is the field's.
+    if ctx.egui_wants_keyboard_input() {
+        return;
+    }
+    // A menu is open: the arrows, Enter and Space move through it.
+    if super::widgets::menu::is_open(ctx) {
+        return;
+    }
     ctx.input_mut(|input| {
-        for shortcut in SHORTCUTS {
-            if typing && shortcut.yields_to_typing {
-                continue;
+        input.events.retain(|event| {
+            let Event::Key {
+                key,
+                pressed: true,
+                modifiers,
+                ..
+            } = event
+            else {
+                return true;
+            };
+            match matching(*modifiers, *key) {
+                Some(shortcut) => {
+                    actions.push((shortcut.action)());
+                    // Taken: nothing under the pointer answers it as well.
+                    false
+                }
+                None => true,
             }
-            if input.consume_key(shortcut.modifiers, shortcut.key) {
-                actions.push((shortcut.action)());
-            }
-        }
+        });
     });
 }
 
@@ -153,11 +247,50 @@ mod tests {
     }
 
     #[test]
-    fn letters_and_space_are_left_to_a_text_field() {
-        for shortcut in SHORTCUTS {
-            if shortcut.modifiers == Modifiers::NONE {
-                assert!(shortcut.yields_to_typing, "{}", shortcut.description);
-            }
+    fn keys_must_match_exactly_to_be_a_shortcut() {
+        let does = |modifiers, key| matching(modifiers, key).map(|shortcut| shortcut.description);
+        assert_eq!(does(NONE, Key::ArrowRight), Some("Seek forward 5s"));
+        assert_eq!(does(CTRL, Key::ArrowRight), Some("Next track"));
+        assert_eq!(does(ALT, Key::ArrowRight), Some("Forward"));
+        // Shift with an arrow selects rows; it is nobody's shortcut.
+        assert_eq!(does(Modifiers::SHIFT, Key::ArrowRight), None);
+        assert_eq!(does(NONE, Key::S), Some("Shuffle"));
+        assert_eq!(does(CTRL, Key::S), Some("Save the current track"));
+        assert_eq!(does(ALT_SHIFT, Key::L), Some("Your listening"));
+        assert_eq!(does(ALT, Key::L), None);
+    }
+
+    #[test]
+    fn the_old_apps_table_is_all_here() {
+        let has = |modifiers, key| matching(modifiers, key).is_some();
+        for (modifiers, key) in [
+            (NONE, Key::Space),
+            (CTRL, Key::ArrowRight),
+            (CTRL, Key::ArrowLeft),
+            (NONE, Key::ArrowRight),
+            (NONE, Key::ArrowLeft),
+            (CTRL, Key::ArrowUp),
+            (CTRL, Key::ArrowDown),
+            (NONE, Key::M),
+            (NONE, Key::S),
+            (NONE, Key::R),
+            (CTRL, Key::H),
+            (NONE, Key::Slash),
+            (CTRL, Key::L),
+            (NONE, Key::Q),
+            (CTRL, Key::S),
+            (ALT, Key::ArrowLeft),
+            (ALT, Key::ArrowRight),
+            (ALT_SHIFT, Key::H),
+            (CTRL, Key::K),
+            (ALT_SHIFT, Key::L),
+            (CTRL, Key::Comma),
+            (NONE, Key::L),
+            (NONE, Key::F),
+            (NONE, Key::P),
+            (CTRL, Key::N),
+        ] {
+            assert!(has(modifiers, key), "{modifiers:?} {key:?}");
         }
     }
 }

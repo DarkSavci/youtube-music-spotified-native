@@ -19,6 +19,41 @@ const RING_SECONDS: f32 = 0.25;
 /// 48 kHz: no click on pause or a volume step, no audible lag.
 const GAIN_SLEW: f32 = 0.004;
 
+/// How fast the limiter lets go, per frame: about a tenth of a second at
+/// 48 kHz, slow enough that it is not heard pumping.
+const LIMITER_RELEASE: f32 = 0.0002;
+
+/// Holds boosted audio under full scale.
+///
+/// Volume past 100% multiplies the music beyond what it was mastered to,
+/// and a peak that passes full scale is clipped by the device, which is
+/// heard as distortion. This turns the level down the moment a peak would
+/// pass and lets it back up slowly, so loud passages are flattened rather
+/// than broken. It does nothing to audio that stays under full scale.
+struct Limiter {
+    gain: f32,
+}
+
+impl Limiter {
+    fn apply(&mut self, left: f32, right: f32) -> (f32, f32) {
+        self.gain += (1.0 - self.gain) * LIMITER_RELEASE;
+        // The last of the way is too small a step to be taken; it is given.
+        if self.gain > 0.999 {
+            self.gain = 1.0;
+        }
+        let peak = left.abs().max(right.abs());
+        if peak * self.gain > 1.0 {
+            self.gain = 1.0 / peak;
+        }
+        (left * self.gain, right * self.gain)
+    }
+
+    /// Whether it is holding the level down at the moment.
+    fn at_work(&self) -> bool {
+        self.gain < 1.0
+    }
+}
+
 /// What the engine thread and the device callback share.
 struct Shared {
     /// The gain to move towards, as `f32` bits.
@@ -162,6 +197,7 @@ where
 {
     let channels = usize::from(config.channels);
     let mut gain = 0.0f32;
+    let mut limiter = Limiter { gain: 1.0 };
     let errors = shared.clone();
     let callback = move |data: &mut [T], _: &cpal::OutputCallbackInfo| {
         if shared.flush.swap(false, Ordering::Relaxed) {
@@ -183,6 +219,11 @@ where
                 (0.0, 0.0)
             } else {
                 match (consumer.pop(), consumer.pop()) {
+                    // Only boost can pass full scale, so at an ordinary
+                    // volume the limiter is not in the path at all.
+                    (Ok(left), Ok(right)) if gain > 1.0 || limiter.at_work() => {
+                        limiter.apply(left * gain, right * gain)
+                    }
                     (Ok(left), Ok(right)) => (left * gain, right * gain),
                     _ => (0.0, 0.0),
                 }
@@ -205,4 +246,34 @@ where
     device
         .build_output_stream(config, callback, on_error, None)
         .map_err(|error| format!("the sound device could not be opened: {error}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_boosted_peak_is_held_at_full_scale_and_the_rest_left_alone() {
+        let mut limiter = Limiter { gain: 1.0 };
+        assert_eq!(limiter.apply(0.5, -0.25), (0.5, -0.25));
+        assert!(!limiter.at_work());
+        let (left, right) = limiter.apply(1.6, -0.8);
+        assert!((left - 1.0).abs() < 1e-6);
+        // Both channels come down together, so the picture does not shift.
+        assert!((right + 0.5).abs() < 1e-6);
+        assert!(limiter.at_work());
+    }
+
+    #[test]
+    fn the_level_comes_back_once_the_peaks_have_passed() {
+        let mut limiter = Limiter { gain: 1.0 };
+        limiter.apply(2.0, 2.0);
+        let (soon, _) = limiter.apply(0.5, 0.5);
+        assert!(soon < 0.3);
+        // A second later it has let go.
+        for _ in 0..48_000 {
+            limiter.apply(0.5, 0.5);
+        }
+        assert!(!limiter.at_work());
+    }
 }

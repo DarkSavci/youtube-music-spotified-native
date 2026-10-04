@@ -84,7 +84,10 @@ fn a_mood_tile_opens_that_moods_page() {
 fn an_earlier_search_is_searched_for_again_with_a_click() {
     let mut state = state();
     state.nav.open(Page::Search);
-    state.search.recent = vec!["bonobo".into()];
+    state.search.recent = vec![RecentSearch {
+        query: "bonobo".into(),
+        token: String::new(),
+    }];
     state.surfaces.insert(
         Surface::moods().key(),
         Loadable::Loaded(BrowsePage::default()),
@@ -127,22 +130,26 @@ fn a_shelf_with_more_behind_it_leads_to_the_whole() {
 #[test]
 fn an_artists_page_offers_a_shuffle_of_their_songs() {
     let mut harness = harness(on_artist());
-    harness.get_by_label("Shuffle songs").click();
+    harness.get_by_label("Shuffle Bonobo").click();
     harness.run();
+    // Asked of the artist, not of YouTube's list alone: a list too short
+    // to be worth playing gives way to a shuffle of their own songs.
     assert!(asked(&harness, |action| matches!(
         action,
-        Action::StartMix { seed, origin } if seed.playlist_id == "RDAO1" && origin == "Bonobo"
+        Action::PlayArtist { artist_id, shuffle: true } if artist_id == "ar"
     )));
+    // No radio is offered for an artist YouTube names none for.
+    assert!(harness.query_by_label("Start Bonobo radio").is_none());
 }
 
 #[test]
 fn an_artists_popular_songs_lead_to_all_of_them() {
     let mut harness = harness(on_artist());
-    harness.get_by_label("Show all").click();
+    harness.get_by_label("Show all songs").click();
     harness.run();
     assert!(asked(&harness, |action| matches!(
         action,
-        Action::Open(Page::Playlist(id)) if id == "OLAK"
+        Action::Open(Page::ArtistSongs(id)) if id == "ar"
     )));
 }
 

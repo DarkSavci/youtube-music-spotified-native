@@ -183,7 +183,7 @@ pub fn list(folder: &Path) -> Vec<Custom> {
 }
 
 /// Palettes people know by name, as theme files.
-const PRESETS: [(&str, &str); 6] = [
+const PRESETS: [(&str, &str); 7] = [
     (
         "catppuccin-mocha.json",
         r##"{ "base": "dark", "colors": { "window": "#11111b", "panel": "#1e1e2e", "surface": "#313244", "surface_hover": "#45475a", "surface_active": "#585b70", "outline": "#313244", "text": "#cdd6f4", "secondary": "#a6adc8", "dim": "#6c7086", "accent": "#cba6f7", "accent_hover": "#d9bcfa", "on_accent": "#11111b", "overlay": "#313244" } }"##,
@@ -191,6 +191,12 @@ const PRESETS: [(&str, &str); 6] = [
     (
         "gruvbox.json",
         r##"{ "base": "dark", "colors": { "window": "#1d2021", "panel": "#282828", "surface": "#32302f", "surface_hover": "#3c3836", "surface_active": "#504945", "outline": "#3c3836", "text": "#ebdbb2", "secondary": "#bdae93", "dim": "#928374", "accent": "#b8bb26", "accent_hover": "#c9cc3f", "on_accent": "#1d2021", "overlay": "#3c3836" } }"##,
+    ),
+    // The blue-tinted dark this app wore before it took the Electron app's
+    // greys.
+    (
+        "midnight.json",
+        r##"{ "base": "dark", "colors": { "window": "#090b0d", "panel": "#15181c", "surface": "#1d2127", "surface_hover": "#262b33", "surface_active": "#2f353f", "outline": "#2a3038", "text": "#f2f4f6", "secondary": "#a9b1bc", "dim": "#6e7784", "danger": "#f5717f", "warning": "#f2b85c", "overlay": "#22272e" } }"##,
     ),
     (
         "nord.json",
@@ -260,6 +266,18 @@ mod tests {
         for (file, text) in PRESETS {
             assert!(parse(text).is_some(), "{file}");
         }
+    }
+
+    #[test]
+    fn midnight_keeps_the_blue_tinted_dark_and_the_red() {
+        let (_, text) = PRESETS
+            .iter()
+            .find(|(file, _)| *file == "midnight.json")
+            .expect("the preset");
+        let palette = parse(text).expect("a theme");
+        assert_eq!(palette.panel, Color32::from_rgb(0x15, 0x18, 0x1c));
+        assert_eq!(palette.accent, theme::DARK.accent);
+        assert!(palette.dark);
     }
 
     #[test]

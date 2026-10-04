@@ -2,8 +2,17 @@
 //! name, click it, and see what was asked for.
 
 mod browse;
+mod controls;
+mod desktop;
 mod library;
+mod menus;
+mod migration;
+mod pages;
 mod player;
+mod selection;
+mod shell;
+mod together;
+mod together_room;
 
 use std::time::Instant;
 
@@ -12,14 +21,14 @@ use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use spotified_client::models::{
     Album, Artist, ArtistRef, BrowsePage, Folder, Item, LibraryItem, LibraryKind, MoodChip,
-    Playlist, Podcast, Shelf, Track,
+    Playlist, Podcast, SearchFilter, SearchResults, Shelf, StatKind, Track,
 };
 use spotified_client::session::{PlayState, Queue, SessionState};
 
 use crate::actions::Action;
 use crate::settings::Settings;
 use crate::sidecar::CoreStatus;
-use crate::state::{Loadable, Page, Playback, State, Surface};
+use crate::state::{Loadable, Page, Playback, RecentSearch, State, Surface};
 use crate::theme;
 
 pub(super) struct Fixture {
@@ -89,6 +98,8 @@ pub(super) fn playing(mut state: State) -> State {
         offline: false,
         following_room: false,
         room_ended: None,
+        room_length: None,
+        speed: 1.0,
     });
     state
 }
@@ -153,16 +164,18 @@ pub(super) fn asked(harness: &Harness<'_, Fixture>, wanted: impl Fn(&Action) -> 
 }
 
 #[test]
-pub(super) fn a_double_click_plays_the_list_from_that_row() {
+pub(super) fn a_double_click_plays_the_playlist_from_that_row() {
     let mut harness = harness(on_playlist());
     // Two clicks, a frame apart, as a hand makes them.
     harness.get_by_label("Second song").click();
     harness.step();
     harness.get_by_label("Second song").click();
     harness.run();
+    // The playlist is named, not its songs: all of it is played, though
+    // only a part may have been read.
     assert!(asked(&harness, |action| matches!(
         action,
-        Action::Play { index: 1, tracks, origin } if tracks.len() == 3 && origin == "Road trip"
+        Action::PlayPlaylist { id, index: 1 } if id == "pl"
     )));
 }
 
@@ -195,7 +208,7 @@ pub(super) fn the_menu_leads_to_the_songs_artist() {
     let mut harness = harness(on_playlist());
     harness.get_by_label("First song").click_secondary();
     harness.run();
-    harness.get_by_label("Go to artist").click();
+    harness.get_by_label("Go to The Artist").click();
     harness.run();
     assert!(asked(&harness, |action| matches!(
         action,
@@ -273,7 +286,7 @@ pub(super) fn the_big_button_plays_the_playlist_from_the_top() {
     harness.run();
     assert!(asked(&harness, |action| matches!(
         action,
-        Action::Play { index: 0, tracks, .. } if tracks.len() == 3
+        Action::PlayPlaylist { id, index: 0 } if id == "pl"
     )));
 }
 
@@ -356,7 +369,7 @@ pub(super) fn the_menu_starts_a_radio_from_a_song() {
     let mut harness = harness(on_playlist());
     harness.get_by_label("Second song").click_secondary();
     harness.run();
-    harness.get_by_label("Start radio").click();
+    harness.get_by_label("Go to song radio").click();
     harness.run();
     assert!(asked(&harness, |action| matches!(
         action,
@@ -416,9 +429,7 @@ fn the_pointer_is_a_hand_over_what_can_be_clicked() {
 #[test]
 fn the_pointer_is_a_text_cursor_over_the_search_field() {
     let mut harness = harness(state());
-    harness
-        .get_by_role(eframe::egui::accesskit::Role::TextInput)
-        .hover();
+    harness.get_by_label("Search music").hover();
     harness.run();
     assert_eq!(
         harness.output().platform_output.cursor_icon,
@@ -438,35 +449,29 @@ fn the_search_field_leads_to_browse_all() {
 }
 
 #[test]
-fn the_account_menu_leads_to_its_pages_and_to_signing_in() {
-    let mut harness = harness(state());
-    harness.get_by_label("Account").click();
-    harness.run();
-    harness.get_by_label("Recently played").click();
-    harness.run();
-    assert!(asked(&harness, |action| matches!(
-        action,
-        Action::Open(Page::History)
-    )));
-    harness.get_by_label("Account").click();
-    harness.run();
-    // Signed out, the menu's last entry signs in. The sidebar offers the
-    // same, so the menu's is the one that is not a pill.
-    assert!(harness.query_all_by_label("Sign in").count() >= 2);
-}
+fn a_narrow_window_narrows_the_sidebar_before_it_squeezes_the_page() {
+    use super::Side;
 
-#[test]
-fn a_narrow_window_puts_the_sidebar_by_before_it_squeezes_the_page() {
     // Wide: everything fits.
-    let wide = super::Room::share(1400.0, true, true, 280.0);
-    assert!(wide.sidebar);
+    let wide = super::Room::share(1400.0, false, true, 280.0);
+    assert_eq!(wide.sidebar, Side::Full);
     assert_eq!(wide.right_most, 1400.0 - 420.0 - 280.0);
-    // At the window's least width with a panel open, the sidebar goes.
-    let narrow = super::Room::share(760.0, true, true, 280.0);
-    assert!(!narrow.sidebar);
-    assert_eq!(narrow.right_most, 340.0);
+    // Narrower, with a panel open, the sidebar is a rail of covers.
+    let narrow = super::Room::share(900.0, false, true, 280.0);
+    assert_eq!(narrow.sidebar, Side::Rail);
+    assert_eq!(narrow.right_most, 900.0 - 420.0 - theme::SIDEBAR_RAIL_WIDTH);
+    // At the window's least width there is no room even for that.
+    let least = super::Room::share(760.0, false, true, 280.0);
+    assert_eq!(least.sidebar, Side::Away);
+    assert_eq!(least.right_most, 340.0);
     // With no panel open the same window keeps its sidebar.
-    assert!(super::Room::share(760.0, true, false, 280.0).sidebar);
-    // And a sidebar that was put by on purpose stays by.
-    assert!(!super::Room::share(1400.0, false, false, 280.0).sidebar);
+    assert_eq!(
+        super::Room::share(760.0, false, false, 280.0).sidebar,
+        Side::Full
+    );
+    // And a sidebar that was collapsed on purpose stays a rail.
+    assert_eq!(
+        super::Room::share(1400.0, true, false, 280.0).sidebar,
+        Side::Rail
+    );
 }

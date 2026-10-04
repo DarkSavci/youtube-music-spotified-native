@@ -128,11 +128,19 @@ type subtitleMeta struct {
 // vary.
 func parseSubtitleRuns(runs []Node) subtitleMeta {
 	var out subtitleMeta
+	// joined says the run before was an artist and an "&" or a "," has come
+	// since: what follows is the next of the artists, linked or not.
+	wasArtist, joined := false, false
 	for _, r := range runs {
 		text := r.Str("text")
 		if text == "" || isSeparator(text) {
+			joined = wasArtist && joinsArtists(text)
+			wasArtist = false
 			continue
 		}
+		afterJoin := joined
+		artistsBefore := len(out.artists)
+		joined = false
 		nav := r.Child("navigationEndpoint")
 		browseID := ""
 		pageType := ""
@@ -155,16 +163,25 @@ func parseSubtitleRuns(runs []Node) subtitleMeta {
 		case reDuration.MatchString(text):
 			out.durationMs = DurationMs(text)
 
-		case browseID == "" && out.durationMs == 0 && len(out.artists) == 0:
-			// An unlinked leading run is an artist YouTube has no page for.
-			// Only treat it as such before any linked artist is seen, so that
-			// trailing metadata ("2.1M plays", "2013") is not misread.
+		case browseID == "" && out.durationMs == 0 && (len(out.artists) == 0 || afterJoin):
+			// An unlinked leading run is an artist YouTube has no page for,
+			// and so is one joined to an artist by "&" or ",": the second of
+			// two is as much the song's as the first. Anything else unlinked
+			// after an artist is trailing metadata ("2.1M plays", "2013").
 			if !looksLikeMetadata(text) {
 				out.artists = append(out.artists, domain.ArtistRef{Name: text})
 			}
 		}
+		wasArtist = len(out.artists) > artistsBefore
 	}
 	return out
+}
+
+// joinsArtists reports whether a separator sits between two artists, as
+// against between the artists and what follows them ("•").
+func joinsArtists(s string) bool {
+	t := strings.TrimSpace(s)
+	return t == "&" || t == ","
 }
 
 func isSeparator(s string) bool {

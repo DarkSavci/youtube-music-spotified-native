@@ -5,26 +5,35 @@
 //! core, a timer) is returned as an [`Effect`] for the app to run. That
 //! keeps every rule here testable without a window.
 
+mod account;
+mod desktop;
 mod library;
+mod listening;
 mod loading;
+mod migration;
+mod paging;
 mod playback;
+mod preferences;
+mod songs;
 mod together;
 mod types;
 
+pub use account::busy as account_busy;
 pub use types::{Action, Effect};
 
-use std::time::Instant;
-
-use spotified_audio::eq::RANGE_DB as EQ_RANGE_DB;
 use spotified_client::session::Command;
 
 use crate::backend::Request;
 use crate::settings::RightPanel;
-use crate::state::{Dialog, Loadable, MiniOpened, MiniPanel, Page, Playback, State};
+use crate::share;
+use crate::sidecar::CoreStatus;
+use crate::state::{Dialog, Loadable, MiniOpened, MiniPanel, Page, State, Whole};
 use crate::theme;
 use crate::update;
 use library::organise;
-use loading::{load_current_page, play_collection, run_new_search, run_search, store};
+use listening::listening;
+use loading::{choose_mood, load_current_page, play_collection, run_new_search, run_search, store};
+use paging::paging;
 use playback::{control, enqueue, want_lyrics};
 
 /// How many browse tiles have their pictures fetched at the same time.
@@ -33,22 +42,44 @@ const TILE_ART_AT_ONCE: usize = 2;
 /// The longest crossfade on offer.
 pub const MAX_CROSSFADE_SECONDS: u32 = 12;
 
+/// A page has just been opened: what belonged to the last one goes, and
+/// what this one shows is asked for.
+fn arrived(state: &mut State) -> Vec<Effect> {
+    state.selection.clear();
+    // The library, given the page's room, hands it back to the page.
+    state.library_expanded = false;
+    state.about_expanded = false;
+    load_current_page(state)
+}
+
 pub fn apply(state: &mut State, action: Action) -> Vec<Effect> {
+    // Something else was asked to play while a playlist was being read to
+    // its end: that playlist must not take over when it is.
+    if matches!(
+        action,
+        Action::Play { .. }
+            | Action::PlayCollection(_)
+            | Action::PlayArtist { .. }
+            | Action::StartRadio(_)
+            | Action::StartMix { .. }
+            | Action::ContinueFromRemote
+    ) {
+        state
+            .preparing_playlist
+            .take_if(|(_, then)| matches!(then, Whole::Play(_)));
+    }
     match action {
         Action::Open(page) => {
             state.nav.open(page);
-            state.selection.clear();
-            load_current_page(state)
+            arrived(state)
         }
         Action::Back => {
             state.nav.back();
-            state.selection.clear();
-            load_current_page(state)
+            arrived(state)
         }
         Action::Forward => {
             state.nav.forward();
-            state.selection.clear();
-            load_current_page(state)
+            arrived(state)
         }
         Action::Select { list, row, how } => {
             state.selection.click(list, row, how);
@@ -71,10 +102,6 @@ pub fn apply(state: &mut State, action: Action) -> Vec<Effect> {
             state.selection.clear();
             Vec::new()
         }
-        Action::ToggleSidebar => {
-            state.settings.sidebar_visible = !state.settings.sidebar_visible;
-            vec![Effect::SaveSettings]
-        }
         Action::ResizeSidebar(width) => {
             let width = width
                 .clamp(theme::SIDEBAR_MIN_WIDTH, theme::SIDEBAR_MAX_WIDTH)
@@ -85,18 +112,28 @@ pub fn apply(state: &mut State, action: Action) -> Vec<Effect> {
             state.settings.sidebar_width = width;
             vec![Effect::SaveSettings]
         }
-        Action::FilterLibrary(kind) => {
-            state.library_filter = (state.library_filter != Some(kind)).then_some(kind);
+        Action::ChooseMood(params) => choose_mood(state, params),
+        Action::HoldScroll(offset) => {
+            state.held_scroll = Some(offset.max(0.0));
             Vec::new()
         }
-        Action::SetLibraryQuery(query) => {
-            state.library_query = query;
-            Vec::new()
-        }
-        Action::CycleLibrarySort => {
-            state.settings.library_sort = state.settings.library_sort.next();
-            vec![Effect::SaveSettings]
-        }
+        Action::MoreHome { .. }
+        | Action::MorePlaylist { .. }
+        | Action::PlayPlaylist { .. }
+        | Action::WholePlaylist { .. }
+        | Action::PlayArtist { .. }
+        | Action::ContinueFromRemote => paging(state, action),
+        Action::SetSongOrder(_) | Action::OpenMoreReleases => songs::songs(state, action),
+        Action::SetStatsLookup(_)
+        | Action::RunStatsLookup
+        | Action::CloseStatsLookup
+        | Action::OpenStat { .. }
+        | Action::CloseStat
+        | Action::WantArtistPhoto(_)
+        | Action::ForgetSearch(_)
+        | Action::ClearSearches
+        | Action::ToggleAbout
+        | Action::ShowWhatsNew => listening(state, action),
         Action::SetSearchQuery(query) => {
             let has_query = !query.trim().is_empty();
             state.search.query = query;
@@ -108,6 +145,7 @@ pub fn apply(state: &mut State, action: Action) -> Vec<Effect> {
             }
             // Typing a query is a wish to see results, as in Spotify.
             state.nav.open(Page::Search);
+            state.library_expanded = false;
             vec![Effect::DebounceSearch]
         }
         Action::RunSearch => run_new_search(state),
@@ -116,7 +154,7 @@ pub fn apply(state: &mut State, action: Action) -> Vec<Effect> {
             state.search.results = Loadable::NotLoaded;
             state.search.suggestions.clear();
             state.nav.open(Page::Search);
-            load_current_page(state)
+            arrived(state)
         }
         Action::WantTileArt(id, params) => {
             // Each picture costs a request to YouTube, so they are fetched
@@ -132,19 +170,23 @@ pub fn apply(state: &mut State, action: Action) -> Vec<Effect> {
         Action::Search(query) => {
             state.search.query = query;
             state.nav.open(Page::Search);
+            state.library_expanded = false;
             run_new_search(state)
         }
-        Action::StartRadio(track) => vec![Effect::Fetch(Request::StartRadio {
-            device_id: state.settings.device_id.clone(),
-            track: Box::new(track),
-        })],
+        Action::StartRadio(track) => playback::start_radio(state, track),
         Action::StartMix { seed, origin } => vec![Effect::Fetch(Request::StartMix {
             device_id: state.settings.device_id.clone(),
             seed,
             origin,
         })],
         Action::ClearCache => vec![Effect::Fetch(Request::ClearCache)],
-        Action::SetPinned { .. }
+        Action::ToggleSidebar
+        | Action::ToggleLibraryExpanded
+        | Action::ToggleLibraryGrid
+        | Action::FilterLibrary(_)
+        | Action::SetLibraryQuery(_)
+        | Action::SetLibrarySort(_)
+        | Action::SetPinned { .. }
         | Action::MoveToFolder { .. }
         | Action::NewFolder
         | Action::DeleteFolder(_)
@@ -159,6 +201,11 @@ pub fn apply(state: &mut State, action: Action) -> Vec<Effect> {
             run_search(state)
         }
         Action::CoreChanged(status) => {
+            // A core that goes away while in use takes playback and every
+            // page with it; saying so beats letting each request fail.
+            if let (true, CoreStatus::Failed(message)) = (state.core_ready(), &status) {
+                state.toast_error(message.clone());
+            }
             state.core = status;
             if !state.core_ready() {
                 return Vec::new();
@@ -218,11 +265,8 @@ pub fn apply(state: &mut State, action: Action) -> Vec<Effect> {
             playlist_title,
             track_ids,
         })],
-        Action::NewPlaylist { track_ids } => {
-            state.dialog = Some(Dialog::NewPlaylist {
-                name: String::new(),
-                track_ids,
-            });
+        Action::NewPlaylist { name, track_ids } => {
+            state.dialog = Some(Dialog::NewPlaylist { name, track_ids });
             Vec::new()
         }
         Action::AskDeletePlaylist { playlist_id, title } => {
@@ -230,17 +274,20 @@ pub fn apply(state: &mut State, action: Action) -> Vec<Effect> {
             Vec::new()
         }
         Action::SetDialogText(text) => {
-            if let Some(Dialog::NewPlaylist { name, .. } | Dialog::NewFolder { name }) =
-                &mut state.dialog
+            if let Some(
+                Dialog::NewPlaylist { name, .. }
+                | Dialog::NewFolder { name }
+                | Dialog::SaveRoomHistory { name, .. },
+            ) = &mut state.dialog
             {
                 *name = text;
             }
             Vec::new()
         }
-        Action::CloseDialog => {
-            state.dialog = None;
-            Vec::new()
-        }
+        Action::CloseDialog => match state.dialog.take() {
+            Some(Dialog::Migration) => vec![Effect::MigrationSeen],
+            _ => Vec::new(),
+        },
         Action::ConfirmDialog => match state.dialog.take() {
             Some(Dialog::NewPlaylist { name, track_ids }) if !name.trim().is_empty() => {
                 vec![Effect::Fetch(Request::CreatePlaylist {
@@ -256,6 +303,14 @@ pub fn apply(state: &mut State, action: Action) -> Vec<Effect> {
             }
             Some(Dialog::NewFolder { name }) if !name.trim().is_empty() => {
                 vec![Effect::Fetch(Request::CreateFolder(name.trim().to_owned()))]
+            }
+            Some(
+                dialog @ (Dialog::RemoveServer { .. }
+                | Dialog::RemoveListener { .. }
+                | Dialog::SaveRoomHistory { .. }),
+            ) => together::confirmed(state, dialog),
+            Some(dialog @ (Dialog::SignOut | Dialog::RemoveAccount { .. })) => {
+                account::confirmed(state, dialog)
             }
             // Nothing typed yet: the dialog stays for a name.
             unnamed => {
@@ -284,27 +339,13 @@ pub fn apply(state: &mut State, action: Action) -> Vec<Effect> {
             state.toast("Link copied");
             vec![Effect::CopyToClipboard(link)]
         }
+        Action::Share { kind, id } => {
+            state.toast(format!("{} link copied to clipboard", kind.noun()));
+            vec![Effect::CopyToClipboard(share::url(kind, &id))]
+        }
         Action::ToggleQueue => {
             state.settings.panel = state.settings.panel.toggled(RightPanel::Queue);
             vec![Effect::SaveSettings]
-        }
-        Action::SetEqualizerOn(on) => {
-            state.settings.equalizer_on = on;
-            vec![Effect::SaveSettings, Effect::ApplyAudioSettings]
-        }
-        Action::SetEqualizerBand(band, decibels) => {
-            let Some(gain) = state.settings.equalizer.get_mut(band) else {
-                return Vec::new();
-            };
-            *gain = decibels.clamp(-EQ_RANGE_DB, EQ_RANGE_DB);
-            // Moving a slider is a wish to hear it.
-            state.settings.equalizer_on = true;
-            vec![Effect::SaveSettings, Effect::ApplyAudioSettings]
-        }
-        Action::SetEqualizer(gains) => {
-            state.settings.equalizer = gains;
-            state.settings.equalizer_on = true;
-            vec![Effect::SaveSettings, Effect::ApplyAudioSettings]
         }
         Action::SetStartAtLogin(on) => {
             state.starts_at_login = on;
@@ -330,18 +371,24 @@ pub fn apply(state: &mut State, action: Action) -> Vec<Effect> {
         }
         Action::OpenThemesFolder => vec![Effect::OpenThemesFolder],
         Action::ReloadThemes => vec![Effect::ReloadThemes],
-        Action::SetVisualizer(on) => {
-            state.settings.visualizer = on;
-            vec![Effect::SaveSettings, Effect::ApplyAudioSettings]
-        }
-        Action::SetCrossfade(seconds) => {
-            state.settings.crossfade_seconds = seconds.min(MAX_CROSSFADE_SECONDS);
-            vec![Effect::SaveSettings, Effect::ApplyAudioSettings]
-        }
-        Action::SetNormaliseVolume(on) => {
-            state.settings.normalise_volume = on;
-            vec![Effect::SaveSettings, Effect::ApplyAudioSettings]
-        }
+        Action::SetEqualizerOn(_)
+        | Action::SetEqualizerBand(..)
+        | Action::SetEqualizer(_)
+        | Action::SetVisualizer(_)
+        | Action::SetCrossfade(_)
+        | Action::SetNormaliseVolume(_)
+        | Action::SetVolumeLevel(_)
+        | Action::SetVolumeBoost(_)
+        | Action::SetGapless(_)
+        | Action::SetAutoplay(_)
+        | Action::SetResumeOnLaunch(_)
+        | Action::SetContinueFromYouTubeMusic(_)
+        | Action::SetReportToYouTube(_)
+        | Action::SetCacheSize(_)
+        | Action::SetReduceMotion(_)
+        | Action::ToggleRemainingTime
+        | Action::SetSpeed(_)
+        | Action::ResetPreferences => preferences::preferences(state, action),
         Action::ToggleMiniPlayer => {
             state.mini_player = !state.mini_player;
             if state.mini_player {
@@ -374,12 +421,52 @@ pub fn apply(state: &mut State, action: Action) -> Vec<Effect> {
             state.settings.mini_size = size;
             Vec::new()
         }
-        Action::ShowMainWindow => vec![Effect::ShowMainWindow],
+        Action::ShowMainWindow
+        | Action::ToggleFlyout { .. }
+        | Action::HideFlyout
+        | Action::SaveReport
+        | Action::ReportSaved(_)
+        | Action::StartAtLoginKnown(_) => desktop::desktop(state, action),
         Action::SetLyricsFullscreen(on) => {
             state.lyrics_fullscreen = on;
-            let mut effects = vec![Effect::SetFullscreen(on)];
+            // The player may be open over them, holding the screen itself.
+            let mut effects = vec![Effect::SetFullscreen(on || state.fullscreen_player)];
             effects.extend(want_lyrics(state));
             effects
+        }
+        Action::SetFullscreenPlayer(_) | Action::ToggleFullscreenPlayer => {
+            playback::fullscreen_player(state, action)
+        }
+        Action::SaveCurrent => {
+            // With nothing playing there is nothing to save, and the key
+            // does nothing.
+            match state
+                .playback
+                .as_ref()
+                .and_then(|playback| playback.current())
+            {
+                Some(track) => apply(state, Action::ToggleLike(track.clone())),
+                None => Vec::new(),
+            }
+        }
+        Action::FocusSearch => {
+            state.search_focus += 1;
+            if state.nav.page() == &Page::Search {
+                return Vec::new();
+            }
+            state.nav.open(Page::Search);
+            arrived(state)
+        }
+        Action::Notify(notice) => {
+            state.notice = Some(notice);
+            Vec::new()
+        }
+        Action::DismissNotice => {
+            if matches!(state.notice, Some(crate::state::Notice::Offline { .. })) {
+                state.offline_dismissed = true;
+            }
+            state.notice = None;
+            Vec::new()
         }
         Action::ToggleLyrics => {
             state.settings.panel = state.settings.panel.toggled(RightPanel::Lyrics);
@@ -396,26 +483,23 @@ pub fn apply(state: &mut State, action: Action) -> Vec<Effect> {
         | Action::ToggleMute
         | Action::ToggleShuffle
         | Action::CycleRepeat => control(state, action),
-        Action::SessionChanged(projection) => {
-            state.playback = Some(Playback {
-                session: projection.state,
-                received: Instant::now(),
-                offline: projection.offline,
-                following_room: projection.following_room,
-                room_ended: projection
-                    .room
-                    .filter(|room| room.ended)
-                    .map(|room| room.entry),
-            });
-            want_lyrics(state)
-        }
-        Action::SwitchChannel(channel_id) => {
-            if channel_id == state.channel_id {
-                return Vec::new();
-            }
-            state.channel_id.clone_from(&channel_id);
-            vec![Effect::SwitchChannel(channel_id)]
-        }
+        Action::SessionChanged(projection) => playback::session_changed(state, *projection),
+        Action::SwitchChannel(_)
+        | Action::SignIn
+        | Action::SignOut
+        | Action::SwitchAccount(_)
+        | Action::AskRemoveAccount(_)
+        | Action::AccountsChanged(_)
+        | Action::RefreshChannels
+        | Action::OpenAccountMenu
+        | Action::AccountChanged
+        | Action::SignInFailed(_) => account::account(state, action),
+        Action::OpenMigration
+        | Action::SetMigrationKind(..)
+        | Action::StartMigration
+        | Action::MigrationFound { .. }
+        | Action::MigrationProgress(_)
+        | Action::MigrationDone(_) => migration::migration(state, action),
         Action::OpenLogs => vec![Effect::OpenLogs],
         Action::UpdateResolver => {
             if state.updating_resolver {
@@ -439,6 +523,7 @@ pub fn apply(state: &mut State, action: Action) -> Vec<Effect> {
         | Action::TogetherLeave
         | Action::TogetherEvent(_)
         | Action::TogetherTick => together::together(state, action),
+        Action::Room(ask) => together::asked(state, ask),
         Action::CopyText { text, said } => {
             state.toast(said);
             vec![Effect::CopyToClipboard(text)]
@@ -451,15 +536,20 @@ pub fn apply(state: &mut State, action: Action) -> Vec<Effect> {
             vec![Effect::CheckForUpdate]
         }
         Action::UpdateChanged(status) => {
+            let mut effects = Vec::new();
             if let update::Status::Ready { version, .. } = &status
                 && state.update != status
             {
+                // It installs by itself when the app is next closed; said
+                // in the window, and by Windows for a window out of sight.
                 state.toast(format!(
-                    "Version {version} is ready. Restart to update, in Settings."
+                    "Version {version} is ready. It installs when you quit, or restart to \
+                     update now, in Settings."
                 ));
+                effects.push(Effect::NotifyUpdate(version.clone()));
             }
             state.update = status;
-            Vec::new()
+            effects
         }
         Action::InstallUpdate => match &state.update {
             update::Status::Ready { installer, .. } => {
@@ -467,30 +557,6 @@ pub fn apply(state: &mut State, action: Action) -> Vec<Effect> {
             }
             _ => Vec::new(),
         },
-        Action::SignIn => {
-            if state.signing_in {
-                return Vec::new();
-            }
-            state.signing_in = true;
-            state.import_error = None;
-            vec![Effect::SignIn]
-        }
-        Action::SignOut => vec![Effect::SignOut],
-        Action::ImportSignIn => match &state.import_source {
-            Some(source) => vec![Effect::ImportSignIn(source.clone())],
-            None => Vec::new(),
-        },
-        Action::AccountChanged => {
-            state.import_error = None;
-            state.signing_in = false;
-            state.forget_account_data();
-            Vec::new()
-        }
-        Action::SignInFailed(message) => {
-            state.signing_in = false;
-            state.import_error = Some(message);
-            Vec::new()
-        }
         Action::Loaded(response) => store(state, *response),
     }
 }

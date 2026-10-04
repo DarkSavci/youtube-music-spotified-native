@@ -8,8 +8,9 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-/// What streaming services have settled on, in LUFS.
-const TARGET_LUFS: f32 = -14.0;
+/// What streaming services have settled on, in LUFS: the level tracks are
+/// brought to unless the listener asks for quieter or louder.
+pub const TARGET_LUFS: f32 = -14.0;
 /// The most a track is turned down. A reading that asks for more is more
 /// likely wrong than the track is that loud.
 const MOST_CUT_DB: f32 = 12.0;
@@ -25,9 +26,9 @@ impl Gain {
         Self(Arc::new(AtomicU32::new(1.0f32.to_bits())))
     }
 
-    /// Unity now, and the track's own gain once the core has answered at
-    /// `url`. Without an answer it stays at unity.
-    pub fn fetch(agent: ureq::Agent, url: String) -> Self {
+    /// Unity now, and the gain that brings the track to `target` LUFS once
+    /// the core has answered at `url`. Without an answer it stays at unity.
+    pub fn fetch(agent: ureq::Agent, url: String, target: f32) -> Self {
         let gain = Self::unity();
         let slot = gain.0.clone();
         let spawned = std::thread::Builder::new()
@@ -39,7 +40,7 @@ impl Gain {
                     .ok()
                     .and_then(|mut response| response.body_mut().read_to_string().ok());
                 if let Some(lufs) = body.as_deref().and_then(loudness_in) {
-                    slot.store(gain_for(lufs).to_bits(), Ordering::Relaxed);
+                    slot.store(gain_for(lufs, target).to_bits(), Ordering::Relaxed);
                 }
             });
         if let Err(error) = spawned {
@@ -70,9 +71,9 @@ pub fn apply(samples: &mut [f32], from: f32, to: f32) -> f32 {
     to
 }
 
-/// The linear gain for a track measured at `lufs`.
-fn gain_for(lufs: f32) -> f32 {
-    let db = (TARGET_LUFS - lufs).clamp(-MOST_CUT_DB, 0.0);
+/// The linear gain that brings a track measured at `lufs` to `target`.
+fn gain_for(lufs: f32, target: f32) -> f32 {
+    let db = (target - lufs).clamp(-MOST_CUT_DB, 0.0);
     10f32.powf(db / 20.0)
 }
 
@@ -102,14 +103,22 @@ mod tests {
     #[test]
     fn a_loud_track_is_turned_down_and_a_quiet_one_left_alone() {
         // Six decibels over the target is half the amplitude.
-        assert!((gain_for(-8.0) - 0.501).abs() < 0.001);
-        assert_eq!(gain_for(-14.0), 1.0);
-        assert_eq!(gain_for(-23.0), 1.0);
+        assert!((gain_for(-8.0, TARGET_LUFS) - 0.501).abs() < 0.001);
+        assert_eq!(gain_for(-14.0, TARGET_LUFS), 1.0);
+        assert_eq!(gain_for(-23.0, TARGET_LUFS), 1.0);
+    }
+
+    #[test]
+    fn a_quieter_target_turns_more_down_and_a_louder_one_less() {
+        assert!(gain_for(-8.0, -19.0) < gain_for(-8.0, TARGET_LUFS));
+        assert!(gain_for(-8.0, -11.0) > gain_for(-8.0, TARGET_LUFS));
+        // One already under the loud target is left as it is.
+        assert_eq!(gain_for(-12.0, -11.0), 1.0);
     }
 
     #[test]
     fn an_implausible_reading_is_held_to_the_limit() {
-        assert!((gain_for(20.0) - 10f32.powf(-12.0 / 20.0)).abs() < 1e-6);
+        assert!((gain_for(20.0, TARGET_LUFS) - 10f32.powf(-12.0 / 20.0)).abs() < 1e-6);
     }
 
     #[test]

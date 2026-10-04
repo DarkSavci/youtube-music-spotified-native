@@ -48,8 +48,12 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; Flags: unchecked
 Source: "..\..\dist\{#Name}\*"; DestDir: "{app}"; Flags: recursesubdirs ignoreversion
 
 [Icons]
-Name: "{group}\{#Title}"; Filename: "{app}\{#Exe}"
-Name: "{userdesktop}\{#Title}"; Filename: "{app}\{#Exe}"; Tasks: desktopicon
+; The shortcuts carry the application id the app claims when it starts
+; (crates/app/src/platform/identity.rs): a window is then grouped with the
+; shortcut it was started from, a pinned shortcut stays one button, and
+; notifications are filed under the app's name.
+Name: "{group}\{#Title}"; Filename: "{app}\{#Exe}"; AppUserModelID: "dev.darksavci.youtubemusicspotified.native"
+Name: "{userdesktop}\{#Title}"; Filename: "{app}\{#Exe}"; AppUserModelID: "dev.darksavci.youtubemusicspotified.native"; Tasks: desktopicon
 
 [Run]
 Filename: "{app}\{#Exe}"; Description: "{cm:LaunchProgram,{#Title}}"; Flags: nowait postinstall skipifsilent

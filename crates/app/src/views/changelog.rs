@@ -14,15 +14,24 @@ pub fn show(state: &State, ui: &mut Ui) {
     pages::title(ui, "What's new", 30.0);
     // No wider than reads well, and never wider than there is room for.
     ui.set_max_width(MAX_WIDTH.min(ui.available_width()));
+    releases(state, ui, usize::MAX);
+}
+
+/// The notes of the newest releases, at most `most` of them.
+pub fn releases(state: &State, ui: &mut Ui, most: usize) {
     let releases = changelog::releases();
     if releases.is_empty() {
         let text = "This build came without its notes.";
         widgets::empty_state(ui, &state.palette, Icon::Clock, "No release notes", text);
         return;
     }
-    for entry in releases {
-        release(state, ui, entry);
-    }
+    // Notes are read, and quoted: their text can be selected and copied.
+    ui.scope(|ui| {
+        widgets::selectable(ui);
+        for entry in releases.iter().take(most) {
+            release(state, ui, entry);
+        }
+    });
 }
 
 fn release(state: &State, ui: &mut Ui, release: &Release) {

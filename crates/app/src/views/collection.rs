@@ -1,132 +1,106 @@
-//! Album, playlist and artist pages: a hero, then what it holds.
+//! Album, playlist, artist, podcast and mix pages: a hero, a row of
+//! buttons, then what the page holds.
 
-use eframe::egui::{self, Rect, Sense, Ui, pos2, vec2};
-use spotified_client::models::{
-    Album, Artist, Artwork, BrowseLink, MixSeed, Playlist, Podcast, Track, join_names,
-};
+mod about;
+mod artist;
+mod hero;
+pub mod songs;
 
-use super::format::{self, bulleted};
-use super::pages::loaded;
+use eframe::egui::{self, Rect, Sense, Ui, vec2};
+use spotified_client::models::{Album, Artwork, Playlist, Podcast};
+
+use super::actions_menu::Entity;
+use super::pages::{Skeleton, loaded_or};
 use super::widgets::{self, ArtShape};
-use super::{cards, tracks};
+use super::{browse, format, page_card, tracks};
 use crate::actions::Action;
-use crate::state::{Loadable, Page, State, Surface};
+use crate::share;
+use crate::state::{Loadable, Page, State};
 use crate::theme::{self, Icon};
+use hero::{Hero, Part, Plays};
 
-const COVER: f32 = 212.0;
-const PLAY_BUTTON: f32 = 56.0;
-const COVER_NARROW: f32 = 160.0;
-/// At this page width and below, the cover and title shrink.
-const NARROW_PAGE: f32 = 720.0;
-const TITLE_SIZES: std::ops::RangeInclusive<u8> = 22..=56;
-/// How many of an artist's top songs show under "Popular".
-const POPULAR: usize = 5;
-/// A biography or a show's notes are read as a column, not across the window.
-const ABOUT_WIDTH: f32 = 680.0;
+pub use artist::artist;
+
+/// What stands in for a page of songs while it loads.
+const LOADING: Skeleton = Skeleton::Tracks(8);
+/// How near the end of the songs read so far must come to the bottom of
+/// the page before the next are asked for.
+const MORE_AHEAD: f32 = 600.0;
 
 /// The tint for the open page, from its hero's cover.
-pub fn page_tint(state: &State, ui: &Ui) -> Option<egui::Color32> {
-    let art = match state.nav.page() {
-        Page::Album(id) => &loaded_page(state.albums.get(id))?.artwork,
-        Page::Playlist(id) => &loaded_page(state.playlists.get(id))?.artwork,
-        Page::Artist(id) => &loaded_page(state.artists.get(id))?.artwork,
-        Page::Podcast(id) => &loaded_page(state.podcasts.get(id))?.artwork,
-        // A mix has no cover of its own; its first song's stands in.
-        Page::Mix(id) => {
-            let mix = state.mixes.iter().find(|mix| &mix.id == id)?;
-            &mix.tracks.first()?.artwork
-        }
-        Page::Home
-        | Page::Search
-        | Page::Settings
-        | Page::Stats
-        | Page::Browse(_)
-        | Page::History
-        | Page::Changelog
-        | Page::Together => return None,
-    };
+fn page_tint(state: &State, ui: &Ui, art: &[Artwork]) -> Option<egui::Color32> {
     // The hero draws its cover at one of two sizes; the tint is of
     // whichever is on screen.
-    [COVER, COVER_NARROW]
+    [hero::COVER, hero::COVER_NARROW]
         .into_iter()
         .find_map(|width| widgets::artwork_tint(ui, state, art, width))
 }
 
-fn loaded_page<T>(page: &Loadable<T>) -> Option<&T> {
-    match page {
-        Loadable::Loaded(page) => Some(page),
-        _ => None,
-    }
+fn songs_and_length(count: usize, length: String) -> [Part; 2] {
+    [Part::plain(format::songs(count)), Part::plain(length)]
 }
 
-struct Hero<'a> {
-    art: &'a [Artwork],
-    shape: ArtShape,
-    placeholder: Icon,
-    kind: &'a str,
-    title: &'a str,
-    byline: String,
+/// A track table under a row of buttons that may have stuck to the top of
+/// the page: once the rest is drawn, the buttons are drawn over it, and
+/// the table's header under them, so both stay in sight.
+struct Listing<'a> {
+    entity: Entity<'a>,
+    tint: Option<egui::Color32>,
+    columns: tracks::Columns,
+    editable_playlist: Option<&'a str>,
+    mode: tracks::Mode<'a>,
 }
 
-fn hero(state: &State, ui: &mut Ui, hero: Hero<'_>) {
-    let palette = &state.palette;
-    let narrow = ui.available_width() <= NARROW_PAGE;
-    let cover = if narrow { COVER_NARROW } else { COVER };
-    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), cover), Sense::hover());
-    let image = Rect::from_min_size(rect.min, vec2(cover, cover));
-    widgets::artwork(ui, state, hero.art, image, hero.shape, hero.placeholder);
-
-    let left = image.right() + 24.0;
-    let width = (rect.right() - left).max(80.0);
-    // The largest size at which the title fits on one line; a title too
-    // long even for the smallest is cut there.
-    let largest = if narrow { 40 } else { *TITLE_SIZES.end() };
-    let title = (*TITLE_SIZES.start()..=largest)
-        .rev()
-        .step_by(6)
-        .map(|size| {
-            let font = theme::bold(f32::from(size));
-            ui.painter()
-                .layout_no_wrap(hero.title.to_owned(), font, palette.text)
-        })
-        .find(|galley| galley.size().x <= width)
-        .unwrap_or_else(|| {
-            let font = theme::bold(f32::from(*TITLE_SIZES.start()));
-            widgets::elided(ui, hero.title, font, palette.text, width, 1)
-        });
-
-    // Stacked upwards from the cover's bottom edge: byline, title, kind.
-    let byline_top = rect.bottom() - 20.0;
-    let title_top = byline_top - 8.0 - title.size().y;
-    let byline = widgets::elided(
-        ui,
-        &hero.byline,
-        theme::regular(13.5),
-        palette.secondary,
-        width,
-        1,
-    );
-    ui.painter()
-        .galley(pos2(left, byline_top), byline, palette.secondary);
-    ui.painter()
-        .galley(pos2(left, title_top), title, palette.text);
-    widgets::text_at(
-        ui,
-        pos2(left, title_top - 4.0),
-        egui::Align2::LEFT_BOTTOM,
-        hero.kind,
-        theme::medium(12.5),
-        palette.text,
-    );
-    ui.add_space(20.0);
-}
-
-/// YouTube gives the subscriber count as a bare number ("7.17M").
-fn subscribers(count: &str) -> String {
-    if count.is_empty() || count.contains(' ') {
-        count.to_owned()
-    } else {
-        format!("{count} subscribers")
+impl Listing<'_> {
+    /// `after` draws what the page holds below its songs. It is drawn
+    /// before the stuck buttons, which must lie over all of the page.
+    fn show(
+        &self,
+        state: &State,
+        ui: &mut Ui,
+        actions: &mut Vec<Action>,
+        empty: (&str, &str),
+        after: impl FnOnce(&mut Ui, &mut Vec<Action>),
+    ) {
+        let bar = hero::actions(state, ui, actions, &self.entity);
+        let mut header = None;
+        if self.entity.tracks.is_empty() {
+            let palette = &state.palette;
+            widgets::empty_state(ui, palette, Icon::Music, empty.0, empty.1);
+        } else {
+            let list = tracks::List {
+                tracks: self.entity.tracks,
+                origin: self.entity.title,
+                editable_playlist: self.editable_playlist,
+                columns: self.columns,
+                mode: self.mode,
+            };
+            let table = tracks::table(state, ui, actions, list);
+            // The table reaches to where the page's content has got to.
+            header = Some((table, ui.cursor().top()));
+        }
+        after(ui, actions);
+        let Some(bar) = bar else {
+            return;
+        };
+        // The header follows the buttons down the page until the table's
+        // last row is about to leave.
+        if let Some((natural, table_bottom)) = header {
+            let pinned_bottom = bar.bottom() + tracks::HEADER_HEIGHT;
+            if natural.top() < bar.bottom() && table_bottom > pinned_bottom {
+                let card = page_card(ui);
+                let across = Rect::from_min_size(
+                    egui::pos2(card.left(), bar.bottom()),
+                    vec2(card.width(), tracks::HEADER_HEIGHT),
+                );
+                ui.interact(across, ui.id().with("stuck-header"), Sense::click());
+                ui.painter().rect_filled(across, 0.0, state.palette.panel);
+                let place = Rect::from_x_y_ranges(natural.x_range(), across.y_range());
+                let last = tracks::last_column(self.entity.tracks);
+                tracks::header(state, ui, place, self.columns, last);
+            }
+        }
+        hero::stuck(state, ui, actions, &self.entity, (bar, self.tint));
     }
 }
 
@@ -141,21 +115,35 @@ pub fn mix(state: &State, ui: &mut Ui, actions: &mut Vec<Action>, id: &str) {
         );
         return;
     };
+    // A mix has no cover of its own; its first song's stands in.
     let cover = mix.tracks.first().map_or(&[][..], |track| &track.artwork);
     let duration: u64 = mix.tracks.iter().map(|track| track.duration_ms).sum();
-    hero(
+    let tint = page_tint(state, ui, cover);
+    let mut byline = vec![Part::plain(mix.description.as_str())];
+    byline.extend(songs_and_length(
+        mix.tracks.len(),
+        format::duration(duration),
+    ));
+    hero::show(
         state,
         ui,
+        actions,
         Hero {
             art: cover,
-            shape: ArtShape::Rounded(theme::RADIUS_ROW),
+            shape: ArtShape::Rounded(4),
             placeholder: Icon::ListMusic,
             kind: "Mix",
             title: &mix.title,
-            byline: bulleted([mix.description.as_str(), &total(mix.tracks.len(), duration)]),
+            avatar: &[],
+            byline,
+            tint,
         },
     );
-    play_button(state, ui, actions, &mix.tracks, &mix.title);
+    ui.add_space(12.0);
+    ui.horizontal(|ui| {
+        hero::play_button(state, ui, actions, Plays::Tracks(&mix.tracks), &mix.title);
+    });
+    ui.add_space(12.0);
     let list = tracks::List {
         tracks: &mix.tracks,
         origin: &mix.title,
@@ -164,85 +152,39 @@ pub fn mix(state: &State, ui: &mut Ui, actions: &mut Vec<Action>, id: &str) {
             cover: true,
             album: true,
         },
+        mode: tracks::Mode::List,
     };
     tracks::table(state, ui, actions, list);
 }
 
-/// The big button under a hero: plays the collection from the top, or
-/// pauses it when it is what is playing.
-fn play_button(
-    state: &State,
-    ui: &mut Ui,
-    actions: &mut Vec<Action>,
-    tracks: &[Track],
-    origin: &str,
-) {
-    let Some(first) = tracks.iter().position(|track| track.playable) else {
-        return;
-    };
-    let palette = &state.palette;
-    let playing_this = state.playback.as_ref().is_some_and(|playback| {
-        playback.wants_to_play() && playback.session.queue.origin == origin
-    });
-    let (rect, response) = ui.allocate_exact_size(vec2(PLAY_BUTTON, PLAY_BUTTON), Sense::click());
-    let label = if playing_this {
-        "Pause".to_owned()
-    } else {
-        format!("Play {origin}")
-    };
-    widgets::name(ui, &response, &label);
-    let lift = widgets::hover(ui, &response);
-    let fill = crate::tint::blend(palette.accent, palette.accent_hover, lift);
-    // It swells a little under the pointer and gives when pressed.
-    let pressed = if response.is_pointer_button_down_on() {
-        0.95
-    } else {
-        1.0 + 0.05 * lift
-    };
-    ui.painter()
-        .circle_filled(rect.center(), PLAY_BUTTON / 2.0 * pressed, fill);
-    let icon = if playing_this {
-        Icon::PauseFilled
-    } else {
-        Icon::PlayFilled
-    };
-    widgets::paint_icon(ui, icon, rect, 22.0, palette.on_accent);
-    if response.on_hover_text(label).clicked() {
-        actions.push(if playing_this {
-            Action::TogglePlay
-        } else {
-            Action::Play {
-                tracks: tracks.to_vec(),
-                index: first,
-                origin: origin.to_owned(),
-            }
-        });
-    }
-    ui.add_space(12.0);
-}
-
-fn total(count: usize, duration_ms: u64) -> String {
-    if duration_ms == 0 {
-        format::songs(count)
-    } else {
-        format!(
-            "{}, {}",
-            format::songs(count),
-            format::long_duration(duration_ms)
-        )
-    }
-}
-
 pub fn album(state: &State, ui: &mut Ui, actions: &mut Vec<Action>, page: &Loadable<Album>) {
-    loaded(state, ui, page, |ui, album| {
-        let artists = join_names(&album.artists);
+    loaded_or(state, ui, page, LOADING, |ui, album| {
         let count = album.tracks.len().max(album.track_count as usize);
-        hero(
+        let tint = page_tint(state, ui, &album.artwork);
+        // Each artist leads to their page.
+        let mut byline: Vec<Part> = album
+            .artists
+            .iter()
+            .filter(|artist| !artist.name.is_empty())
+            .map(|artist| {
+                let page = (!artist.id.is_empty()).then(|| Page::Artist(artist.id.clone()));
+                Part::strong(artist.name.as_str(), page)
+            })
+            .collect();
+        byline.push(Part::plain(album.year.as_str()));
+        if count > 0 {
+            byline.push(Part::plain(format::songs(count)));
+        }
+        if album.duration_ms > 0 {
+            byline.push(Part::plain(format::release_length(album.duration_ms)));
+        }
+        hero::show(
             state,
             ui,
+            actions,
             Hero {
                 art: &album.artwork,
-                shape: ArtShape::Rounded(theme::RADIUS_ROW),
+                shape: ArtShape::Rounded(4),
                 placeholder: Icon::Music,
                 kind: if album.kind.is_empty() {
                     "Album"
@@ -250,90 +192,133 @@ pub fn album(state: &State, ui: &mut Ui, actions: &mut Vec<Action>, page: &Loada
                     &album.kind
                 },
                 title: &album.title,
-                byline: bulleted([
-                    artists.as_str(),
-                    &album.year,
-                    &total(count, album.duration_ms),
-                ]),
+                avatar: &album.artist_artwork,
+                byline,
+                tint,
             },
         );
-        play_button(state, ui, actions, &album.tracks, &album.title);
-        let columns = tracks::Columns {
-            cover: false,
-            album: false,
-        };
-        let list = tracks::List {
-            tracks: &album.tracks,
-            origin: &album.title,
+        let listing = Listing {
+            entity: Entity {
+                kind: share::Kind::Album,
+                id: &album.id,
+                title: &album.title,
+                tracks: &album.tracks,
+                deletable: false,
+            },
+            tint,
+            columns: tracks::Columns {
+                cover: false,
+                album: false,
+            },
             editable_playlist: None,
-            columns,
+            mode: tracks::Mode::List,
         };
-        tracks::table(state, ui, actions, list);
+        let empty = ("No tracks", "This album returned no playable tracks.");
+        listing.show(state, ui, actions, empty, |ui, actions| {
+            if !album.description.is_empty() {
+                about::show(state, ui, actions, &album.description, "");
+            }
+            // The rows YouTube puts under an album: "Releases for you".
+            browse::shelves(state, ui, actions, &album.shelves, "album");
+        });
     });
 }
 
 pub fn playlist(state: &State, ui: &mut Ui, actions: &mut Vec<Action>, page: &Loadable<Playlist>) {
-    loaded(state, ui, page, |ui, playlist| {
+    loaded_or(state, ui, page, LOADING, |ui, playlist| {
         let count = playlist.tracks.len().max(playlist.track_count as usize);
-        hero(
+        let tint = page_tint(state, ui, &playlist.artwork);
+        let mut byline = vec![
+            Part::strong(playlist.owner.as_str(), None),
+            Part::plain(format::songs(count)),
+        ];
+        if playlist.duration_ms > 0 {
+            byline.push(Part::plain(format::duration(playlist.duration_ms)));
+        }
+        hero::show(
             state,
             ui,
+            actions,
             Hero {
                 art: &playlist.artwork,
-                shape: ArtShape::Rounded(theme::RADIUS_ROW),
+                shape: ArtShape::Rounded(4),
                 placeholder: Icon::ListMusic,
                 kind: "Playlist",
                 title: &playlist.title,
-                byline: bulleted([playlist.owner.as_str(), &total(count, playlist.duration_ms)]),
+                avatar: &[],
+                byline,
+                tint,
             },
         );
-        play_button(state, ui, actions, &playlist.tracks, &playlist.title);
-        if playlist.tracks.is_empty() {
-            widgets::empty_state(
-                ui,
-                &state.palette,
-                Icon::Music,
-                "Nothing here yet",
-                "Added songs appear here.",
-            );
-            return;
-        }
-        let columns = tracks::Columns {
-            cover: true,
-            album: true,
-        };
-        let list = tracks::List {
-            tracks: &playlist.tracks,
-            origin: &playlist.title,
+        let listing = Listing {
+            entity: Entity {
+                kind: share::Kind::Playlist,
+                id: &playlist.id,
+                title: &playlist.title,
+                tracks: &playlist.tracks,
+                deletable: playlist.editable,
+            },
+            tint,
+            columns: tracks::Columns {
+                cover: true,
+                album: true,
+            },
             editable_playlist: playlist.editable.then_some(playlist.id.as_str()),
-            columns,
+            mode: tracks::Mode::Playlist(&playlist.id),
         };
-        tracks::table(state, ui, actions, list);
+        let empty = ("This playlist is empty", "Find something to add to it.");
+        listing.show(state, ui, actions, empty, |ui, actions| {
+            more_songs(state, ui, actions, playlist);
+        });
     });
 }
 
 pub fn podcast(state: &State, ui: &mut Ui, actions: &mut Vec<Action>, page: &Loadable<Podcast>) {
-    loaded(state, ui, page, |ui, podcast| {
+    loaded_or(state, ui, page, LOADING, |ui, podcast| {
         let episodes = match podcast.episodes.len() {
+            0 => String::new(),
             1 => "1 episode".to_owned(),
             count => format!("{count} episodes"),
         };
-        hero(
+        let tint = page_tint(state, ui, &podcast.artwork);
+        hero::show(
             state,
             ui,
+            actions,
             Hero {
                 art: &podcast.artwork,
-                shape: ArtShape::Rounded(theme::RADIUS_ROW),
+                shape: ArtShape::Rounded(4),
                 placeholder: Icon::MicVocal,
                 kind: "Podcast",
                 title: &podcast.title,
-                byline: bulleted([podcast.author.as_str(), &episodes]),
+                avatar: &[],
+                byline: vec![
+                    Part::strong(podcast.author.as_str(), None),
+                    Part::plain(episodes),
+                ],
+                tint,
             },
         );
-        play_button(state, ui, actions, &podcast.episodes, &podcast.title);
+        let entity = Entity {
+            kind: share::Kind::Podcast,
+            id: &podcast.id,
+            title: &podcast.title,
+            tracks: &podcast.episodes,
+            deletable: false,
+        };
+        actions_row(ui, |ui| {
+            let episodes = Plays::Tracks(&podcast.episodes);
+            hero::play_button(state, ui, actions, episodes, &podcast.title);
+            hero::more_button(state, ui, actions, &entity);
+        });
         if !podcast.description.is_empty() {
-            about(state, ui, &podcast.description);
-            ui.add_space(8.0);
+            about::text(state, ui, &podcast.description, false);
+            ui.add_space(16.0);
+        }
+        if podcast.episodes.is_empty() {
+            let text = "This show has no episodes we can read.";
+            widgets::empty_state(ui, &state.palette, Icon::MicVocal, "No episodes", text);
+            return;
         }
         let list = tracks::List {
             tracks: &podcast.episodes,
@@ -343,142 +328,70 @@ pub fn podcast(state: &State, ui: &mut Ui, actions: &mut Vec<Action>, page: &Loa
                 cover: true,
                 album: false,
             },
+            mode: tracks::Mode::List,
         };
         tracks::table(state, ui, actions, list);
     });
 }
 
-/// A paragraph about what the page shows, held to a column.
-fn about(state: &State, ui: &mut Ui, text: &str) {
-    ui.scope(|ui| {
-        ui.set_max_width(ABOUT_WIDTH);
-        ui.label(
-            egui::RichText::new(text)
-                .font(theme::regular(14.0))
-                .color(state.palette.secondary),
-        );
+/// A row of buttons that scrolls with the page: room above, the buttons
+/// with a gap between them, and a little room below.
+fn actions_row(ui: &mut Ui, buttons: impl FnOnce(&mut Ui)) {
+    ui.add_space(24.0);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 16.0;
+        buttons(ui);
     });
+    ui.add_space(12.0);
 }
 
-pub fn artist(state: &State, ui: &mut Ui, actions: &mut Vec<Action>, page: &Loadable<Artist>) {
-    loaded(state, ui, page, |ui, artist| {
-        hero(
-            state,
-            ui,
-            Hero {
-                art: &artist.artwork,
-                shape: ArtShape::Circle,
-                placeholder: Icon::User,
-                kind: "Artist",
-                title: &artist.name,
-                byline: bulleted([
-                    artist.monthly_listeners.as_str(),
-                    &subscribers(&artist.subscribers),
-                ]),
-            },
-        );
-        ui.horizontal(|ui| {
-            play_button(state, ui, actions, &artist.top_tracks, &artist.name);
-            let label = if artist.following {
-                "Following"
-            } else {
-                "Follow"
-            };
-            if widgets::outline_button(ui, &state.palette, label).clicked() {
-                actions.push(Action::ToggleFollow(artist.id.clone()));
+/// The end of a playlist read a page at a time: the next page asked for
+/// as the end of what is here comes near, and a button that says where
+/// that has got to and asks again when it failed.
+fn more_songs(state: &State, ui: &mut Ui, actions: &mut Vec<Action>, playlist: &Playlist) {
+    let palette = &state.palette;
+    let preparing = state
+        .preparing_playlist
+        .as_ref()
+        .is_some_and(|(id, _)| id == &playlist.id);
+    if preparing {
+        ui.add_space(16.0);
+        widgets::loading(ui, palette, "Preparing the full playlist…");
+    }
+    let Some(tail) = state.playlist_tails.get(&playlist.id) else {
+        return;
+    };
+    ui.add_space(24.0);
+    let row = ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 16.0;
+        let label = match (&tail.failed, tail.loading) {
+            (Some(_), _) => "Could not load more songs — retry",
+            (None, true) => "Loading more songs…",
+            (None, false) => "Load more songs",
+        };
+        ui.add_enabled_ui(!tail.loading, |ui| {
+            if widgets::outline_button(ui, palette, label).clicked() {
+                actions.push(Action::MorePlaylist {
+                    id: playlist.id.clone(),
+                    retry: true,
+                });
             }
-            artist_mixes(state, ui, actions, artist);
         });
-        ui.add_space(12.0);
-        if !artist.top_tracks.is_empty() {
-            let all_songs =
-                (!artist.songs_id.is_empty()).then(|| Page::Playlist(artist.songs_id.clone()));
-            cards::linked_title(state, ui, actions, "Popular", all_songs);
-            let shown = &artist.top_tracks[..artist.top_tracks.len().min(POPULAR)];
-            let columns = tracks::Columns {
-                cover: true,
-                album: true,
-            };
-            let list = tracks::List {
-                tracks: shown,
-                origin: &artist.name,
-                editable_playlist: None,
-                columns,
-            };
-            tracks::rows(state, ui, actions, list);
-        }
-        for (title, albums, more) in [
-            ("Albums", &artist.albums, &artist.albums_more),
-            ("Singles and EPs", &artist.singles, &artist.singles_more),
-        ] {
-            if albums.is_empty() {
-                continue;
-            }
-            let whole = more.as_ref().map(|link| discography(artist, title, link));
-            cards::linked_title(state, ui, actions, title, whole);
-            cards::row(ui, (title, &artist.id), |ui| {
-                for album in albums {
-                    cards::album(state, ui, actions, album);
-                }
-            });
-        }
-        if !artist.related.is_empty() {
-            cards::shelf(ui, "Fans also like", ("related", &artist.id), |ui| {
-                for related in &artist.related {
-                    cards::artist(state, ui, actions, related);
-                }
-            });
-        }
-        if !artist.description.is_empty() {
-            cards::section_title(ui, "About");
-            about(state, ui, &artist.description);
-        }
+        let loaded = format!("{} songs loaded", playlist.tracks.len());
+        ui.label(
+            egui::RichText::new(loaded)
+                .font(theme::regular(14.0))
+                .color(palette.secondary),
+        );
     });
-}
-
-/// The whole of an artist's albums, or of their singles.
-fn discography(artist: &Artist, title: &str, link: &BrowseLink) -> Page {
-    Page::Browse(Surface {
-        id: link.id.clone(),
-        params: link.params.clone(),
-        title: format!("{} — {title}", artist.name),
-    })
-}
-
-/// The queues YouTube makes of an artist: a shuffle of their own songs, and
-/// a radio of theirs and others like them. Each is offered only when
-/// YouTube names both the list and the song it starts from.
-fn artist_mixes(state: &State, ui: &mut Ui, actions: &mut Vec<Action>, artist: &Artist) {
-    let radio = format!("{} radio", artist.name);
-    let mixes = [
-        (
-            "Shuffle songs",
-            &artist.shuffle_id,
-            &artist.shuffle_seed,
-            &artist.shuffle_params,
-            artist.name.as_str(),
-        ),
-        (
-            "Artist radio",
-            &artist.radio_id,
-            &artist.radio_seed,
-            &artist.radio_params,
-            radio.as_str(),
-        ),
-    ];
-    for (label, list, seed, params, origin) in mixes {
-        if list.is_empty() || seed.is_empty() {
-            continue;
-        }
-        if widgets::outline_button(ui, &state.palette, label).clicked() {
-            actions.push(Action::StartMix {
-                seed: MixSeed {
-                    playlist_id: list.clone(),
-                    video_id: seed.clone(),
-                    params: params.clone(),
-                },
-                origin: origin.to_owned(),
-            });
-        }
+    ui.add_space(24.0);
+    // Asked for a little ahead of being seen, so scrolling does not stop
+    // at the end of each page.
+    let near = ui.clip_rect().expand2(vec2(0.0, MORE_AHEAD));
+    if tail.idle() && near.intersects(row.response.rect) {
+        actions.push(Action::MorePlaylist {
+            id: playlist.id.clone(),
+            retry: false,
+        });
     }
 }

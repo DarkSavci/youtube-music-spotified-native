@@ -93,6 +93,12 @@ impl Transition {
     pub fn crossfade_ms(&self) -> u64 {
         if self.kind == "crossfade" { self.ms } else { 0 }
     }
+
+    /// Whether the engine runs into the next track by itself at the end of
+    /// this one. A cut waits for the core to name it.
+    pub fn runs_on(&self) -> bool {
+        self.kind != "cut"
+    }
 }
 
 /// The core's whole view of playback, sent on every change.
@@ -119,12 +125,23 @@ pub struct RoomPlayback {
     pub entry: String,
     /// It has played to its end here.
     pub ended: bool,
+    /// Its length as the engine measured it, in milliseconds; 0 until it
+    /// has.
+    #[serde(rename = "durationMs")]
+    pub duration_ms: u64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Command {
     /// Replace the queue and start at `start_index`.
     Play {
+        tracks: Vec<Track>,
+        start_index: usize,
+        origin: String,
+    },
+    /// Put a queue in place at `start_index` without starting it: one picked
+    /// up from another device at launch, when nobody has pressed play.
+    Load {
         tracks: Vec<Track>,
         start_index: usize,
         origin: String,
@@ -180,6 +197,17 @@ impl Command {
                 "StartIndex": start_index,
                 "Origin": origin,
             }),
+            Command::Load {
+                tracks,
+                start_index,
+                origin,
+            } => json!({
+                "Kind": "play",
+                "Tracks": tracks,
+                "StartIndex": start_index,
+                "Origin": origin,
+                "Paused": true,
+            }),
             Command::Toggle => json!({ "Kind": "toggle" }),
             Command::Next => json!({ "Kind": "next" }),
             Command::Previous => json!({ "Kind": "prev" }),
@@ -217,6 +245,27 @@ impl Command {
     }
 }
 
+/// The playback settings the core acts on, as its settings endpoint takes
+/// them. The rest are this device's, and never leave the app.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Settings {
+    /// How long one track fades into the next; 0 for no fade.
+    pub crossfade_ms: u64,
+    /// Start the next track the moment this one ends.
+    pub gapless: bool,
+    /// Keep the queue and the place in it for the next launch.
+    pub resume_on_launch: bool,
+    /// Count what is played towards the account's YouTube history.
+    #[serde(rename = "reportToYouTube")]
+    pub report_to_youtube: bool,
+    /// The most the kept songs may take on disk, in megabytes.
+    #[serde(rename = "cacheMaxMB")]
+    pub cache_max_mb: u64,
+    /// Carry on with songs like the last when the queue runs out.
+    pub autoplay: bool,
+}
+
 /// What the engine reports. `reason` is one of the strings the core knows:
 /// empty, `network`, or `stalled`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -238,6 +287,14 @@ pub enum EngineEventKind {
     Failed,
     Stalled,
     Blocked,
+}
+
+/// How starting one of YouTube's queues with a least length went.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MixStart {
+    Playing,
+    /// It had only this many songs, and was not played.
+    Short(usize),
 }
 
 #[derive(Deserialize, Default)]
@@ -305,6 +362,52 @@ impl Client {
         }))
     }
 
+    /// As [`Client::start_mix`], but a queue of fewer than `least` songs is
+    /// not played: how many it had is returned instead, so the caller can
+    /// play something fuller. A small artist's shuffle can be three long.
+    pub fn start_mix_of_at_least(
+        &self,
+        device_id: &str,
+        seed: &MixSeed,
+        origin: &str,
+        least: usize,
+    ) -> Result<MixStart, ApiError> {
+        #[derive(Deserialize, Default)]
+        #[serde(default)]
+        struct Short {
+            short: bool,
+            tracks: usize,
+        }
+        let url = format!("{}/v1/session/radio", self.origin);
+        let body = json!({
+            "deviceId": device_id,
+            "playlistId": seed.playlist_id,
+            "videoId": seed.video_id,
+            "params": seed.params,
+            "origin": origin,
+            "minTracks": least,
+        });
+        let mut response = self
+            .agent
+            .post(&url)
+            .send_json(&body)
+            .map_err(crate::unreachable)?;
+        let status = response.status().as_u16();
+        let text = response
+            .body_mut()
+            .read_to_string()
+            .map_err(crate::unreachable)?;
+        if (200..300).contains(&status) {
+            return Ok(MixStart::Playing);
+        }
+        let short: Short = serde_json::from_str(&text).unwrap_or_default();
+        if short.short {
+            Ok(MixStart::Short(short.tracks))
+        } else {
+            Err(crate::error_for(status, &text))
+        }
+    }
+
     fn radio(&self, body: &Value) -> Result<(), ApiError> {
         let answer: Answer = self.post("/v1/session/radio", body)?;
         if answer.rejected.is_empty() {
@@ -317,13 +420,12 @@ impl Client {
         }
     }
 
-    /// Tells the core how tracks should follow one another. It asks the
-    /// engine for a crossfade only when the length here is more than zero.
-    pub fn set_transitions(&self, crossfade_ms: u64) -> Result<(), ApiError> {
-        // Both fields are sent every time: the core reads a missing one as
-        // zero or false, not as "unchanged".
-        let body = json!({ "crossfadeMs": crossfade_ms, "gapless": true });
-        self.post_empty("/v1/session/settings", &body)
+    /// Tells the core the playback settings that are its to act on. It asks
+    /// the engine for a crossfade only when the length is more than zero.
+    pub fn set_settings(&self, settings: &Settings) -> Result<(), ApiError> {
+        // Every field is sent every time: the core reads a missing length
+        // or gapless as zero or false, not as "unchanged".
+        self.post_empty("/v1/session/settings", &json!(settings))
     }
 
     pub fn engine_event(&self, device_id: &str, event: &EngineEvent) -> Result<(), ApiError> {
@@ -449,5 +551,53 @@ mod tests {
             seen += 1;
         });
         assert_eq!(seen, 2);
+    }
+
+    #[test]
+    fn a_queue_put_in_place_is_a_play_that_does_not_start() {
+        let load = Command::Load {
+            tracks: Vec::new(),
+            start_index: 2,
+            origin: "Phone".into(),
+        };
+        let wire = load.to_wire();
+        assert_eq!(wire["Kind"], "play");
+        assert_eq!(wire["Paused"], true);
+        assert_eq!(wire["StartIndex"], 2);
+        assert_eq!(wire["Origin"], "Phone");
+    }
+
+    #[test]
+    fn settings_are_written_as_the_core_reads_them() {
+        let settings = Settings {
+            crossfade_ms: 6000,
+            gapless: true,
+            resume_on_launch: false,
+            report_to_youtube: true,
+            cache_max_mb: 2048,
+            autoplay: false,
+        };
+        assert_eq!(
+            json!(settings),
+            json!({
+                "crossfadeMs": 6000,
+                "gapless": true,
+                "resumeOnLaunch": false,
+                "reportToYouTube": true,
+                "cacheMaxMB": 2048,
+                "autoplay": false,
+            })
+        );
+    }
+
+    #[test]
+    fn only_a_cut_waits_for_the_core_at_the_end_of_a_track() {
+        let kind = |kind: &str| Transition {
+            kind: kind.into(),
+            ms: 0,
+        };
+        assert!(kind("gapless").runs_on());
+        assert!(kind("crossfade").runs_on());
+        assert!(!kind("cut").runs_on());
     }
 }

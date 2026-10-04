@@ -8,14 +8,16 @@
 
 mod worker;
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crossbeam_channel::{Sender, unbounded};
 
-use worker::Worker;
+use worker::{Dials, Worker};
 
+use crate::clock::Clock;
 use crate::eq;
+use crate::loudness;
 use crate::tap::Tap;
 
 /// How far the engine may be from the target's position before it seeks.
@@ -40,6 +42,9 @@ pub struct Target {
     pub duration_ms: u64,
     /// How long one track fades into the next at its end. 0 for none.
     pub crossfade_ms: u64,
+    /// Run straight into the next track when this one ends, without
+    /// waiting to be told.
+    pub gapless: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -144,9 +149,18 @@ pub fn reconcile(decks: Decks<'_>, previous: &Target, target: &Target) -> Vec<Op
 /// Whether it is time to start fading into the next track: the fade's
 /// length before the end. A track too short to hold a fade at each end is
 /// left to end plainly.
-pub fn crossfade_due(position_ms: u64, duration_ms: u64, crossfade_ms: u64) -> bool {
-    crossfade_ms > 0 && duration_ms > crossfade_ms * 2 && position_ms + crossfade_ms >= duration_ms
+///
+/// The fade is as long in the hearing whatever the `speed`. At twice normal
+/// a second of the track passes in half a second, so the fade starts twice
+/// as far from the end of the track; timed on the track alone it would
+/// still be running when the music ran out.
+pub fn crossfade_due(position_ms: u64, duration_ms: u64, crossfade_ms: u64, speed: f32) -> bool {
+    let fade_ms = (crossfade_ms as f64 * f64::from(speed)) as u64;
+    crossfade_ms > 0 && duration_ms > fade_ms * 2 && position_ms + fade_ms >= duration_ms
 }
+
+/// The slowest and fastest the engine plays.
+pub const SPEED_RANGE: (f32, f32) = (0.5, 3.0);
 
 /// The slider's position as a gain. Loudness is heard on a curve, so the
 /// lower half of the slider is given more of the range; past 1 is plain
@@ -161,9 +175,9 @@ pub fn gain_for(volume: f32) -> f32 {
 
 pub struct Engine {
     targets: Sender<Target>,
-    normalise: Arc<AtomicBool>,
-    equalizer: Arc<Mutex<eq::Settings>>,
+    dials: Arc<Dials>,
     tap: Arc<Tap>,
+    clock: Arc<Clock>,
 }
 
 impl Engine {
@@ -176,23 +190,31 @@ impl Engine {
         emit: impl Fn(Event) + Send + 'static,
     ) -> std::io::Result<Self> {
         let (targets, inbox) = unbounded();
-        let normalise = Arc::new(AtomicBool::new(normalise));
-        let switch = normalise.clone();
-        let equalizer = Arc::new(Mutex::new(eq::Settings::default()));
-        let bands = equalizer.clone();
+        let dials = Arc::new(Dials {
+            normalise: AtomicBool::new(normalise),
+            loudness_target: AtomicU32::new(loudness::TARGET_LUFS.to_bits()),
+            speed: AtomicU32::new(1.0f32.to_bits()),
+            equalizer: Mutex::new(eq::Settings::default()),
+        });
+        let shared = dials.clone();
         let tap = Arc::new(Tap::default());
         let window = tap.clone();
+        let clock = Arc::new(Clock::default());
+        let told = clock.clone();
         std::thread::Builder::new()
             .name("engine".into())
-            .spawn(move || {
-                Worker::new(origin, switch, bands, window, Box::new(emit)).run(&inbox)
-            })?;
+            .spawn(move || Worker::new(origin, shared, window, told, Box::new(emit)).run(&inbox))?;
         Ok(Self {
             targets,
-            normalise,
-            equalizer,
+            dials,
             tap,
+            clock,
         })
+    }
+
+    /// Where the track has reached, for a picture that keeps time with it.
+    pub fn clock(&self) -> Arc<Clock> {
+        self.clock.clone()
     }
 
     /// A window onto what is being played, for a visualizer.
@@ -203,14 +225,30 @@ impl Engine {
     /// Heard within a quarter of a second: what is already queued for the
     /// device plays out first.
     pub fn set_equalizer(&self, settings: eq::Settings) {
-        if let Ok(mut shared) = self.equalizer.lock() {
+        if let Ok(mut shared) = self.dials.equalizer.lock() {
             *shared = settings;
         }
     }
 
     /// Takes effect from the next track loaded.
     pub fn set_normalise(&self, on: bool) {
-        self.normalise.store(on, Ordering::Relaxed);
+        self.dials.normalise.store(on, Ordering::Relaxed);
+    }
+
+    /// The loudness tracks are evened out to, in LUFS. Takes effect from
+    /// the next track loaded.
+    pub fn set_loudness_target(&self, lufs: f32) {
+        self.dials
+            .loudness_target
+            .store(lufs.to_bits(), Ordering::Relaxed);
+    }
+
+    /// How fast the music plays, 1 being normal, with its pitch kept. Heard
+    /// within a quarter of a second, as the equalizer is.
+    pub fn set_speed(&self, speed: f32) {
+        let speed = if speed.is_finite() { speed } else { 1.0 };
+        let speed = speed.clamp(SPEED_RANGE.0, SPEED_RANGE.1);
+        self.dials.speed.store(speed.to_bits(), Ordering::Relaxed);
     }
 
     pub fn apply(&self, target: Target) {

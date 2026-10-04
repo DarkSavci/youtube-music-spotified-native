@@ -111,7 +111,7 @@ pub fn buttons(state: &State, ui: &mut Ui, area: Rect) {
             .rect_filled(rect, 0.0, fill.gamma_multiply(lift));
         let color = crate::tint::blend(palette.secondary, lit, lift);
         glyph(ui, button, rect, Stroke::new(1.0, color));
-        if response.clicked() {
+        if response.on_hover_text(button.label()).clicked() {
             let maximise = !maximised(ui);
             ui.ctx().send_viewport_cmd(match button {
                 Button::Minimise => ViewportCommand::Minimized(true),

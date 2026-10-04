@@ -14,7 +14,7 @@ fn a_ready_core_loads_the_open_page_and_the_library() {
     assert_eq!(
         effects,
         [
-            Effect::Fetch(Request::Home),
+            Effect::Fetch(Request::Home(String::new())),
             Effect::Fetch(Request::Library),
             Effect::Fetch(Request::Liked),
             Effect::Fetch(Request::Mixes),
@@ -26,13 +26,8 @@ fn a_ready_core_loads_the_open_page_and_the_library() {
 }
 
 #[test]
-fn importing_a_sign_in_starts_afresh() {
+fn a_change_of_account_starts_afresh() {
     let mut state = ready();
-    state.import_source = Some("theirs.json".into());
-    assert_eq!(
-        apply(&mut state, Action::ImportSignIn),
-        [Effect::ImportSignIn("theirs.json".into())]
-    );
     apply(&mut state, Action::AccountChanged);
     assert_eq!(state.core, CoreStatus::Starting);
     assert_eq!(state.home, Loadable::NotLoaded);
@@ -71,6 +66,7 @@ fn a_new_playlist_needs_a_name_before_it_is_created() {
     apply(
         &mut state,
         Action::NewPlaylist {
+            name: String::new(),
             track_ids: vec!["a".into()],
         },
     );

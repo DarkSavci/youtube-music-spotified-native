@@ -5,11 +5,18 @@ use std::time::Instant;
 
 use eframe::egui;
 
-use super::{App, Event, SEARCH_DEBOUNCE, waking};
+use super::{App, Event, ROOM_SEARCH_DEBOUNCE, SEARCH_DEBOUNCE, waking};
+
+/// How long the lookup in Your listening waits for the typing to pause.
+const LOOKUP_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(200);
 use crate::actions::{Action, Effect};
 use crate::platform::autostart;
+use crate::platform::tray::TrayAction;
+use crate::session::Session;
+use crate::state::State;
 use crate::together::sync::Routed;
-use crate::{channel, import, settings, sidecar, signin, themes, together, update, views};
+use crate::update::Then;
+use crate::{settings, themes, together, update, views};
 use spotified_client::session::Command;
 
 impl App {
@@ -30,19 +37,8 @@ impl App {
                     self.requests_in_flight += 1;
                 }
             }
-            Effect::ImportSignIn(source) => {
-                match import::import(&source, &self.paths.credentials_file()) {
-                    Ok(()) => {
-                        log::info!("sign-in imported; restarting the playback service");
-                        self.restart_core(ctx);
-                        self.actions.push(Action::AccountChanged);
-                    }
-                    Err(error) => {
-                        log::warn!("sign-in import failed: {error}");
-                        self.actions.push(Action::SignInFailed(error.to_string()));
-                    }
-                }
-            }
+            Effect::Migrate(kinds) => self.migrate(ctx, kinds),
+            Effect::MigrationSeen => self.migration_seen(),
             Effect::Command(command) => self.send_command(command),
             Effect::TogetherConnect(options) => {
                 let deliver = waking(ctx, &self.events_tx, Event::Together);
@@ -56,6 +52,25 @@ impl App {
             }
             // Dropping the line says goodbye to the room on its way out.
             Effect::TogetherDisconnect => self.together = None,
+            Effect::TogetherHandOver(next) => {
+                if let Some(connection) = &self.together {
+                    connection.leave(next);
+                }
+            }
+            Effect::TogetherProbe(url) => {
+                let done = waking(ctx, &self.events_tx, Event::TogetherProbed);
+                let spawned = std::thread::Builder::new()
+                    .name("listen-together-test".into())
+                    .spawn(move || done(together::client::probe(&url)));
+                if let Err(error) = spawned {
+                    let failed = together::Ask::Tested(Err(error.to_string()));
+                    self.actions.push(Action::Room(failed));
+                }
+            }
+            Effect::DebounceRoomSearch => {
+                self.room_search_due = Some(Instant::now() + ROOM_SEARCH_DEBOUNCE);
+                ctx.request_repaint_after(ROOM_SEARCH_DEBOUNCE);
+            }
             Effect::TogetherCommand(kind, fields) => {
                 if let Some(connection) = &self.together {
                     connection.command(kind, fields);
@@ -77,6 +92,7 @@ impl App {
                 ctx.send_viewport_cmd_to(views::mini::viewport(), grow);
             }
             Effect::ShowMainWindow => {
+                self.window_shown = true;
                 let root = egui::ViewportId::ROOT;
                 for command in [
                     egui::ViewportCommand::Visible(true),
@@ -98,42 +114,27 @@ impl App {
             }
             Effect::ApplyAudioSettings => {
                 if let Some(session) = &self.session {
-                    let settings = &self.state.settings;
-                    session.set_normalise_volume(settings.normalise_volume);
-                    session.set_equalizer(settings.equalizer_on, settings.equalizer);
-                    session.set_crossfade(settings.crossfade_seconds);
-                    session.tap().set_watching(settings.visualizer);
+                    apply_audio_settings(session, &self.state);
                 }
             }
-            Effect::SignIn => {
-                // The browser stays open for as long as the person takes.
-                let scratch = self.paths.config.clone();
-                let credentials = self.paths.credentials_file();
-                let done = waking(ctx, &self.events_tx, Event::SignedIn);
-                let spawned = std::thread::Builder::new()
-                    .name("sign-in".into())
-                    .spawn(move || {
-                        let result = signin::sign_in(&scratch, &credentials);
-                        done(result.map_err(|error| error.to_string()));
-                    });
-                if let Err(error) = spawned {
-                    self.actions.push(Action::SignInFailed(error.to_string()));
-                }
+            Effect::SignIn => self.sign_in(ctx),
+            Effect::SwitchAccount(id) => {
+                self.change_account(ctx, super::accounts::Change::Switch(id));
             }
+            Effect::RemoveAccount(id) => self.remove_account(ctx, id),
             Effect::SwitchChannel(channel_id) => {
-                match channel::select(&self.paths.credentials_file(), &channel_id) {
-                    Ok(()) => {
-                        log::info!("channel changed; restarting the playback service");
-                        self.restart_core(ctx);
-                        self.actions.push(Action::AccountChanged);
-                    }
-                    Err(error) => {
-                        log::warn!("the channel could not be changed: {error}");
-                        self.state.channel_id = channel::active(&self.paths.credentials_file());
-                        self.state.toast_error("The channel could not be changed");
-                    }
-                }
+                log::info!("channel changed; restarting the playback service");
+                self.change_account(ctx, super::accounts::Change::Channel(channel_id));
             }
+            Effect::RememberAccount { name, avatar_url } => {
+                let changed = self.accounts.list.set_name(&name, &avatar_url);
+                self.remember(changed);
+            }
+            Effect::RememberChannels(channels) => {
+                let changed = self.accounts.list.set_channels(&channels);
+                self.remember(changed);
+            }
+            Effect::SaveReport => self.save_report(ctx),
             Effect::OpenThemesFolder => {
                 if let Err(error) = open_folder(&self.paths.themes_folder()) {
                     log::warn!("the themes folder could not be opened: {error}");
@@ -160,11 +161,17 @@ impl App {
                     self.actions.push(Action::UpdateChanged(failed));
                 }
             }
-            Effect::InstallUpdate(installer) => match update::install(&installer) {
+            Effect::NotifyUpdate(version) => {
+                let install = TrayAction::InstallUpdate;
+                let asked = waking(ctx, &self.events_tx, move |()| Event::Tray(install));
+                crate::platform::notify::update_ready(&version, move || asked(()));
+            }
+            Effect::InstallUpdate(installer) => match update::install(&installer, Then::Relaunch) {
                 // The installer replaces the files this copy holds open, so
                 // it goes: for real, not to the tray.
                 Ok(()) => {
                     log::info!("installing {}", installer.display());
+                    self.installing = true;
                     self.quitting = true;
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 }
@@ -173,33 +180,47 @@ impl App {
                     self.actions.push(Action::UpdateChanged(failed));
                 }
             },
-            Effect::UpdateResolver => {
-                let done = waking(ctx, &self.events_tx, Event::ResolverUpdated);
-                let spawned = std::thread::Builder::new()
-                    .name("resolver-update".into())
-                    .spawn(move || done(sidecar::update_resolver()));
-                if let Err(error) = spawned {
-                    let failed = Action::ResolverUpdated(Err(error.to_string()));
-                    self.actions.push(failed);
-                }
-            }
-            Effect::SignOut => {
-                // The cookie file beside it is the same session, for yt-dlp.
-                let credentials = self.paths.credentials_file();
-                let _ = std::fs::remove_file(credentials.with_file_name("yt-dlp-cookies.txt"));
-                match std::fs::remove_file(&credentials) {
-                    Ok(()) => {
-                        log::info!("signed out; restarting the playback service");
-                        self.restart_core(ctx);
-                        self.actions.push(Action::AccountChanged);
-                    }
-                    Err(error) => log::warn!("sign-out failed: {error}"),
-                }
-            }
+            Effect::UpdateResolver => self.update_resolver(ctx),
             Effect::DebounceSearch => {
                 self.search_due = Some(Instant::now() + SEARCH_DEBOUNCE);
                 ctx.request_repaint_after(SEARCH_DEBOUNCE);
             }
+            Effect::DebounceStatsLookup => {
+                self.lookup_due = Some(Instant::now() + LOOKUP_DEBOUNCE);
+                ctx.request_repaint_after(LOOKUP_DEBOUNCE);
+            }
+        }
+    }
+
+    /// Passes on what the line to a Listen Together relay said.
+    pub(super) fn heard_from_relay(&mut self, event: together::Event) {
+        match &event {
+            together::Event::Room { room, .. } => log::debug!(
+                "listen together: room at revision {}, {} in it, {} queued, playing: {}",
+                room.revision,
+                room.members.len(),
+                room.queue.len(),
+                room.playing
+            ),
+            other => log::debug!("listen together: {other:?}"),
+        }
+        self.actions.push(Action::TogetherEvent(Box::new(event)));
+    }
+
+    /// Sends the searches whose typing has paused for long enough.
+    pub(super) fn send_due_searches(&mut self) {
+        let now = Instant::now();
+        if self.search_due.is_some_and(|due| now >= due) {
+            self.search_due = None;
+            self.actions.push(Action::RunSearch);
+        }
+        if self.room_search_due.is_some_and(|due| now >= due) {
+            self.room_search_due = None;
+            self.actions.push(Action::Room(together::Ask::RunSearch));
+        }
+        if self.lookup_due.is_some_and(|due| now >= due) {
+            self.lookup_due = None;
+            self.actions.push(Action::RunStatsLookup);
         }
     }
 
@@ -217,7 +238,13 @@ impl App {
                 .map_or(0, |playback| playback.position_ms(Instant::now()));
             let me = &self.state.together.me;
             match together::sync::route(&command, room, me, position_ms) {
-                Routed::Room(kind, fields) => return connection.command(kind, fields),
+                Routed::Room(kind, fields) => {
+                    connection.command(kind, fields);
+                    if together::sync::trimmed(&command) {
+                        self.state.toast(together::sync::FIRST_HUNDRED);
+                    }
+                    return;
+                }
                 Routed::Refused(why) => return self.state.toast_error(why),
                 Routed::Core => {}
             }
@@ -229,6 +256,26 @@ impl App {
             None => self.held_commands.push(command),
         }
     }
+}
+
+/// Tells the engine and the core what the settings now are. Some are this
+/// device's (the equalizer, the speed, how loud); the rest are the core's,
+/// which decides each transition and writes the queue down.
+pub(super) fn apply_audio_settings(session: &Session, state: &State) {
+    let settings = &state.settings;
+    session.set_normalise_volume(settings.normalise_volume);
+    session.set_loudness_target(settings.volume_level.lufs());
+    session.set_equalizer(settings.equalizer_on, settings.equalizer);
+    session.set_speed(state.speed());
+    session.tap().set_watching(settings.visualizer);
+    session.set_settings(spotified_client::session::Settings {
+        crossfade_ms: u64::from(settings.crossfade_seconds) * 1000,
+        gapless: settings.gapless,
+        resume_on_launch: settings.resume_on_launch,
+        report_to_youtube: settings.report_to_youtube,
+        cache_max_mb: u64::from(settings.cache_max_mb),
+        autoplay: settings.autoplay,
+    });
 }
 
 /// Shows a folder in the system's file manager.

@@ -14,7 +14,9 @@ use std::time::Duration;
 use crossbeam_channel::{Receiver, Sender, unbounded};
 use spotified_audio::engine::{self, Engine};
 use spotified_client::Client;
-use spotified_client::session::{Command, EngineEvent, EngineEventKind, Projection, Target};
+use spotified_client::session::{
+    Command, EngineEvent, EngineEventKind, Projection, Settings, Target,
+};
 
 /// How long to wait before following the session again after the stream
 /// drops, doubling up to the second figure.
@@ -25,13 +27,15 @@ pub enum Update {
     Projection(Box<Projection>),
     /// A command failed or was refused; a sentence saying so.
     Refused(String),
+    /// YouTube is refusing this device's requests for now.
+    RateLimited,
 }
 
 enum Job {
     Command(Command),
     Report(EngineEvent),
-    /// Tell the core the crossfade's length, in milliseconds.
-    Transitions(u64),
+    /// Tell the core the playback settings that are its to act on.
+    Settings(Settings),
     Stop,
 }
 
@@ -95,12 +99,13 @@ impl Session {
         let engine = Engine::start(origin.to_owned(), normalise_volume, move |event| {
             let _ = reports.send(Job::Report(engine_event(event)));
         })?;
+        let deliver: Box<dyn Fn(Update) + Send + Sync> = Box::new(deliver);
         let shared = Arc::new(Shared {
             client: Client::new(origin),
             device_id,
             engine,
             newest: Mutex::new((0, true)),
-            deliver: Box::new(deliver),
+            deliver,
         });
         let stopping = Arc::new(AtomicBool::new(false));
         let handle = shared.clone();
@@ -134,9 +139,21 @@ impl Session {
         self.shared.engine.tap()
     }
 
-    /// How long tracks fade into one another; zero for no fade.
-    pub fn set_crossfade(&self, seconds: u32) {
-        let _ = self.jobs.send(Job::Transitions(u64::from(seconds) * 1000));
+    /// The settings the core acts on: how tracks follow one another, what
+    /// it remembers and reports, how much it keeps on disk.
+    pub fn set_settings(&self, settings: Settings) {
+        let _ = self.jobs.send(Job::Settings(settings));
+    }
+
+    /// How fast the music plays, 1 being normal.
+    pub fn set_speed(&self, speed: f32) {
+        self.shared.engine.set_speed(speed);
+    }
+
+    /// The loudness tracks are evened out to, in LUFS. Takes effect from
+    /// the next track.
+    pub fn set_loudness_target(&self, lufs: f32) {
+        self.shared.engine.set_loudness_target(lufs);
     }
 
     /// Takes effect from the next track.
@@ -169,13 +186,18 @@ fn run_jobs(shared: &Shared, inbox: &Receiver<Job>) {
                 }
             },
             Job::Report(event) => {
+                // The core is told; the listener is too, or playback would
+                // simply stop and look broken.
+                if event.kind == EngineEventKind::Blocked {
+                    (shared.deliver)(Update::RateLimited);
+                }
                 if let Err(error) = shared.client.engine_event(&shared.device_id, &event) {
                     log::debug!("engine report not delivered: {error}");
                 }
             }
-            Job::Transitions(crossfade_ms) => {
-                if let Err(error) = shared.client.set_transitions(crossfade_ms) {
-                    log::warn!("crossfade setting not delivered: {error}");
+            Job::Settings(settings) => {
+                if let Err(error) = shared.client.set_settings(&settings) {
+                    log::warn!("playback settings not delivered: {error}");
                 }
             }
             Job::Stop => return,
@@ -220,6 +242,7 @@ fn engine_target(target: &Target, duration_ms: u64) -> engine::Target {
         volume: target.volume,
         duration_ms,
         crossfade_ms: target.transition.crossfade_ms(),
+        gapless: target.transition.runs_on(),
     }
 }
 

@@ -1,22 +1,27 @@
-//! Right-click menus.
+//! What a right click on a song offers.
+//!
+//! Built here and not in each list, so a song means the same wherever it
+//! is shown. The entries, their order and their words are the Electron
+//! app's (`trackmenu.ts`).
 
-use eframe::egui::{self, Ui};
 use spotified_client::models::{LibraryKind, Track};
 
+use super::widgets;
+use super::widgets::menu::{Entry, Menu};
 use crate::actions::Action;
 use crate::state::{Loadable, Page, State};
-use crate::theme;
+use crate::theme::Icon;
 
 /// YouTube Music's own playlist of liked songs; liking is how songs get
 /// there, not adding.
 const LIKED_PLAYLIST: &str = "LM";
 
 /// What can be done with a song, or with several selected together. The
-/// entries that only make sense for one (its artist, its link) are left
+/// entries that only make sense for one (its artists, its link) are left
 /// out for several.
 pub fn tracks(
     state: &State,
-    ui: &mut Ui,
+    menu: &mut Menu<'_>,
     actions: &mut Vec<Action>,
     tracks: &[&Track],
     editable_playlist: Option<&str>,
@@ -25,11 +30,8 @@ pub fn tracks(
         return;
     };
     let single = (tracks.len() == 1).then_some(first);
-    ui.set_min_width(220.0);
     if single.is_none() {
-        let count = format!("{} songs", tracks.len());
-        ui.label(egui::RichText::new(count).font(theme::semibold(13.0)));
-        ui.separator();
+        menu.heading(&format!("{} songs", tracks.len()));
     }
     let owned = || {
         tracks
@@ -37,33 +39,15 @@ pub fn tracks(
             .map(|&track| track.clone())
             .collect::<Vec<_>>()
     };
-    let mut chosen = None;
-    if ui.button("Add to queue").clicked() {
-        chosen = Some(Action::AddToQueue(owned()));
+    if menu.item("Add to queue") {
+        actions.push(Action::AddToQueue(owned()));
     }
-    if ui.button("Play next").clicked() {
-        chosen = Some(Action::PlayNext(owned()));
+    if menu.item("Play next") {
+        actions.push(Action::PlayNext(owned()));
     }
-    if let Some(track) = single
-        && ui.button("Start radio").clicked()
-    {
-        chosen = Some(Action::StartRadio(track.clone()));
-    }
-    ui.separator();
-    if let Some(track) = single {
-        let like = if state.likes.is_liked(&track.id) {
-            "Remove from Liked Songs"
-        } else {
-            "Save to Liked Songs"
-        };
-        if ui.button(like).clicked() {
-            chosen = Some(Action::ToggleLike(track.clone()));
-        }
-    }
-    ui.menu_button("Add to playlist", |ui| {
-        if let Some(action) = playlist_choice(state, ui, tracks) {
-            chosen = Some(action);
-        }
+    menu.separator();
+    menu.submenu(Entry::new("Add to playlist"), |menu| {
+        playlist_choice(state, menu, actions, tracks);
     });
     // Only entries that know their place in the playlist can leave it.
     let removable: Vec<(String, String)> = tracks
@@ -73,70 +57,89 @@ pub fn tracks(
         .collect();
     if let Some(playlist_id) = editable_playlist
         && !removable.is_empty()
-        && ui.button("Remove from this playlist").clicked()
+        && menu.item("Remove from this playlist")
     {
-        chosen = Some(Action::RemoveFromPlaylist {
+        actions.push(Action::RemoveFromPlaylist {
             playlist_id: playlist_id.to_owned(),
             items: removable,
         });
     }
-    if let Some(track) = single {
-        ui.separator();
-        if let Some(artist) = track.artists.iter().find(|artist| !artist.id.is_empty())
-            && ui.button("Go to artist").clicked()
-        {
-            chosen = Some(Action::Open(Page::Artist(artist.id.clone())));
-        }
-        if let Some(album) = track.album.as_ref().filter(|album| !album.id.is_empty())
-            && ui.button("Go to album").clicked()
-        {
-            chosen = Some(Action::Open(Page::Album(album.id.clone())));
-        }
-        ui.separator();
-        if ui.button("Copy link").clicked() {
-            chosen = Some(Action::CopyLink(format!(
-                "https://music.youtube.com/watch?v={}",
-                track.id
-            )));
+    let Some(track) = single else {
+        return;
+    };
+    menu.separator();
+    if menu.item("Go to song radio") {
+        actions.push(Action::StartRadio(track.clone()));
+    }
+    // Every artist that has a page, not only the first: a song by two is
+    // as much the second's.
+    for artist in track.artists.iter().filter(|artist| !artist.id.is_empty()) {
+        if menu.item(&format!("Go to {}", artist.name)) {
+            let id = widgets::artist_page_id(&artist.id).to_owned();
+            actions.push(Action::Open(Page::Artist(id)));
         }
     }
-    if let Some(action) = chosen {
-        actions.push(action);
-        ui.close();
+    if let Some(album) = track.album.as_ref().filter(|album| !album.id.is_empty())
+        && menu.item("Go to album")
+    {
+        actions.push(Action::Open(Page::Album(album.id.clone())));
+    }
+    menu.separator();
+    let like = if state.likes.is_liked(&track.id) {
+        "Remove from your library"
+    } else {
+        "Save to your library"
+    };
+    if menu.item(like) {
+        actions.push(Action::ToggleLike(track.clone()));
+    }
+    if menu.item("Share") {
+        actions.push(Action::Share {
+            kind: crate::share::Kind::Track,
+            id: track.id.clone(),
+        });
     }
 }
 
 /// The person's playlists, to add `tracks` to one.
-fn playlist_choice(state: &State, ui: &mut Ui, tracks: &[&Track]) -> Option<Action> {
-    ui.set_min_width(200.0);
+fn playlist_choice(
+    state: &State,
+    menu: &mut Menu<'_>,
+    actions: &mut Vec<Action>,
+    tracks: &[&Track],
+) {
     let track_ids = || tracks.iter().map(|track| track.id.clone()).collect();
-    if ui.button("New playlist…").clicked() {
-        return Some(Action::NewPlaylist {
+    if menu.item("New playlist…") {
+        actions.push(Action::NewPlaylist {
+            // A song's own name is what a playlist begun from it is
+            // offered as, as the Electron app offered it.
+            name: match tracks {
+                [track] => track.title.clone(),
+                _ => String::new(),
+            },
             track_ids: track_ids(),
         });
     }
-    ui.separator();
     let Loadable::Loaded(library) = &state.library else {
-        ui.weak("Sign in to add to your playlists");
-        return None;
+        menu.note("Sign in to add to your playlists");
+        return;
     };
     let mut playlists = library
         .iter()
         .filter(|item| item.kind == LibraryKind::Playlist && item.id != LIKED_PLAYLIST)
         .peekable();
     if playlists.peek().is_none() {
-        ui.weak("No playlists yet");
-        return None;
+        menu.note("No playlists yet");
+        return;
     }
-    let mut chosen = None;
     for playlist in playlists {
-        if ui.button(&playlist.title).clicked() {
-            chosen = Some(Action::AddToPlaylist {
+        let entry = Entry::new(&playlist.title).icon(Icon::SquareLibrary);
+        if menu.entry(entry) {
+            actions.push(Action::AddToPlaylist {
                 playlist_id: playlist.id.clone(),
                 playlist_title: playlist.title.clone(),
                 track_ids: track_ids(),
             });
         }
     }
-    chosen
 }

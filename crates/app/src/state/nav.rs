@@ -57,6 +57,8 @@ pub enum Page {
     Mix(String),
     Album(String),
     Artist(String),
+    /// Every song of an artist's, in an order of the listener's choosing.
+    ArtistSongs(String),
     Playlist(String),
     Podcast(String),
 }

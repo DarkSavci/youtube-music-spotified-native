@@ -1,67 +1,61 @@
 //! The library, as the sidebar lists it: pinned things first, then folders,
-//! then everything else, narrowed by the chips and by what is typed.
+//! then everything else, narrowed by the chips and by what is typed. Shown
+//! as rows, as a grid of covers, or as a rail of covers alone.
 
-use std::collections::HashSet;
+mod arrange;
+mod grid;
 
-use eframe::egui::{self, Rect, Sense, Ui, pos2, vec2};
+use eframe::egui::{self, Frame, Margin, Rect, Response, Sense, Ui, pos2, vec2};
 use spotified_client::models::{Folder, LibraryItem, LibraryKind};
 
 use super::drag;
-use super::format::bulleted;
+use super::format::middle_dotted;
+use super::widgets::menu::{self, Entry, Menu};
 use super::widgets::{self, ArtShape};
 use crate::actions::Action;
-use crate::settings::LibrarySort;
 use crate::state::{Loadable, Page, State};
 use crate::theme::{self, Icon};
+use arrange::{Row, View, arranged};
 
-const ITEM_HEIGHT: f32 = 60.0;
-/// The room kept beside the library's search field for the sort chip.
-const SORT_CHIP_ROOM: f32 = 88.0;
-const THUMB: f32 = 44.0;
+const ITEM_HEIGHT: f32 = 64.0;
+const THUMB: f32 = 48.0;
 /// How far the things in a folder sit to the right of it.
 const NESTING: f32 = 18.0;
 /// YouTube Music's own playlist of liked songs.
 const LIKED_PLAYLIST: &str = "LM";
 
-/// One line of the list.
-#[derive(Debug, PartialEq)]
-enum Row<'a> {
-    Folder {
-        folder: &'a Folder,
-        /// How many things it holds.
-        holds: usize,
-        open: bool,
-    },
-    Item {
-        item: &'a LibraryItem,
-        /// Shown inside an open folder.
-        nested: bool,
-    },
+/// How the library is drawn.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Layout {
+    /// A row each: cover, title, and what it is.
+    List,
+    /// Covers in columns at least this wide.
+    Grid(f32),
+    /// Covers alone, for the collapsed sidebar.
+    Rail,
 }
 
-/// How the list is narrowed and ordered.
-struct View<'a> {
-    kind: Option<LibraryKind>,
-    query: &'a str,
-    sort: LibrarySort,
-    open_folders: &'a HashSet<String>,
-}
-
-pub fn show(state: &State, ui: &mut Ui, actions: &mut Vec<Action>) {
+pub fn show(state: &State, ui: &mut Ui, actions: &mut Vec<Action>, layout: Layout) {
     let palette = &state.palette;
     let items = match &state.library {
         Loadable::NotLoaded | Loadable::Loading => {
-            widgets::loading(ui, palette, "Loading…");
+            if layout != Layout::Rail {
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    ui.add_space(8.0);
+                    widgets::loading(ui, palette, "Loading…");
+                });
+            }
             return;
         }
         Loadable::Failed(message) => {
-            widgets::empty_state(ui, palette, Icon::Library, "Your library", message);
-            import_offer(state, ui, actions);
+            if layout != Layout::Rail {
+                unavailable(state, ui, actions, message);
+            }
             return;
         }
         Loadable::Loaded(items) => items,
     };
-    tools(state, ui, actions);
     let view = View {
         kind: state.library_filter,
         query: &state.library_query,
@@ -70,161 +64,109 @@ pub fn show(state: &State, ui: &mut Ui, actions: &mut Vec<Action>) {
     };
     let rows = arranged(items, &state.folders, &view);
     if rows.is_empty() {
-        let (icon, title, text) = if state.library_query.is_empty() {
+        if layout == Layout::Rail {
+            return;
+        }
+        let (title, text) = if state.library_query.is_empty() {
             (
-                Icon::Library,
-                "Nothing here yet",
-                "Playlists, albums and artists you save appear here.",
+                "Nothing saved yet",
+                "Albums, artists and playlists you save will appear here.",
             )
         } else {
             (
-                Icon::Search,
-                "Nothing matches",
+                "No matches in your library",
                 "Try fewer letters, or another kind.",
             )
         };
-        widgets::empty_state(ui, palette, icon, title, text);
+        note(state, ui, title, text, |_| {});
         return;
     }
-    egui::ScrollArea::vertical()
-        .id_salt("library")
-        .auto_shrink([false, false])
-        .show_rows(ui, ITEM_HEIGHT, rows.len(), |ui, range| {
-            ui.spacing_mut().item_spacing.y = 0.0;
-            for row in &rows[range] {
-                match row {
-                    Row::Folder {
-                        folder,
-                        holds,
-                        open,
-                    } => folder_row(state, ui, actions, folder, *holds, *open),
-                    Row::Item { item, nested } => item_row(state, ui, actions, item, *nested),
-                }
-            }
+    match layout {
+        Layout::List => {
+            egui::ScrollArea::vertical()
+                .id_salt("library")
+                .auto_shrink([false, false])
+                .show_rows(ui, ITEM_HEIGHT, rows.len(), |ui, range| {
+                    ui.spacing_mut().item_spacing.y = 0.0;
+                    for row in &rows[range] {
+                        match row {
+                            Row::Folder {
+                                folder,
+                                holds,
+                                open,
+                            } => folder_row(state, ui, actions, folder, *holds, *open),
+                            Row::Item { item, nested } => {
+                                item_row(state, ui, actions, item, *nested);
+                            }
+                        }
+                    }
+                });
+        }
+        Layout::Grid(least) => grid::grid(state, ui, actions, &rows, least),
+        Layout::Rail => grid::rail(state, ui, actions, &rows),
+    }
+}
+
+/// A note in a box of its own, as the Electron app shows a library with
+/// nothing in it: a title, a line, and whatever `more` adds under them.
+fn note(state: &State, ui: &mut Ui, title: &str, text: &str, more: impl FnOnce(&mut Ui)) {
+    let palette = &state.palette;
+    Frame::new()
+        .fill(palette.surface)
+        .corner_radius(theme::RADIUS)
+        .outer_margin(Margin::same(12))
+        .inner_margin(Margin::same(16))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.spacing_mut().item_spacing.y = 8.0;
+            ui.label(egui::RichText::new(title).font(theme::bold(14.0)));
+            ui.label(
+                egui::RichText::new(text)
+                    .font(theme::regular(12.0))
+                    .color(palette.secondary),
+            );
+            more(ui);
         });
 }
 
-/// The library's own search field and its sort order.
-fn tools(state: &State, ui: &mut Ui, actions: &mut Vec<Action>) {
+/// The library could not be had: why, and the ways to sign in when that
+/// is why.
+fn unavailable(state: &State, ui: &mut Ui, actions: &mut Vec<Action>, message: &str) {
     let palette = &state.palette;
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 8.0;
-        let sort = state.settings.library_sort;
-        // The field takes what the sort chip leaves.
-        let field = widgets::TextField {
-            text: &state.library_query,
-            hint: "Search in library",
-            label: "Search in library",
-            icon: Some(Icon::Search),
-            width: (ui.available_width() - SORT_CHIP_ROOM).max(80.0),
-        };
-        if let Some(query) = field.show(ui, palette) {
-            actions.push(Action::SetLibraryQuery(query));
-        }
-        if widgets::chip(ui, palette, sort.label(), false)
-            .on_hover_text("Change the order")
-            .clicked()
-        {
-            actions.push(Action::CycleLibrarySort);
-        }
-    });
-    ui.add_space(8.0);
-}
-
-/// The lines to show. Looking for something (a chip is on, or something is
-/// typed) lists every match flat; otherwise folders hold what was put in
-/// them and show it when open.
-fn arranged<'a>(items: &'a [LibraryItem], folders: &'a [Folder], view: &View) -> Vec<Row<'a>> {
-    let query = view.query.trim().to_lowercase();
-    let mut matching: Vec<&LibraryItem> = items
-        .iter()
-        .filter(|item| view.kind.is_none_or(|kind| item.kind == kind))
-        .filter(|item| query.is_empty() || item.title.to_lowercase().contains(&query))
-        .collect();
-    // Both sorts are stable, so pinned things keep the chosen order among
-    // themselves, as do the rest.
-    if view.sort == LibrarySort::Name {
-        matching.sort_by_cached_key(|item| item.title.to_lowercase());
-    }
-    matching.sort_by_key(|item| !item.pinned);
-
-    let flat = |item| Row::Item {
-        item,
-        nested: false,
+    let signed_out = state.account.is_none();
+    let (title, text) = match (&state.import_error, signed_out, state.signing_in) {
+        (Some(error), ..) => ("Signed out", error.as_str()),
+        (None, true, true) => (
+            "Signed out",
+            "Sign in in the browser window. It closes by itself once you are in.",
+        ),
+        (None, true, false) => ("Signed out", "Sign in to see your library."),
+        (None, false, _) => ("Could not load your library", message),
     };
-    let searching = view.kind.is_some() || !query.is_empty();
-    if searching || folders.is_empty() {
-        return matching.into_iter().map(flat).collect();
-    }
-    let in_folder = |item: &LibraryItem, folder: &Folder| item.folder_id == folder.id;
-    // A thing filed in a folder that no longer exists is at the top level.
-    let loose = |item: &&LibraryItem| !folders.iter().any(|folder| in_folder(item, folder));
-    let mut rows: Vec<Row> = matching
-        .iter()
-        .copied()
-        .filter(|item| item.pinned)
-        .filter(loose)
-        .map(flat)
-        .collect();
-    for folder in folders {
-        let held = matching.iter().filter(|item| in_folder(item, folder));
-        let open = view.open_folders.contains(&folder.id);
-        rows.push(Row::Folder {
-            folder,
-            holds: held.clone().count(),
-            open,
-        });
-        if open {
-            rows.extend(held.map(|&item| Row::Item { item, nested: true }));
+    note(state, ui, title, text, |ui| {
+        if !signed_out {
+            return;
         }
-    }
-    rows.extend(
-        matching
-            .iter()
-            .copied()
-            .filter(|item| !item.pinned)
-            .filter(loose)
-            .map(flat),
-    );
-    rows
-}
-
-/// The ways to sign in, under the note that says the library needs it.
-fn import_offer(state: &State, ui: &mut Ui, actions: &mut Vec<Action>) {
-    let palette = &state.palette;
-    ui.add_space(12.0);
-    ui.vertical_centered(|ui| {
         if state.signing_in {
             widgets::spinner(ui, palette, 18.0);
-        } else {
-            if widgets::pill_button(ui, palette, "Sign in").clicked() {
+            return;
+        }
+        ui.horizontal_wrapped(|ui| {
+            if widgets::chip(ui, palette, "Sign in", false).clicked() {
                 actions.push(Action::SignIn);
             }
-            if state.import_source.is_some() {
-                ui.add_space(6.0);
-                if widgets::outline_button(ui, palette, "Import sign-in").clicked() {
-                    actions.push(Action::ImportSignIn);
-                }
+            // The earlier app is on this computer, signed in or not.
+            if state.migration.found.is_some()
+                && widgets::chip(ui, palette, "Move from the old app", false).clicked()
+            {
+                actions.push(Action::OpenMigration);
             }
-        }
-        ui.add_space(6.0);
-        let (note, color) = match &state.import_error {
-            Some(error) => (error.as_str(), palette.danger),
-            None if state.signing_in => ("Sign in in the browser window.", palette.secondary),
-            None => ("", palette.dim),
-        };
-        if !note.is_empty() {
-            ui.label(
-                egui::RichText::new(note)
-                    .font(theme::regular(12.0))
-                    .color(color),
-            );
-        }
+        });
     });
 }
 
 /// Fills a row that is open, and washes one under the pointer.
-fn highlight(state: &State, ui: &Ui, rect: Rect, open: bool, response: &egui::Response) {
+fn highlight(state: &State, ui: &Ui, rect: Rect, open: bool, response: &Response) {
     if open {
         let fill = state.palette.surface_active;
         ui.painter().rect_filled(rect, theme::RADIUS_ROW, fill);
@@ -247,10 +189,37 @@ fn captions(state: &State, ui: &Ui, rect: Rect, left: f32, lines: (&str, &str), 
         second_left += 17.0;
     }
     let width = (rect.right() - second_left - 8.0).max(20.0);
-    let font = theme::regular(12.5);
+    let font = theme::regular(12.0);
     let second = widgets::elided(ui, lines.1, font, palette.secondary, width, 1);
     let at = pos2(second_left, rect.center().y + 2.0);
     ui.painter().galley(at, second, palette.secondary);
+}
+
+/// "Empty", "1 item", "3 items".
+fn holding(holds: usize) -> String {
+    match holds {
+        0 => "Empty".to_owned(),
+        1 => "1 item".to_owned(),
+        holds => format!("{holds} items"),
+    }
+}
+
+/// What a folder answers to, however it is drawn: a click opens or shuts
+/// it, and its menu deletes it.
+fn folder_interact(
+    palette: &theme::Palette,
+    actions: &mut Vec<Action>,
+    response: &Response,
+    folder: &Folder,
+) {
+    menu::context(response, palette, |menu| {
+        if menu.entry(Entry::new("Delete folder").danger()) {
+            actions.push(Action::DeleteFolder(folder.id.clone()));
+        }
+    });
+    if response.clicked() {
+        actions.push(Action::ToggleFolder(folder.id.clone()));
+    }
 }
 
 fn folder_row(
@@ -265,19 +234,13 @@ fn folder_row(
     let (rect, response) =
         ui.allocate_exact_size(vec2(ui.available_width(), ITEM_HEIGHT), Sense::click());
     widgets::name(ui, &response, &folder.name);
-    response.context_menu(|ui| {
-        if ui.button("Delete folder").clicked() {
-            actions.push(Action::DeleteFolder(folder.id.clone()));
-            ui.close();
-        }
-    });
+    folder_interact(&state.palette, actions, &response, folder);
     highlight(state, ui, rect, false, &response);
     let thumb = Rect::from_center_size(
         pos2(rect.left() + 8.0 + THUMB / 2.0, rect.center().y),
         vec2(THUMB, THUMB),
     );
-    ui.painter()
-        .rect_filled(thumb, theme::RADIUS_ROW, palette.surface);
+    ui.painter().rect_filled(thumb, 4.0, palette.surface);
     widgets::paint_icon(ui, Icon::Folder, thumb, 20.0, palette.secondary);
     let chevron =
         Rect::from_center_size(pos2(rect.right() - 18.0, rect.center().y), vec2(16.0, 16.0));
@@ -287,13 +250,8 @@ fn folder_row(
         Icon::ChevronRight
     };
     widgets::paint_icon(ui, icon, chevron, 16.0, palette.secondary);
-    let holds = match holds {
-        0 => "Empty".to_owned(),
-        1 => "1 item".to_owned(),
-        holds => format!("{holds} items"),
-    };
     let text_rect = rect.with_max_x(chevron.left());
-    let second = bulleted(["Folder", &holds]);
+    let second = middle_dotted(["Folder", &holding(holds)]);
     captions(
         state,
         ui,
@@ -302,14 +260,11 @@ fn folder_row(
         (&folder.name, &second),
         false,
     );
-    if response.clicked() {
-        actions.push(Action::ToggleFolder(folder.id.clone()));
-    }
 }
 
 /// What a library item is, where it leads, and how it is drawn.
 fn item_kind(item: &LibraryItem) -> (Option<Page>, &'static str, ArtShape, Icon) {
-    let rounded = ArtShape::Rounded(theme::RADIUS_ROW);
+    let rounded = ArtShape::Rounded(4);
     let id = item.id.clone();
     match item.kind {
         LibraryKind::Playlist => (
@@ -329,21 +284,24 @@ fn item_kind(item: &LibraryItem) -> (Option<Page>, &'static str, ArtShape, Icon)
     }
 }
 
-fn item_row(
+/// What a library item answers to, however it is drawn: a click opens it,
+/// a double click plays it, songs dropped on a playlist are added to it,
+/// and the right button brings its menu. Returns whether it is the page
+/// on screen.
+fn item_interact(
     state: &State,
-    ui: &mut Ui,
+    ui: &Ui,
     actions: &mut Vec<Action>,
+    response: &Response,
     item: &LibraryItem,
-    nested: bool,
-) {
-    let (rect, response) =
-        ui.allocate_exact_size(vec2(ui.available_width(), ITEM_HEIGHT), Sense::click());
-    widgets::name(ui, &response, &item.title);
-    response.context_menu(|ui| item_menu(state, ui, actions, item));
-    let (page, kind, shape, placeholder) = item_kind(item);
+) -> bool {
+    menu::context(response, &state.palette, |menu| {
+        item_menu(state, menu, actions, item);
+    });
+    let (page, ..) = item_kind(item);
     // Songs dropped on Liked Music are liked; on a playlist, added to it.
     if item.kind == LibraryKind::Playlist
-        && let Some(tracks) = drag::target(state, ui, &response)
+        && let Some(tracks) = drag::target(state, ui, response)
     {
         actions.push(if item.id == LIKED_PLAYLIST {
             Action::LikeAll(tracks)
@@ -356,6 +314,33 @@ fn item_row(
         });
     }
     let open = page.as_ref() == Some(state.nav.page());
+    if let Some(page) = page {
+        if response.double_clicked() && playable(item) {
+            actions.push(Action::PlayCollection(page));
+        } else if response.clicked() {
+            actions.push(Action::Open(page));
+        }
+    }
+    open
+}
+
+/// A show plays episode by episode; the other kinds play as a whole.
+fn playable(item: &LibraryItem) -> bool {
+    item.kind != LibraryKind::Podcast
+}
+
+fn item_row(
+    state: &State,
+    ui: &mut Ui,
+    actions: &mut Vec<Action>,
+    item: &LibraryItem,
+    nested: bool,
+) {
+    let (rect, response) =
+        ui.allocate_exact_size(vec2(ui.available_width(), ITEM_HEIGHT), Sense::click());
+    widgets::name(ui, &response, &item.title);
+    let open = item_interact(state, ui, actions, &response, item);
+    let (_, kind, shape, placeholder) = item_kind(item);
     highlight(state, ui, rect, open, &response);
     let indent = if nested { NESTING } else { 0.0 };
     let thumb = Rect::from_center_size(
@@ -363,7 +348,8 @@ fn item_row(
         vec2(THUMB, THUMB),
     );
     widgets::artwork(ui, state, &item.artwork, thumb, shape, placeholder);
-    let second = bulleted([kind, &item.subtitle]);
+    play_over(ui, actions, (&response, rect), (thumb, shape), item);
+    let second = middle_dotted([kind, &item.subtitle]);
     captions(
         state,
         ui,
@@ -372,21 +358,58 @@ fn item_row(
         (&item.title, &second),
         item.pinned,
     );
-    if response.clicked()
-        && let Some(page) = page
-    {
-        actions.push(Action::Open(page));
+}
+
+/// The play button that covers a row's picture while the pointer is on
+/// the row, so starting a playlist does not take a trip through its page.
+fn play_over(
+    ui: &Ui,
+    actions: &mut Vec<Action>,
+    (row, row_rect): (&Response, Rect),
+    (thumb, shape): (Rect, ArtShape),
+    item: &LibraryItem,
+) {
+    let (Some(page), true) = (item_kind(item).0, playable(item)) else {
+        return;
+    };
+    // The button lies over the row, which would lose its hover to it; the
+    // pointer being anywhere in the row is what counts.
+    let inside = ui.rect_contains_pointer(row_rect);
+    let lift = widgets::hover_of(ui, row.id.with("play-over"), inside);
+    if lift <= 0.0 {
+        return;
+    }
+    let radius = match shape {
+        ArtShape::Rounded(radius) => egui::CornerRadius::same(radius),
+        ArtShape::Circle => egui::CornerRadius::same(u8::MAX),
+    };
+    let shade = egui::Color32::from_black_alpha((128.0 * lift) as u8);
+    ui.painter().rect_filled(thumb, radius, shade);
+    let glyph = egui::Color32::WHITE.gamma_multiply(lift);
+    widgets::paint_icon(ui, Icon::PlayFilled, thumb, 20.0, glyph);
+    if !inside {
+        return;
+    }
+    let button = ui.interact(thumb, row.id.with("play"), Sense::click());
+    widgets::name(ui, &button, &format!("Play {}", item.title));
+    if button.clicked() {
+        actions.push(Action::PlayCollection(page));
     }
 }
 
-/// What can be done with a thing in the library: keep it at the top, file
-/// it in a folder, and for a playlist of the person's own, delete it.
-fn item_menu(state: &State, ui: &mut Ui, actions: &mut Vec<Action>, item: &LibraryItem) {
-    ui.set_min_width(190.0);
-    let mut chosen = None;
-    let pin = if item.pinned { "Unpin" } else { "Pin" };
-    if ui.button(pin).clicked() {
-        chosen = Some(Action::SetPinned {
+/// What can be done with a thing in the library: play it, keep it at the
+/// top, file it in a folder, and for a playlist of the person's own,
+/// delete it.
+fn item_menu(state: &State, menu: &mut Menu<'_>, actions: &mut Vec<Action>, item: &LibraryItem) {
+    if let (Some(page), true) = (item_kind(item).0, playable(item)) {
+        if menu.entry(Entry::new("Play").named("Play this")) {
+            actions.push(Action::PlayCollection(page));
+        }
+        menu.separator();
+    }
+    let pin = if item.pinned { "Unpin" } else { "Pin to top" };
+    if menu.item(pin) {
+        actions.push(Action::SetPinned {
             kind: item.kind,
             item_id: item.id.clone(),
             pinned: !item.pinned,
@@ -397,163 +420,31 @@ fn item_menu(state: &State, ui: &mut Ui, actions: &mut Vec<Action>, item: &Libra
         item_id: item.id.clone(),
         folder_id: folder_id.to_owned(),
     };
-    ui.menu_button("Move to folder", |ui| {
-        ui.set_min_width(180.0);
-        if ui.button("New folder…").clicked() {
-            chosen = Some(Action::NewFolder);
+    menu.separator();
+    menu.submenu(Entry::new("Move to folder"), |menu| {
+        if menu.entry(Entry::new("New folder…").icon(Icon::Plus)) {
+            actions.push(Action::NewFolder);
         }
-        if !state.folders.is_empty() {
-            ui.separator();
-        }
+        menu.separator();
         for folder in &state.folders {
             let here = folder.id == item.folder_id;
-            if ui
-                .add_enabled(!here, egui::Button::new(&folder.name))
-                .clicked()
-            {
-                chosen = Some(move_to(&folder.id));
+            let entry = Entry::new(&folder.name).icon(Icon::Folder);
+            if menu.entry(entry.enabled(!here).checked(here)) {
+                actions.push(move_to(&folder.id));
             }
         }
     });
-    if !item.folder_id.is_empty() && ui.button("Remove from folder").clicked() {
-        chosen = Some(move_to(""));
+    if !item.folder_id.is_empty() && menu.item("Remove from folder") {
+        actions.push(move_to(""));
     }
     // Liked Music is YouTube's own and cannot be deleted.
     if item.kind == LibraryKind::Playlist && item.id != LIKED_PLAYLIST {
-        ui.separator();
-        if ui.button("Delete playlist").clicked() {
-            chosen = Some(Action::AskDeletePlaylist {
+        menu.separator();
+        if menu.entry(Entry::new("Delete playlist").danger()) {
+            actions.push(Action::AskDeletePlaylist {
                 playlist_id: item.id.clone(),
                 title: item.title.clone(),
             });
         }
-    }
-    if let Some(action) = chosen {
-        actions.push(action);
-        ui.close();
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn item(title: &str, kind: LibraryKind, pinned: bool) -> LibraryItem {
-        LibraryItem {
-            title: title.into(),
-            kind,
-            pinned,
-            ..LibraryItem::default()
-        }
-    }
-
-    fn filed(title: &str, folder: &str) -> LibraryItem {
-        LibraryItem {
-            folder_id: folder.into(),
-            ..item(title, LibraryKind::Playlist, false)
-        }
-    }
-
-    fn view<'a>(
-        kind: Option<LibraryKind>,
-        query: &'a str,
-        sort: LibrarySort,
-        open_folders: &'a HashSet<String>,
-    ) -> View<'a> {
-        View {
-            kind,
-            query,
-            sort,
-            open_folders,
-        }
-    }
-
-    /// Each row as a word: a folder as `[name]`, a nested item indented.
-    fn titles(rows: &[Row]) -> Vec<String> {
-        rows.iter()
-            .map(|row| match row {
-                Row::Folder { folder, .. } => format!("[{}]", folder.name),
-                Row::Item { item, nested: true } => format!("  {}", item.title),
-                Row::Item { item, .. } => item.title.clone(),
-            })
-            .collect()
-    }
-
-    #[test]
-    fn the_library_is_narrowed_by_kind_and_by_what_is_typed() {
-        let library = [
-            item("Road trip", LibraryKind::Playlist, false),
-            item("Discovery", LibraryKind::Album, false),
-            item("Roads", LibraryKind::Album, false),
-        ];
-        let none = HashSet::new();
-        let albums = view(Some(LibraryKind::Album), "", LibrarySort::Recent, &none);
-        assert_eq!(
-            titles(&arranged(&library, &[], &albums)),
-            ["Discovery", "Roads"]
-        );
-        let typed = view(None, " ROAD ", LibrarySort::Recent, &none);
-        assert_eq!(
-            titles(&arranged(&library, &[], &typed)),
-            ["Road trip", "Roads"]
-        );
-    }
-
-    #[test]
-    fn pinned_items_come_first_in_either_order() {
-        let library = [
-            item("Zebra", LibraryKind::Playlist, false),
-            item("Liked Music", LibraryKind::Playlist, true),
-            item("apple", LibraryKind::Playlist, false),
-        ];
-        let none = HashSet::new();
-        let by_name = view(None, "", LibrarySort::Name, &none);
-        assert_eq!(
-            titles(&arranged(&library, &[], &by_name)),
-            ["Liked Music", "apple", "Zebra"]
-        );
-        let recent = view(None, "", LibrarySort::Recent, &none);
-        assert_eq!(
-            titles(&arranged(&library, &[], &recent)),
-            ["Liked Music", "Zebra", "apple"]
-        );
-    }
-
-    #[test]
-    fn a_folder_holds_what_was_filed_in_it_and_shows_it_when_open() {
-        let library = [
-            filed("Running", "f1"),
-            item("Liked Music", LibraryKind::Playlist, true),
-            item("Road trip", LibraryKind::Playlist, false),
-            filed("Lost", "gone"),
-        ];
-        let folders = [Folder {
-            id: "f1".into(),
-            name: "Sport".into(),
-        }];
-        let shut = HashSet::new();
-        let closed = view(None, "", LibrarySort::Recent, &shut);
-        assert_eq!(
-            titles(&arranged(&library, &folders, &closed)),
-            ["Liked Music", "[Sport]", "Road trip", "Lost"]
-        );
-        let opened = HashSet::from(["f1".to_owned()]);
-        let open = view(None, "", LibrarySort::Recent, &opened);
-        assert_eq!(
-            titles(&arranged(&library, &folders, &open)),
-            ["Liked Music", "[Sport]", "  Running", "Road trip", "Lost"]
-        );
-    }
-
-    #[test]
-    fn looking_for_something_finds_it_inside_a_shut_folder() {
-        let library = [filed("Running", "f1")];
-        let folders = [Folder {
-            id: "f1".into(),
-            name: "Sport".into(),
-        }];
-        let shut = HashSet::new();
-        let typed = view(None, "run", LibrarySort::Recent, &shut);
-        assert_eq!(titles(&arranged(&library, &folders, &typed)), ["Running"]);
     }
 }

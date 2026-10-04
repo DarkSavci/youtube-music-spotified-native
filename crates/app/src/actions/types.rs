@@ -1,13 +1,19 @@
 //! What can be asked for, and what carrying it out can call for.
 
 use std::path::PathBuf;
+use std::time::Instant;
 
-use spotified_client::models::{LibraryKind, MixSeed, SearchFilter, Track};
+use spotified_client::models::{Channel, LibraryKind, MixSeed, SearchFilter, StatKind, Track};
 use spotified_client::session::{Command, Projection};
 
+use crate::accounts::Accounts;
 use crate::backend::{Request, Response};
+use crate::migrate;
+use crate::settings::{LibrarySort, VolumeLevel};
+use crate::share;
 use crate::sidecar::CoreStatus;
-use crate::state::{MiniPanel, Page, Select};
+use crate::state::Notice;
+use crate::state::{MiniPanel, Page, Select, SongOrder, Whole};
 use crate::themes;
 use crate::together;
 use crate::update;
@@ -17,15 +23,82 @@ pub enum Action {
     Open(Page),
     Back,
     Forward,
+    /// Collapse the sidebar to a rail of covers, or widen it again.
     ToggleSidebar,
+    /// Give the library the page's room, or take it back.
+    ToggleLibraryExpanded,
+    /// Show the library as a grid of covers, or as rows again.
+    ToggleLibraryGrid,
     /// The sidebar was dragged to this width.
     ResizeSidebar(f32),
     /// A chip in the sidebar was clicked. Clicking the active one clears it.
     FilterLibrary(LibraryKind),
     /// The library's search field changed.
     SetLibraryQuery(String),
-    /// The library's sort button was clicked.
-    CycleLibrarySort,
+    /// An order was chosen from the library's sort menu.
+    SetLibrarySort(LibrarySort),
+    /// A mood chip on Home was clicked: its params. Clicking the chosen
+    /// one goes back to plain Home.
+    ChooseMood(String),
+    /// The end of Home has been scrolled to: read its next few shelves.
+    /// `retry` after a page that failed, which is not asked for again
+    /// without it.
+    MoreHome {
+        retry: bool,
+    },
+    /// The end of the songs read of a playlist is near: read the next.
+    MorePlaylist {
+        id: String,
+        retry: bool,
+    },
+    /// Play a playlist from this place in it: all of it, read to its end
+    /// first if it has not been.
+    PlayPlaylist {
+        id: String,
+        index: usize,
+    },
+    /// Do this with the whole of a playlist, read to its end first if it
+    /// has not been.
+    WholePlaylist {
+        id: String,
+        then: Whole,
+    },
+    /// Play every song of an artist's, most played first, or a shuffle of
+    /// them.
+    PlayArtist {
+        artist_id: String,
+        shuffle: bool,
+    },
+    /// Replace the queue with the one on the account's other devices.
+    ContinueFromRemote,
+    /// An order was chosen on the page of all an artist's songs.
+    SetSongOrder(SongOrder),
+    /// Open another batch of the artist's releases for their songs.
+    OpenMoreReleases,
+    /// Show the whole of the text about what the page shows, or clip it.
+    ToggleAbout,
+    /// Take this out of the recent searches, the account's too.
+    ForgetSearch(String),
+    /// Empty the recent searches.
+    ClearSearches,
+    /// The listening page's lookup field changed.
+    SetStatsLookup(String),
+    /// The typing in the lookup field has paused: ask for its matches.
+    RunStatsLookup,
+    /// Put the lookup's matches away.
+    CloseStatsLookup,
+    /// Show the listener's figures for a song, an artist or an album.
+    OpenStat {
+        kind: StatKind,
+        id: String,
+    },
+    CloseStat,
+    /// An artist's card came into view with no picture of them yet.
+    WantArtistPhoto(String),
+    /// Show the latest release notes over the page.
+    ShowWhatsNew,
+    /// Hold the page this far down, to look at the lower part of it.
+    HoldScroll(f32),
     /// The search field's text changed.
     SetSearchQuery(String),
     /// The person has stopped typing: send the query on screen.
@@ -109,8 +182,15 @@ pub enum Action {
         track_ids: Vec<String>,
     },
     CopyLink(String),
+    /// Copy the YouTube Music link to this, and say so.
+    Share {
+        kind: share::Kind,
+        id: String,
+    },
     /// Ask for a name for a new playlist that will hold these songs.
     NewPlaylist {
+        /// What the name starts as; empty for nothing.
+        name: String,
         track_ids: Vec<String>,
     },
     /// Ask whether a playlist is really to be deleted.
@@ -162,7 +242,38 @@ pub enum Action {
     },
     /// Bring the main window forward.
     ShowMainWindow,
+    /// Give the window to what is playing: its cover edge to edge, with the
+    /// transport over it. Or take it back.
+    SetFullscreenPlayer(bool),
+    ToggleFullscreenPlayer,
     SetNormaliseVolume(bool),
+    /// How loud evening out the loudness leaves the songs.
+    SetVolumeLevel(VolumeLevel),
+    /// Let the volume go past 100%, or hold it to that.
+    SetVolumeBoost(bool),
+    SetGapless(bool),
+    /// Keep playing similar songs when the queue runs out, or stop.
+    SetAutoplay(bool),
+    SetResumeOnLaunch(bool),
+    SetContinueFromYouTubeMusic(bool),
+    SetReportToYouTube(bool),
+    /// Hold the kept songs to this many megabytes.
+    SetCacheSize(u32),
+    SetReduceMotion(bool),
+    /// Show the time left at the end of the seek bar, or the length again.
+    ToggleRemainingTime,
+    /// Play this many times as fast as normal.
+    SetSpeed(f32),
+    /// Put the Settings page back as a new profile has it.
+    ResetPreferences,
+    /// Like the song that is playing, or take the like back.
+    SaveCurrent,
+    /// Open the search page with the caret in its field.
+    FocusSearch,
+    /// Something stands in the way of playback that is worth saying.
+    Notify(Notice),
+    /// The notice has been read.
+    DismissNotice,
     SetCrossfade(u32),
     SetVisualizer(bool),
     /// Wear a built-in theme.
@@ -204,6 +315,8 @@ pub enum Action {
     TogetherEvent(Box<together::Event>),
     /// Once a second in a room: keep the player with it.
     TogetherTick,
+    /// Anything else the Listen Together page asks for.
+    Room(together::Ask),
     /// Copy this, and say that it was done.
     CopyText {
         text: String,
@@ -215,12 +328,51 @@ pub enum Action {
     UpdateChanged(update::Status),
     /// Run the downloaded installer and quit.
     InstallUpdate,
-    /// Open a browser window to sign in with.
+    /// Open a browser window to sign in with: the account it comes back
+    /// with is added to those saved, and is the one in use.
     SignIn,
+    /// Ask whether the account in use is really to be signed out.
     SignOut,
-    /// Copy the Electron app's sign-in into this app.
-    ImportSignIn,
-    /// The copy worked and the core is restarting with it.
+    /// Use another of the saved accounts.
+    SwitchAccount(String),
+    /// Ask whether a saved account is really to be removed.
+    AskRemoveAccount(String),
+    /// The list of saved accounts is now this.
+    AccountsChanged(Box<Accounts>),
+    /// Ask the account in use for its channels again.
+    RefreshChannels,
+    /// Open the account's menu, as a click on the account would.
+    OpenAccountMenu,
+    /// The system has said whether the app starts with it.
+    StartAtLoginKnown(bool),
+    /// The tray icon was clicked: open the flyout with its corner here, or
+    /// close it if it is open.
+    ToggleFlyout {
+        position: [f32; 2],
+        now: Instant,
+    },
+    HideFlyout,
+    /// Save a problem report to the Downloads folder.
+    SaveReport,
+    /// That ended: with where the report is, or with why there is none.
+    ReportSaved(Result<PathBuf, String>),
+    /// Show what the Electron app has, to choose what to bring over.
+    OpenMigration,
+    /// Tick or untick a kind of thing to bring.
+    SetMigrationKind(migrate::Kind, bool),
+    /// Bring over what is ticked.
+    StartMigration,
+    /// The Electron app's profile was looked at. `brought` is what earlier
+    /// runs took; `offer` asks for the choice to be shown unprompted.
+    MigrationFound {
+        found: Option<Box<migrate::Found>>,
+        brought: migrate::Kinds,
+        offer: bool,
+    },
+    MigrationProgress(migrate::Progress),
+    /// The run ended, with what it came to.
+    MigrationDone(Box<migrate::Outcome>),
+    /// The account in use changed and the core is restarting on it.
     AccountChanged,
     SignInFailed(String),
     /// Boxed: a page of results is far larger than any other action.
@@ -233,12 +385,29 @@ pub enum Effect {
     Fetch(Request),
     /// Send [`Action::RunSearch`] once typing has paused.
     DebounceSearch,
-    /// Copy the credentials at this path, then restart the core.
-    ImportSignIn(PathBuf),
-    /// Run the browser sign-in, then restart the core.
+    /// Send [`Action::RunStatsLookup`] once typing has paused.
+    DebounceStatsLookup,
+    /// Bring these kinds of thing over from the Electron app.
+    Migrate(migrate::Kinds),
+    /// The choice of what to bring was shown and closed: it is not to be
+    /// shown again unasked.
+    MigrationSeen,
+    /// Run the browser sign-in, then restart the core on the new account.
     SignIn,
-    /// Delete the credentials, then restart the core.
-    SignOut,
+    /// Restart the core on this saved account.
+    SwitchAccount(String),
+    /// Sign this saved account out and forget it; if it is the one in use,
+    /// the core restarts with nobody signed in.
+    RemoveAccount(String),
+    /// Note what the account in use is called, and its picture.
+    RememberAccount {
+        name: String,
+        avatar_url: String,
+    },
+    /// Note the channels the account in use can act as.
+    RememberChannels(Vec<Channel>),
+    /// Gather the logs and a summary into a zip, on a thread of its own.
+    SaveReport,
     /// Send this to the core's session.
     Command(Command),
     CopyToClipboard(String),
@@ -261,6 +430,12 @@ pub enum Effect {
     TogetherConnect(together::Options),
     /// Close the line, leaving the room.
     TogetherDisconnect,
+    /// Leave the room, handing it to this member; the line is then closed.
+    TogetherHandOver(String),
+    /// See whether this address answers as a relay does.
+    TogetherProbe(String),
+    /// Send [`together::Ask::RunSearch`] once typing has paused.
+    DebounceRoomSearch,
     /// Send the room a command of this kind with these fields.
     TogetherCommand(&'static str, serde_json::Value),
     /// Tell the room what this player is doing with this entry.
@@ -269,6 +444,8 @@ pub enum Effect {
     CheckForUpdate,
     /// Run this installer and quit.
     InstallUpdate(PathBuf),
+    /// Have Windows say that this version is downloaded and waiting.
+    NotifyUpdate(String),
     /// Run yt-dlp's own updater.
     UpdateResolver,
     OpenThemesFolder,

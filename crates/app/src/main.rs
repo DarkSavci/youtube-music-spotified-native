@@ -6,21 +6,28 @@
 // A release build is a windowed app with no console.
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
+mod accounts;
 mod actions;
 mod app;
+mod artistsongs;
 mod backend;
 mod changelog;
 mod channel;
 mod cli;
+mod fonts;
 mod icon;
 mod images;
-mod import;
 mod logging;
+mod migrate;
 mod paths;
 mod platform;
+mod redact;
+mod report;
+mod resolver;
 mod screenshot;
 mod session;
 mod settings;
+mod share;
 mod sidecar;
 mod signin;
 mod single_instance;
@@ -84,6 +91,10 @@ fn run(args: cli::Args, started: Instant) -> Result<(), Box<dyn std::error::Erro
         log_file.display()
     );
 
+    // Before any window: the taskbar files a window under the id its
+    // process had when the window was made.
+    platform::identity::claim();
+
     let args_size = args.size;
     let launch = Launch {
         settings: settings::load(&paths.settings_file()),
@@ -93,6 +104,7 @@ fn run(args: cli::Args, started: Instant) -> Result<(), Box<dyn std::error::Erro
         screenshot: args.screenshot,
         open: args.open,
         hidden: args.hidden,
+        old_profile: args.old_profile,
         started,
     };
     // On Windows the app draws its own title bar unless asked not to.

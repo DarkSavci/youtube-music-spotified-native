@@ -142,6 +142,11 @@ impl HttpSource {
         }
     }
 
+    /// The whole stream's length, once an answer has stated it.
+    pub fn length(&self) -> Option<u64> {
+        self.length
+    }
+
     fn at_end(&self) -> bool {
         self.length.is_some_and(|length| self.position >= length)
     }

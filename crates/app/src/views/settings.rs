@@ -3,11 +3,15 @@
 
 use eframe::egui::{self, Align, Frame, Layout, Margin, Ui};
 
-use super::{cards, format, keys, widgets};
-use crate::actions::{Action, MAX_CROSSFADE_SECONDS};
-use crate::state::{Loadable, Page, State};
+use super::{cards, format, widgets};
+use crate::actions::Action;
+use crate::report;
+use crate::state::{Page, State};
 use crate::theme;
 use crate::update::Status;
+
+mod accounts;
+mod playback;
 
 /// Cards stop growing here; a row's label and its control would otherwise
 /// drift apart on a wide window.
@@ -18,27 +22,12 @@ pub fn show(state: &State, ui: &mut Ui, actions: &mut Vec<Action>) {
     // No wider than reads well, and never wider than there is room for.
     ui.set_max_width(MAX_WIDTH.min(ui.available_width()));
 
-    section(state, ui, "Account", |ui| account(state, ui, actions));
+    section(state, ui, "Account", |ui| {
+        accounts::show(state, ui, actions);
+        accounts::old_app(state, ui, actions);
+    });
     section(state, ui, "Playback", |ui| {
-        let on = state.settings.normalise_volume;
-        let label = "Normalise volume";
-        let about = "Turns louder songs down so they all play at a similar level. \
-                     Applies from the next song.";
-        row(state, ui, label, about, |ui| {
-            if widgets::switch(ui, &state.palette, on, label).clicked() {
-                actions.push(Action::SetNormaliseVolume(!on));
-            }
-        });
-        ui.add_space(10.0);
-        let about = "Fades each song into the next as it ends. Off at zero.";
-        row(state, ui, "Crossfade", about, |ui| {
-            // The view may not change state, so it moves a copy and asks.
-            let mut seconds = state.settings.crossfade_seconds;
-            let slider = egui::Slider::new(&mut seconds, 0..=MAX_CROSSFADE_SECONDS).suffix(" s");
-            if ui.add(slider).changed() {
-                actions.push(Action::SetCrossfade(seconds));
-            }
-        });
+        playback::show(state, ui, actions)
     });
     section(state, ui, "Equalizer", |ui| equalizer(state, ui, actions));
     section(state, ui, "Appearance", |ui| {
@@ -53,8 +42,24 @@ pub fn show(state: &State, ui: &mut Ui, actions: &mut Vec<Action>) {
                 actions.push(Action::SetVisualizer(!on));
             }
         });
+        ui.add_space(10.0);
+        let on = state.settings.reduce_motion;
+        let label = "Reduce motion";
+        let about = "Minimise animation: hovers, switches and loading shapes change at \
+                     once, and nothing fades.";
+        row(state, ui, label, about, |ui| {
+            if widgets::switch(ui, &state.palette, on, label).clicked() {
+                actions.push(Action::SetReduceMotion(!on));
+            }
+        });
     });
     section(state, ui, "Storage", |ui| {
+        let about = "Songs you play, and the ones about to play, are kept on disk so they \
+                     start instantly. The least recently played are removed first.";
+        row(state, ui, "Song cache", about, |ui| {
+            playback::cache_size(state, ui, actions);
+        });
+        ui.add_space(10.0);
         let kept = match state.cache_usage {
             Some(usage) if usage.tracks > 0 => format!(
                 "{} in {}.",
@@ -109,14 +114,11 @@ pub fn show(state: &State, ui: &mut Ui, actions: &mut Vec<Action>) {
             }
         });
     });
-    section(state, ui, "Keyboard shortcuts", |ui| shortcuts(state, ui));
+    section(state, ui, "Keyboard shortcuts", |ui| {
+        playback::shortcuts(state, ui);
+    });
     section(state, ui, "Troubleshooting", |ui| {
-        let about = "A log is written for each launch. Send the newest with a bug report.";
-        row(state, ui, "Logs", about, |ui| {
-            if widgets::outline_button(ui, &state.palette, "Open folder").clicked() {
-                actions.push(Action::OpenLogs);
-            }
-        });
+        problem_report(state, ui, actions);
         ui.add_space(10.0);
         let about = "yt-dlp finds the audio for each song. Update it if songs stop playing.";
         row(state, ui, "Stream resolver", about, |ui| {
@@ -126,8 +128,17 @@ pub fn show(state: &State, ui: &mut Ui, actions: &mut Vec<Action>) {
                 actions.push(Action::UpdateResolver);
             }
         });
+        ui.add_space(10.0);
+        let about = "Restore every setting on this page to its default.";
+        row(state, ui, "Reset preferences", about, |ui| {
+            if widgets::outline_button(ui, &state.palette, "Reset").clicked() {
+                actions.push(Action::ResetPreferences);
+            }
+        });
     });
     section(state, ui, "About", |ui| {
+        // The version is what a report of a fault begins with.
+        widgets::selectable(ui);
         let version = format!("{} {}", crate::APP_NAME, env!("CARGO_PKG_VERSION"));
         row(state, ui, &version, &update_note(&state.update), |ui| {
             update_button(state, ui, actions);
@@ -136,13 +147,46 @@ pub fn show(state: &State, ui: &mut Ui, actions: &mut Vec<Action>) {
             }
         });
         ui.add_space(10.0);
-        ui.label(
-            egui::RichText::new(
-                "Built with Rust and egui. Not affiliated with Spotify or YouTube.",
-            )
-            .font(theme::regular(12.5))
-            .color(state.palette.secondary),
+        let credit = egui::RichText::new(
+            "Built with Rust and egui. Not affiliated with Spotify or YouTube.",
         );
+        let credit = credit
+            .font(theme::regular(12.5))
+            .color(state.palette.secondary);
+        ui.add(egui::Label::new(credit).selectable(true));
+    });
+}
+
+/// The one thing to do when something breaks: save the log and send it.
+/// The line under it says what is in the file and what is not, because
+/// "send us your logs" is only a fair thing to ask when people can see
+/// that it is safe to.
+fn problem_report(state: &State, ui: &mut Ui, actions: &mut Vec<Action>) {
+    let about = match &state.report {
+        report::Status::Saved(zip) => format!(
+            "Saved to {}. Send that file along with what happened and roughly when.",
+            zip.display()
+        ),
+        report::Status::Failed(reason) => format!("Could not create the report: {reason}"),
+        report::Status::Idle | report::Status::Working => {
+            "Saves a zip to your Downloads folder with the app's log and a short system \
+             summary, for sending with a bug report. It lists the songs that played, but \
+             never your cookies, sign-in or email address."
+                .to_owned()
+        }
+    };
+    let words = ("Problem report", about.as_str());
+    row_with_room(state, ui, words, TWO_BUTTONS_ROOM, |ui| {
+        if widgets::outline_button(ui, &state.palette, "Open log folder").clicked() {
+            actions.push(Action::OpenLogs);
+        }
+        let working = state.report == report::Status::Working;
+        ui.add_enabled_ui(!working, |ui| {
+            let label = if working { "Saving…" } else { "Save report" };
+            if widgets::outline_button(ui, &state.palette, label).clicked() {
+                actions.push(Action::SaveReport);
+            }
+        });
     });
 }
 
@@ -228,12 +272,28 @@ fn section(state: &State, ui: &mut Ui, title: &str, contents: impl FnOnce(&mut U
         });
 }
 
+/// The room a row leaves at its right for one control.
+const CONTROL_ROOM: f32 = 140.0;
+/// The room for two buttons side by side.
+const TWO_BUTTONS_ROOM: f32 = 310.0;
+
 /// A setting: what it is, what it does, and its control at the right.
 fn row(state: &State, ui: &mut Ui, label: &str, about: &str, control: impl FnOnce(&mut Ui)) {
+    row_with_room(state, ui, (label, about), CONTROL_ROOM, control);
+}
+
+/// A row whose controls need `room` at the right, more than one does.
+fn row_with_room(
+    state: &State,
+    ui: &mut Ui,
+    (label, about): (&str, &str),
+    room: f32,
+    control: impl FnOnce(&mut Ui),
+) {
     ui.horizontal(|ui| {
         ui.vertical(|ui| {
             // Leave the control its room; the text wraps in what is left.
-            ui.set_max_width((ui.available_width() - 140.0).max(140.0));
+            ui.set_max_width((ui.available_width() - room).max(140.0));
             ui.label(egui::RichText::new(label).font(theme::medium(14.0)));
             ui.label(
                 egui::RichText::new(about)
@@ -243,91 +303,6 @@ fn row(state: &State, ui: &mut Ui, label: &str, about: &str, control: impl FnOnc
         });
         ui.with_layout(Layout::right_to_left(Align::Center), control);
     });
-}
-
-fn account(state: &State, ui: &mut Ui, actions: &mut Vec<Action>) {
-    let palette = &state.palette;
-    // The library only loads for a signed-in account, so it is the witness.
-    let signed_in = matches!(state.library, Loadable::Loaded(_));
-    let name = state.account.as_ref().map(|account| account.name.as_str());
-    let (label, about) = if signed_in {
-        (
-            name.filter(|name| !name.is_empty()).unwrap_or("Signed in"),
-            "Your library, likes and playlists come from your YouTube Music account.",
-        )
-    } else {
-        (
-            "Signed out",
-            "Browsing and search work. Your library and reliable playback need an account.",
-        )
-    };
-    row(state, ui, label, about, |ui| {
-        if signed_in {
-            if widgets::outline_button(ui, palette, "Sign out").clicked() {
-                actions.push(Action::SignOut);
-            }
-        } else if state.signing_in {
-            widgets::spinner(ui, palette, 18.0);
-        } else {
-            if widgets::pill_button(ui, palette, "Sign in").clicked() {
-                actions.push(Action::SignIn);
-            }
-            if state.import_source.is_some()
-                && widgets::outline_button(ui, palette, "Import sign-in").clicked()
-            {
-                actions.push(Action::ImportSignIn);
-            }
-        }
-    });
-    // Most accounts hold one channel, and then there is nothing to choose.
-    if signed_in && state.channels.len() > 1 {
-        ui.add_space(10.0);
-        let about = "Each channel of your account has its own library and likes.";
-        row(state, ui, "Channel", about, |ui| {
-            channel_choice(state, ui, actions)
-        });
-    }
-    let note = if let Some(error) = &state.import_error {
-        Some((error.as_str(), palette.danger))
-    } else if state.signing_in {
-        Some((
-            "Sign in to YouTube Music in the browser window. It closes by itself when you are in.",
-            palette.secondary,
-        ))
-    } else if !signed_in && state.import_source.is_some() {
-        Some((
-            "Sign in opens your browser on a fresh profile. Import copies the sign-in \
-             from Youtube Music Spotified on this computer.",
-            palette.dim,
-        ))
-    } else {
-        None
-    };
-    if let Some((text, color)) = note {
-        ui.label(
-            egui::RichText::new(text)
-                .font(theme::regular(12.0))
-                .color(color),
-        );
-    }
-}
-
-fn channel_choice(state: &State, ui: &mut Ui, actions: &mut Vec<Action>) {
-    let current = state
-        .channels
-        .iter()
-        .find(|channel| channel.id == state.channel_id)
-        .map_or("Choose", |channel| channel.name.as_str());
-    egui::ComboBox::from_id_salt("channel")
-        .selected_text(current)
-        .show_ui(ui, |ui| {
-            for channel in &state.channels {
-                let chosen = channel.id == state.channel_id;
-                if ui.selectable_label(chosen, &channel.name).clicked() && !chosen {
-                    actions.push(Action::SwitchChannel(channel.id.clone()));
-                }
-            }
-        });
 }
 
 /// Shapes to start from. Each is decibels for the ten bands, low to high.
@@ -397,25 +372,4 @@ fn equalizer(state: &State, ui: &mut Ui, actions: &mut Vec<Action>) {
             });
         }
     });
-}
-
-fn shortcuts(state: &State, ui: &mut Ui) {
-    egui::Grid::new("shortcuts")
-        .num_columns(2)
-        .spacing([32.0, 10.0])
-        .show(ui, |ui| {
-            for shortcut in keys::SHORTCUTS {
-                let combination = egui::KeyboardShortcut::new(shortcut.modifiers, shortcut.key);
-                ui.label(
-                    egui::RichText::new(ui.ctx().format_shortcut(&combination))
-                        .font(theme::semibold(13.0)),
-                );
-                ui.label(
-                    egui::RichText::new(shortcut.description)
-                        .font(theme::regular(13.5))
-                        .color(state.palette.secondary),
-                );
-                ui.end_row();
-            }
-        });
 }

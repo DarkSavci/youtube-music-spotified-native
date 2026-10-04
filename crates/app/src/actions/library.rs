@@ -1,6 +1,7 @@
-//! Keeping the library in order: what is pinned to the top, and what is
-//! filed in which folder. Neither exists in YouTube Music; the core keeps
-//! both on this computer.
+//! The library: how the sidebar shows it, and keeping it in order: what
+//! is pinned to the top, and what is filed in which folder. Pins and
+//! folders do not exist in YouTube Music; the core keeps both on this
+//! computer.
 
 use spotified_client::models::{LibraryItem, LibraryKind};
 
@@ -12,6 +13,44 @@ use crate::state::{Dialog, Loadable, State};
 /// in which case the library is fetched again to show what is really so.
 pub(super) fn organise(state: &mut State, action: Action) -> Vec<Effect> {
     match action {
+        Action::ToggleSidebar => {
+            state.settings.sidebar_collapsed = !state.settings.sidebar_collapsed;
+            // The rail has no search field: what was typed would go on
+            // hiding things with no way in sight to clear it.
+            if state.settings.sidebar_collapsed {
+                state.library_query.clear();
+            }
+            vec![Effect::SaveSettings]
+        }
+        Action::ToggleLibraryExpanded => {
+            state.library_expanded = !state.library_expanded;
+            Vec::new()
+        }
+        // The wide library and the sidebar each remember their own way.
+        Action::ToggleLibraryGrid => {
+            let grid = if state.library_expanded {
+                &mut state.settings.library_expanded_grid
+            } else {
+                &mut state.settings.library_grid
+            };
+            *grid = !*grid;
+            vec![Effect::SaveSettings]
+        }
+        Action::FilterLibrary(kind) => {
+            state.library_filter = (state.library_filter != Some(kind)).then_some(kind);
+            Vec::new()
+        }
+        Action::SetLibraryQuery(query) => {
+            state.library_query = query;
+            Vec::new()
+        }
+        Action::SetLibrarySort(sort) => {
+            if state.settings.library_sort == sort {
+                return Vec::new();
+            }
+            state.settings.library_sort = sort;
+            vec![Effect::SaveSettings]
+        }
         Action::SetPinned {
             kind,
             item_id,

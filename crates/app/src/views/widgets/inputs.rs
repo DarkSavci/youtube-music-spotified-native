@@ -16,30 +16,40 @@ pub struct TextField<'a> {
     pub label: &'a str,
     pub icon: Option<Icon>,
     pub width: f32,
+    /// Smaller, with smaller text: the library's own search field.
+    pub compact: bool,
 }
 
 impl TextField<'_> {
     const HEIGHT: f32 = 36.0;
+    const COMPACT_HEIGHT: f32 = 32.0;
 
     /// Draws the field. The view may not change state, so the field edits
     /// a copy: what was typed is returned on the frame it changes.
     pub fn show(&self, ui: &mut Ui, palette: &Palette) -> Option<String> {
         let id = ui.id().with(("text-field", self.label));
         let focused = ui.memory(|memory| memory.has_focus(id));
-        let outline = if focused {
-            palette.secondary
-        } else {
-            palette.outline
+        // The compact field has no outline until the caret is in it.
+        let outline = match (focused, self.compact) {
+            (true, true) => palette.text,
+            (true, false) => palette.secondary,
+            (false, true) => palette.surface,
+            (false, false) => palette.outline,
         };
         let mut edited = self.text.to_owned();
         let mut changed = false;
+        let (height, radius, text) = if self.compact {
+            (Self::COMPACT_HEIGHT, 5, 12.0)
+        } else {
+            (Self::HEIGHT, theme::RADIUS, 14.0)
+        };
         Frame::new()
             .fill(palette.surface)
             .stroke((1.0, outline))
-            .corner_radius(theme::RADIUS)
+            .corner_radius(radius)
             .inner_margin(Margin::symmetric(10, 0))
             .show(ui, |ui| {
-                ui.set_height(Self::HEIGHT);
+                ui.set_height(height);
                 ui.set_width((self.width - 22.0).max(40.0));
                 ui.horizontal_centered(|ui| {
                     ui.spacing_mut().item_spacing.x = 8.0;
@@ -48,7 +58,8 @@ impl TextField<'_> {
                     }
                     let edit = egui::TextEdit::singleline(&mut edited)
                         .id(id)
-                        .hint_text(self.hint)
+                        .hint_text(egui::RichText::new(self.hint).font(theme::regular(text)))
+                        .font(theme::regular(text))
                         .frame(Frame::NONE)
                         .desired_width(ui.available_width());
                     let response = ui.add(edit);

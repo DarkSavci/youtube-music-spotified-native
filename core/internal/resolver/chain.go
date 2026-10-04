@@ -129,10 +129,22 @@ func (c *Chain) Resolve(ctx context.Context, videoID string) (domain.Stream, Qua
 }
 
 func (c *Chain) ResolveVideo(ctx context.Context, id string) (domain.Stream, error) {
+	return c.ResolveVideoAs(ctx, id, VideoPick{})
+}
+
+// ResolveVideoAs asks the first adapter that can honour the pick. One that
+// only knows ResolveVideo is used for the default pick alone: handing a
+// client a codec it said it cannot decode helps nobody.
+func (c *Chain) ResolveVideoAs(ctx context.Context, id string, pick VideoPick) (domain.Stream, error) {
 	for _, r := range []Resolver{c.Preferred, c.Fallback} {
 		if video, ok := r.(interface {
-			ResolveVideo(context.Context, string) (domain.Stream, error)
+			ResolveVideoAs(context.Context, string, VideoPick) (domain.Stream, error)
 		}); ok {
+			return video.ResolveVideoAs(ctx, id, pick)
+		}
+		if video, ok := r.(interface {
+			ResolveVideo(context.Context, string) (domain.Stream, error)
+		}); ok && pick == (VideoPick{}) {
 			return video.ResolveVideo(ctx, id)
 		}
 	}

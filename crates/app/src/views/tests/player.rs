@@ -142,6 +142,58 @@ fn a_mini_player_as_a_strip_keeps_the_transport() {
 }
 
 #[test]
+fn a_tall_mini_player_has_the_speed_beside_its_window_buttons_with_the_whole_panel() {
+    let mut harness = mini_harness(playing(on_playlist()), vec2(360.0, 580.0));
+    let speed = harness.get_by_label("Playback speed: 1×").rect();
+    let pin = harness.get_by_label_contains("on top: click").rect();
+    assert!(speed.right() <= pin.left() + 1.0);
+    assert!((speed.center().y - pin.center().y).abs() < 1.0);
+
+    harness.get_by_label("Playback speed: 1×").click();
+    harness.run();
+    // The whole panel: the slider is there, with its steps.
+    assert!(harness.query_all_by_label("Playback speed").count() > 0);
+    harness.get_by_label("1.5").click();
+    harness.run();
+    assert!(asked(&harness, |action| matches!(
+        action,
+        Action::SetSpeed(speed) if *speed == 1.5
+    )));
+}
+
+#[test]
+fn a_strip_of_a_mini_player_opens_the_speed_as_one_row_of_presets() {
+    let mut harness = mini_harness(playing(on_playlist()), vec2(560.0, 80.0));
+    harness.get_by_label("Playback speed: 1×").click();
+    harness.run();
+    // No room for the slider: the presets between a step down and a step up.
+    assert!(harness.query_by_label("Playback speed").is_none());
+    let (slower, faster) = (
+        harness.get_by_label("Slower").rect(),
+        harness.get_by_label("Faster").rect(),
+    );
+    let preset = harness.get_by_label("1.25").rect();
+    assert!(slower.right() < preset.left() && preset.right() < faster.left());
+    assert!((slower.center().y - preset.center().y).abs() < 1.0);
+    // And all of it inside the window.
+    assert!(slower.left() >= 0.0 && faster.right() <= 560.0);
+    harness.get_by_label("Faster").click();
+    harness.run();
+    assert!(asked(&harness, |action| matches!(
+        action,
+        Action::SetSpeed(speed) if (*speed - 1.05).abs() < 1e-4
+    )));
+}
+
+#[test]
+fn a_strip_too_narrow_for_it_leaves_the_speed_out() {
+    let harness = mini_harness(playing(on_playlist()), vec2(480.0, 80.0));
+    assert!(harness.query_by_label("Playback speed: 1×").is_none());
+    // The transport stays.
+    assert!(harness.query_by_label("Pause").is_some());
+}
+
+#[test]
 fn the_player_bar_leads_to_the_mini_player() {
     let mut harness = harness(playing(on_playlist()));
     harness.get_by_label("Mini player").click();

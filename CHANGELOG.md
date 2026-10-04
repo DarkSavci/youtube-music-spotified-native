@@ -2,6 +2,59 @@
 
 Every release of Youtube Music Spotified Native, newest first.
 
+## 0.4.2 — 2026-10-04
+
+### New
+
+- Menus worth right-clicking: an icon on every entry, a highlight under the pointer, submenus, and the arrow keys
+- Every artist of a song is a link of its own
+- Text can be selected and copied in What's new, About, lyrics and error messages
+- The mini player has the speed button; Listen Together offers "Retry playback" and tells the room when you close the app
+- Your listening shows time listened; the sidebar's grid and rail play from the cover; the account menu shows profile pictures
+- A downloaded update installs when you quit, and Windows tells you about it
+- Each channel of an account keeps its own history, and recent searches are kept per account
+- A dark tray menu, and log files named by date
+
+### Fixed
+
+- Titles with Japanese, Chinese, Korean, Arabic and other scripts, symbols or emoji showed as boxes
+- An artist joined to another by "&" was sometimes dropped from a song
+
+## 0.4.1 — 2026-10-04
+
+### New
+
+- Move from the old app: every account's sign-in, your listening history, folders and pins, cached songs and preferences come across from the Electron app, from Settings or the offer on first start. It only reads the old app, never double-counts a play, and can be run again to pick up what is new
+
+## 0.4.0 — 2026-10-04
+
+### New
+
+- The look of the Electron app: its neutral greys are the dark theme (the blue-tinted one is kept as the "midnight" theme), the sidebar is Your Library alone and collapses to a rail of covers or widens over the page, with a grid view and the Recently added and Creator sorts
+- The top bar has a Home button beside the search field, with What's new, Listen Together, Settings and the account at the right
+- Home has mood chips, cards that fill the row, and more shelves as you scroll
+- Albums, playlists and artists have the big header, a Play button with a "…" menu (queue, play next, add all to a playlist, share), and for artists Shuffle, Radio and Follow; hearts and "…" always show on rows
+- Search finds Videos, Podcasts and Episodes too, shows a Songs table, and lets a recent search be removed; a song card starts a radio from that song
+- An album's About, an artist's whole song list (Popular, Newest, By album), and long playlists that load as you scroll
+- Playback speed from 0.5× to 3× with the pitch kept, volume boost to 200%, the mouse wheel on the volume, a Quiet / Normal / Loud level, and time remaining on a click
+- A full-screen player on F
+- Settings for autoplay, gapless playback, resuming on launch, sending listening to YouTube, the cache size, reduced motion, continuing from YouTube Music, and resetting preferences
+- The Electron app's keyboard shortcuts
+- Your listening: summary tiles, four periods, a lookup with plays per month, On repeat and Top albums
+- Listen Together: saved servers with a connection test, searching inside the room, requests, vote to skip, ready check, roles, room settings, join approval, history and activity, saving the history as a playlist, and choosing the next leader
+- Several Google accounts, switched from the account menu
+- A flyout from the tray icon, buttons on the taskbar thumbnail, a daily yt-dlp update, and a problem report that can be saved from Settings
+- What's new opens over the page, and an update says so in a toast
+
+### Changed
+
+- Crossfade starts at 6 seconds on a new profile
+- Left and Right seek 5 seconds
+
+### Fixed
+
+- The top result of a search sometimes showed the cover of one of its songs
+
 ## 0.3.2 — 2026-10-04
 
 ### New

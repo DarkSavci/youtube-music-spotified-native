@@ -33,6 +33,8 @@ pub struct Options {
     pub url: String,
     /// The name others see.
     pub name: String,
+    /// The address of the picture others see; empty to share none.
+    pub avatar: String,
     pub enter: Enter,
 }
 
@@ -65,21 +67,69 @@ enum Request {
         status: &'static str,
         entry: Option<String>,
     },
-    Leave,
+    /// Leave the room, naming who leads it next if this listener did.
+    Leave(Option<String>),
 }
 
 pub struct Connection {
     requests: Sender<Request>,
+    /// Closed by the thread as it ends: the goodbye has been said.
+    over: Receiver<()>,
+}
+
+/// A seek on its way to the room. Dragging the seek bar, or holding an
+/// arrow key, asks for one at every step; only where it settles is sent,
+/// so a scrub neither trips the relay's message limit nor races its own
+/// revisions. The song is pinned as the seek is asked for: if the room has
+/// moved on by the time it settles, the relay refuses it instead of
+/// applying it to the next song.
+#[derive(Default)]
+struct HeldSeek(Option<(Map<String, Value>, Instant)>);
+
+/// How long after the last step a seek is taken to have settled.
+const SEEK_SETTLES: Duration = Duration::from_millis(150);
+
+impl HeldSeek {
+    /// Holds `command`, in place of any held before it.
+    fn hold(&mut self, mut command: Map<String, Value>, current: Option<&str>, now: Instant) {
+        command.entry("current").or_insert(json!(current));
+        self.0 = Some((command, now));
+    }
+
+    /// The seek to send, once it has stood for long enough.
+    fn settled(&mut self, now: Instant) -> Option<Map<String, Value>> {
+        let (_, since) = self.0.as_ref()?;
+        (now.duration_since(*since) >= SEEK_SETTLES)
+            .then(|| self.0.take())
+            .flatten()
+            .map(|(command, _)| command)
+    }
 }
 
 impl Connection {
     /// Connects on a thread of its own. `deliver` is called from it.
     pub fn start(options: Options, deliver: impl Fn(Event) + Send + 'static) -> io::Result<Self> {
         let (requests, inbox) = unbounded();
+        let (ended, over) = crossbeam_channel::bounded::<()>(0);
         std::thread::Builder::new()
             .name("listen-together".into())
-            .spawn(move || run(&options, &inbox, &deliver))?;
-        Ok(Self { requests })
+            .spawn(move || {
+                run(&options, &inbox, &deliver);
+                // Dropped here, which is what the other end hears.
+                drop(ended);
+            })?;
+        Ok(Self { requests, over })
+    }
+
+    /// Leaves the room and waits, for `wait` at the most, until the relay
+    /// has been told: for the app closing, where a thread left to say it
+    /// in its own time is ended with the process before it has. Without
+    /// the goodbye the others see "Reconnecting" until the relay gives up
+    /// on the seat.
+    pub fn close(self, wait: Duration) {
+        let _ = self.requests.send(Request::Leave(None));
+        // An error is the thread having ended; a timeout, it being slow.
+        let _ = self.over.recv_timeout(wait);
     }
 
     /// Sends a room command of `kind` with `fields` of its own.
@@ -96,11 +146,16 @@ impl Connection {
     pub fn status(&self, status: &'static str, entry: Option<String>) {
         let _ = self.requests.send(Request::Status { status, entry });
     }
+
+    /// Leaves the room, handing it to `next` if this listener led it.
+    pub fn leave(&self, next: String) {
+        let _ = self.requests.send(Request::Leave(Some(next)));
+    }
 }
 
 impl Drop for Connection {
     fn drop(&mut self) {
-        let _ = self.requests.send(Request::Leave);
+        let _ = self.requests.send(Request::Leave(None));
     }
 }
 
@@ -164,7 +219,9 @@ fn spell(
         Err(error) => {
             log::warn!("listen together: {error}");
             deliver(Event::Failed(
-                "Could not reach the server. Check its address.".into(),
+                "Could not connect. Check the address, network, and server’s \
+                 desktop-origin configuration."
+                    .into(),
             ));
             return Over::Done;
         }
@@ -176,6 +233,7 @@ fn spell(
     let mut offset_ms = 0.0;
     // What a command is made against: the room as last heard.
     let (mut revision, mut current) = (0u64, None::<String>);
+    let mut seek = HeldSeek::default();
     loop {
         match socket.read() {
             Ok(Message::Text(text)) => {
@@ -188,7 +246,7 @@ fn spell(
                     }
                     Incoming::Hello { .. } => {
                         deliver(Event::Failed(
-                            "This server speaks another version of Listen Together.".into(),
+                            "This server is not compatible with Listen Together v2.".into(),
                         ));
                         return Over::Done;
                     }
@@ -239,7 +297,9 @@ fn spell(
         }
         if !ready && opened.elapsed() > HANDSHAKE {
             deliver(Event::Failed(
-                "The server did not answer as a Listen Together server does.".into(),
+                "No v2 handshake received. Check the server address and upgrade the relay \
+                 to v2."
+                    .into(),
             ));
             return Over::Done;
         }
@@ -252,32 +312,41 @@ fn spell(
                 Ok(request) => request,
                 Err(TryRecvError::Empty) => break,
                 // The app let go of the line: leave the room behind it.
-                Err(TryRecvError::Disconnected) => Request::Leave,
+                Err(TryRecvError::Disconnected) => Request::Leave(None),
             };
             match request {
-                Request::Command(mut command) => {
-                    command.insert("op".into(), json!(operation_id()));
-                    command.insert("base".into(), json!(revision));
-                    command.entry("current").or_insert(json!(current));
-                    send(
-                        &mut socket,
-                        &json!({ "type": "command", "command": command }),
-                    );
+                Request::Command(command) if command.get("kind") == Some(&json!("seek")) => {
+                    seek.hold(command, current.as_deref(), Instant::now());
+                }
+                Request::Command(command) => {
+                    send(&mut socket, &enveloped(command, revision, &current));
                 }
                 Request::Status { status, entry } => {
                     let message = json!({ "type": "status", "status": status, "entry": entry });
                     send(&mut socket, &message);
                 }
-                Request::Leave => {
-                    send(&mut socket, &json!({ "type": "leave" }));
+                Request::Leave(next) => {
+                    send(&mut socket, &json!({ "type": "leave", "next": next }));
                     let _ = socket.close(None);
                     let _ = socket.flush();
                     return Over::Done;
                 }
             }
         }
+        if let Some(command) = seek.settled(Instant::now()) {
+            send(&mut socket, &enveloped(command, revision, &current));
+        }
         let _ = socket.flush();
     }
+}
+
+/// A command as the relay takes it: numbered, and made against the room
+/// as last heard.
+fn enveloped(mut command: Map<String, Value>, revision: u64, current: &Option<String>) -> Value {
+    command.insert("op".into(), json!(operation_id()));
+    command.insert("base".into(), json!(revision));
+    command.entry("current").or_insert(json!(current));
+    json!({ "type": "command", "command": command })
 }
 
 /// Opens the socket, with reads that give up after [`POLL`] so the thread
@@ -300,7 +369,7 @@ fn entrance(options: &Options, seat: &Seat) -> Value {
     if let Some((room_id, token)) = &seat.credential {
         return json!({ "type": "resume", "roomId": room_id, "token": token });
     }
-    let profile = json!({ "name": options.name });
+    let profile = json!({ "name": options.name, "avatar": options.avatar });
     match &options.enter {
         Enter::Create { mode, room_name } => json!({
             "type": "create",
@@ -309,6 +378,52 @@ fn entrance(options: &Options, seat: &Seat) -> Value {
             "profile": profile,
         }),
         Enter::Join { pin } => json!({ "type": "join", "pin": pin, "profile": profile }),
+    }
+}
+
+/// How long a server is given to say hello when it is only being tested.
+const PROBE: Duration = Duration::from_secs(8);
+
+/// Sees whether `url` answers as a version 2 relay does, without making or
+/// joining a room. Blocks for as long as that takes: call it off the UI
+/// thread.
+pub fn probe(url: &str) -> Result<(), String> {
+    let mut socket = open(url).map_err(|error| {
+        log::debug!("listen together: the test could not connect: {error}");
+        "Could not connect. Check the address, network and allowed origins.".to_owned()
+    })?;
+    let opened = Instant::now();
+    while opened.elapsed() < PROBE {
+        match socket.read() {
+            Ok(Message::Text(text)) => {
+                let verdict = greeting(&text);
+                let _ = socket.close(None);
+                return verdict;
+            }
+            Ok(Message::Close(_)) => break,
+            Ok(_) => {}
+            Err(tungstenite::Error::Io(error))
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                ) => {}
+            Err(_) => break,
+        }
+    }
+    if opened.elapsed() >= PROBE {
+        return Err("No v2 handshake. Check the address and the relay version.".into());
+    }
+    Err("The server closed the connection before the v2 handshake.".into())
+}
+
+/// What a server's first message says of it.
+fn greeting(text: &str) -> Result<(), String> {
+    match serde_json::from_str::<Incoming>(text) {
+        Ok(Incoming::Hello { version }) if version == VERSION => Ok(()),
+        Ok(Incoming::Hello { .. }) => Err("This relay does not support Listen Together v2.".into()),
+        Ok(Incoming::Error { message, .. }) if !message.is_empty() => Err(message),
+        Ok(Incoming::Error { .. }) => Err("Connection rejected.".into()),
+        _ => Err("The server returned an invalid response.".into()),
     }
 }
 
@@ -334,6 +449,7 @@ mod tests {
         Options {
             url: "ws://localhost:8766".into(),
             name: "Ada".into(),
+            avatar: "https://yt3.ggpht.com/ada=s88".into(),
             enter,
         }
     }
@@ -348,6 +464,10 @@ mod tests {
         assert_eq!(message["type"], "create");
         assert_eq!(message["mode"], "listen");
         assert_eq!(message["profile"]["name"], "Ada");
+        assert_eq!(
+            message["profile"]["avatar"],
+            "https://yt3.ggpht.com/ada=s88"
+        );
 
         let join = options(Enter::Join {
             pin: "01234567".into(),
@@ -364,7 +484,77 @@ mod tests {
     }
 
     #[test]
+    fn a_server_is_known_by_its_greeting() {
+        assert_eq!(greeting(r#"{"type":"hello","version":2,"at":5}"#), Ok(()));
+        assert_eq!(
+            greeting(r#"{"type":"hello","version":1}"#),
+            Err("This relay does not support Listen Together v2.".into())
+        );
+        assert_eq!(
+            greeting(r#"{"type":"error","message":"Go away."}"#),
+            Err("Go away.".into())
+        );
+        assert_eq!(
+            greeting("<html>"),
+            Err("The server returned an invalid response.".into())
+        );
+    }
+
+    #[test]
     fn no_two_commands_share_a_name() {
         assert_ne!(operation_id(), operation_id());
+    }
+
+    fn seek(to: u64) -> Map<String, Value> {
+        let fields = json!({ "kind": "seek", "positionMs": to });
+        fields.as_object().cloned().expect("an object")
+    }
+
+    #[test]
+    fn a_scrub_sends_only_where_it_settles() {
+        let mut held = HeldSeek::default();
+        let start = Instant::now();
+        let step = Duration::from_millis(40);
+        // Three steps of a drag, closer together than a seek takes to settle.
+        for (index, to) in [10_000, 20_000, 30_000].into_iter().enumerate() {
+            let now = start + step * index as u32;
+            assert_eq!(held.settled(now), None);
+            held.hold(seek(to), Some("e1"), now);
+        }
+        let last = start + step * 2;
+        assert_eq!(held.settled(last + Duration::from_millis(100)), None);
+        let sent = held.settled(last + SEEK_SETTLES).expect("the seek");
+        assert_eq!(sent["positionMs"], 30_000);
+        // Sent once.
+        assert_eq!(held.settled(last + SEEK_SETTLES * 2), None);
+    }
+
+    #[test]
+    fn a_seek_is_pinned_to_the_song_it_was_asked_of() {
+        let mut held = HeldSeek::default();
+        let now = Instant::now();
+        held.hold(seek(5_000), Some("e1"), now);
+        // The room has moved on by the time it settles: the seek still
+        // names the song it was meant for, and the relay refuses it.
+        let sent = held.settled(now + SEEK_SETTLES).expect("the seek");
+        let command = enveloped(sent, 7, &Some("e2".into()));
+        assert_eq!(command["command"]["current"], "e1");
+        assert_eq!(command["command"]["base"], 7);
+    }
+
+    #[test]
+    fn closing_a_line_does_not_wait_longer_than_it_is_given() {
+        // Nothing listens there, so the thread is a while giving up; the
+        // app closing must not be.
+        let dead = Options {
+            url: "ws://127.0.0.1:9".into(),
+            ..options(Enter::Join {
+                pin: "01234567".into(),
+            })
+        };
+        let line = Connection::start(dead, |_| {}).expect("a thread");
+        let asked = Instant::now();
+        line.close(Duration::from_millis(300));
+        assert!(asked.elapsed() < Duration::from_secs(3));
     }
 }

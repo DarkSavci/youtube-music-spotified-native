@@ -23,7 +23,8 @@ pub const PANEL_SIZE: [f32; 2] = [360.0, 580.0];
 mod parts;
 
 use parts::{
-    Mini, cover, drag, extras, like, meta, progress, thin_progress, transport, wash, window_buttons,
+    Mini, cover, drag, extras, like, meta, progress, speed_button, thin_progress, transport, wash,
+    window_buttons,
 };
 
 const HEAD: f32 = 40.0;
@@ -48,6 +49,9 @@ pub fn builder(state: &State) -> ViewportBuilder {
     };
     let builder = ViewportBuilder::default()
         .with_title("Mini player")
+        // Said outright: the window is made hidden, and only a change
+        // that is spelt out is passed on to it.
+        .with_visible(true)
         .with_decorations(false)
         .with_resizable(true)
         .with_maximize_button(false)
@@ -146,7 +150,11 @@ fn bar(mini: &Mini<'_>, ui: &mut Ui, actions: &mut Vec<Action>, area: Rect, art:
     );
     cover(mini, ui, thumb, 4);
     let right = pos2(area.right() - 8.0, y);
-    let buttons = window_buttons(mini, ui, actions, right, area.width() > 400.0);
+    let mut buttons = window_buttons(mini, ui, actions, right, area.width() > 400.0);
+    // The buttons step in as the width allows, the least needed last.
+    if area.width() > 500.0 {
+        buttons += speed_button(mini, ui, actions, pos2(right.x - buttons, y));
+    }
     let transport_centre = pos2(area.right() - 8.0 - buttons - 70.0, y);
     transport(mini, ui, actions, transport_centre, false);
     let mut text_right = transport_centre.x - 66.0;
@@ -183,7 +191,9 @@ fn square(mini: &Mini<'_>, ui: &mut Ui, actions: &mut Vec<Action>, area: Rect) {
         return;
     }
     let buttons_at = pos2(area.right() - 6.0, area.top() + HEAD / 2.0);
-    window_buttons(mini, ui, actions, buttons_at, true);
+    let buttons = window_buttons(mini, ui, actions, buttons_at, true);
+    let speed_at = pos2(buttons_at.x - buttons, buttons_at.y);
+    speed_button(mini, ui, actions, speed_at);
     // Built up from the bottom edge; what there is no room for is left out.
     let inner = area.shrink(PADDING);
     let mut y = inner.bottom();
@@ -224,7 +234,9 @@ fn wide(mini: &Mini<'_>, ui: &mut Ui, actions: &mut Vec<Action>, area: Rect, art
     drag(ui, head);
     cover(mini, ui, picture, 0);
     let buttons_at = pos2(side.right() - 6.0, side.top() + HEAD / 2.0 + 2.0);
-    let buttons = window_buttons(mini, ui, actions, buttons_at, true);
+    let mut buttons = window_buttons(mini, ui, actions, buttons_at, true);
+    let speed_at = pos2(buttons_at.x - buttons, buttons_at.y);
+    buttons += speed_button(mini, ui, actions, speed_at);
     let inner = side.shrink2(vec2(16.0, PADDING));
     let text = Rect::from_min_max(
         pos2(inner.left(), head.top() + 4.0),
@@ -271,7 +283,9 @@ fn tall(mini: &Mini<'_>, ui: &mut Ui, actions: &mut Vec<Action>, area: Rect, art
     let font = theme::bold(12.5);
     widgets::text_at(ui, at, Align2::LEFT_CENTER, label, font, palette.text);
     let buttons_at = pos2(head.right() - 6.0, head.center().y);
-    window_buttons(mini, ui, actions, buttons_at, true);
+    let buttons = window_buttons(mini, ui, actions, buttons_at, true);
+    let speed_at = pos2(buttons_at.x - buttons, buttons_at.y);
+    speed_button(mini, ui, actions, speed_at);
 
     let foot_height = PADDING * 2.0 + 44.0 + 20.0 + 44.0 + 32.0;
     let foot = area.with_min_y(area.bottom() - foot_height);

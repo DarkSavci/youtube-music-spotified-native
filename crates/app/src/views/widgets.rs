@@ -3,15 +3,21 @@
 use std::f32::consts::TAU;
 
 use eframe::egui::{
-    self, Align2, Color32, CornerRadius, Frame, Margin, Rect, Response, Sense, Stroke, Ui, Vec2,
-    pos2, vec2,
+    self, Color32, CornerRadius, Frame, Margin, Rect, Response, Sense, Stroke, Ui, Vec2, pos2, vec2,
 };
 
 use crate::theme::{self, Icon, Palette};
 
+mod avatar;
 mod inputs;
+pub mod menu;
+mod text;
 
+pub use avatar::Avatar;
 pub use inputs::{TextField, slider};
+pub use text::{
+    Artists, Link, artist_page_id, elided, selectable, selectable_galley, text_at, tracked,
+};
 
 /// Names a hand-drawn control for screen readers, and for the tests that
 /// find controls the same way.
@@ -32,6 +38,13 @@ pub fn hand(ui: &Ui, response: &Response) {
 /// How long a hover takes to arrive, and to leave.
 const HOVER_TIME: f32 = 0.12;
 
+/// Whether animation is switched off: the Reduce motion setting, which the
+/// app carries in egui's own animation time so that every control, egui's
+/// and the app's, reads the one figure.
+pub fn still(ctx: &egui::Context) -> bool {
+    ctx.global_style().animation_time <= 0.0
+}
+
 /// How far the pointer's arrival on a control has got, from 0 to 1. A
 /// hover that fades in and out reads as the control answering; one that
 /// snaps reads as flicker when the pointer crosses a list.
@@ -43,8 +56,8 @@ pub fn hover(ui: &Ui, response: &Response) -> f32 {
 /// pointer is on it.
 pub fn hover_of(ui: &Ui, id: egui::Id, hovered: bool) -> f32 {
     let on = hovered && ui.is_enabled();
-    ui.ctx()
-        .animate_bool_with_time(id.with("hover"), on, HOVER_TIME)
+    let time = if still(ui.ctx()) { 0.0 } else { HOVER_TIME };
+    ui.ctx().animate_bool_with_time(id.with("hover"), on, time)
 }
 
 /// The wash a row or a round button takes under the pointer: up to eight
@@ -155,12 +168,29 @@ fn paint_icon_button(
 
 /// A pill that filters a list. The active one is filled with the text colour.
 pub fn chip(ui: &mut Ui, palette: &Palette, label: &str, active: bool) -> Response {
-    let padding = vec2(12.0, 7.0);
+    sized_chip(ui, palette, label, active, (12.0, 12.0, 26.0))
+}
+
+/// The larger chip of Home's row of moods.
+pub fn chip_large(ui: &mut Ui, palette: &Palette, label: &str, active: bool) -> Response {
+    sized_chip(ui, palette, label, active, (14.0, 16.0, 37.0))
+}
+
+/// A chip whose text is `font` points, with `padding` either side of it,
+/// `height` tall.
+fn sized_chip(
+    ui: &mut Ui,
+    palette: &Palette,
+    label: &str,
+    active: bool,
+    (font, padding, height): (f32, f32, f32),
+) -> Response {
     let text_color = if active { palette.window } else { palette.text };
     let galley = ui
         .painter()
-        .layout_no_wrap(label.to_owned(), theme::medium(13.0), text_color);
-    let (rect, response) = ui.allocate_exact_size(galley.size() + padding * 2.0, Sense::click());
+        .layout_no_wrap(label.to_owned(), theme::medium(font), text_color);
+    let size = vec2(galley.size().x + padding * 2.0, height);
+    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
     hand(ui, &response);
     response.widget_info(|| {
         egui::WidgetInfo::selected(egui::WidgetType::Button, ui.is_enabled(), active, label)
@@ -172,9 +202,19 @@ pub fn chip(ui: &mut Ui, palette: &Palette, label: &str, active: bool) -> Respon
             let lift = hover(ui, &response);
             crate::tint::blend(palette.surface, palette.surface_active, lift)
         };
+        // It gives a little when pressed.
+        let pressed = if response.is_pointer_button_down_on() {
+            rect.shrink(0.5)
+        } else {
+            rect
+        };
         ui.painter()
-            .rect_filled(rect, CornerRadius::same(u8::MAX), fill);
-        ui.painter().galley(rect.min + padding, galley, text_color);
+            .rect_filled(pressed, CornerRadius::same(u8::MAX), fill);
+        let at = pos2(
+            rect.left() + padding,
+            rect.center().y - galley.size().y / 2.0,
+        );
+        ui.painter().galley(at, galley, text_color);
     }
     response
 }
@@ -204,12 +244,18 @@ pub fn pill_button(ui: &mut Ui, palette: &Palette, label: &str) -> Response {
 
 /// The quieter button: an outline, for a choice that is not the main one.
 pub fn outline_button(ui: &mut Ui, palette: &Palette, label: &str) -> Response {
+    outline_button_named(ui, palette, label, label)
+}
+
+/// An outline button whose name says more than its label: one of several
+/// that read alike, each about something different.
+pub fn outline_button_named(ui: &mut Ui, palette: &Palette, label: &str, named: &str) -> Response {
     let padding = vec2(18.0, 8.0);
     let galley = ui
         .painter()
         .layout_no_wrap(label.to_owned(), theme::semibold(13.0), palette.text);
     let (rect, response) = ui.allocate_exact_size(galley.size() + padding * 2.0, Sense::click());
-    name(ui, &response, label);
+    name(ui, &response, named);
     if ui.is_rect_visible(rect) {
         let lift = hover(ui, &response);
         let outline = crate::tint::blend(palette.dim, palette.text, lift);
@@ -286,6 +332,8 @@ pub fn loading(ui: &mut Ui, palette: &Palette, text: &str) {
 
 pub fn error(ui: &mut Ui, palette: &Palette, message: &str) {
     ui.horizontal(|ui| {
+        // What went wrong is worth copying into a report.
+        selectable(ui);
         ui.add(Icon::CircleAlert.image(palette.danger, 16.0));
         ui.label(egui::RichText::new(message).font(theme::regular(13.0)));
     });
@@ -304,77 +352,6 @@ pub fn empty_state(ui: &mut Ui, palette: &Palette, icon: Icon, title: &str, body
                 .color(palette.secondary),
         );
     });
-}
-
-/// Text painted at a point, for layouts that place things by hand.
-pub fn text_at(
-    ui: &Ui,
-    pos: egui::Pos2,
-    anchor: Align2,
-    text: &str,
-    font: egui::FontId,
-    color: Color32,
-) -> Rect {
-    ui.painter().text(pos, anchor, text, font, color)
-}
-
-/// Lays text out to fit `width`, ending in an ellipsis after `rows` lines.
-pub fn elided(
-    ui: &Ui,
-    text: &str,
-    font: egui::FontId,
-    color: Color32,
-    width: f32,
-    rows: usize,
-) -> std::sync::Arc<egui::Galley> {
-    let mut job = egui::text::LayoutJob::simple(text.to_owned(), font, color, width);
-    job.wrap.max_rows = rows;
-    // A single line is cut where it runs out; several lines break at words.
-    job.wrap.break_anywhere = rows == 1;
-    ui.painter().layout_job(job)
-}
-
-/// A line of text that leads somewhere: underlined, with the hand cursor,
-/// while the pointer is on it. The only place the hand appears.
-pub struct Link<'a> {
-    pub text: &'a str,
-    pub font: egui::FontId,
-    pub color: Color32,
-    /// The room it has; longer text ends in an ellipsis.
-    pub width: f32,
-}
-
-impl Link<'_> {
-    /// Paints the text with its top left at `at` and returns whether it
-    /// was clicked. With `leads_somewhere` false it is plain text.
-    pub fn show(&self, ui: &Ui, id: egui::Id, at: egui::Pos2, leads_somewhere: bool) -> bool {
-        self.show_measured(ui, id, at, leads_somewhere).0
-    }
-
-    /// As [`Link::show`], and how wide the text came out, for a caller
-    /// that places something after it.
-    pub fn show_measured(
-        &self,
-        ui: &Ui,
-        id: egui::Id,
-        at: egui::Pos2,
-        leads_somewhere: bool,
-    ) -> (bool, f32) {
-        let galley = elided(ui, self.text, self.font.clone(), self.color, self.width, 1);
-        let rect = Rect::from_min_size(at, galley.size());
-        let mut clicked = false;
-        if leads_somewhere && !self.text.is_empty() {
-            let response = ui.interact(rect, id, Sense::click());
-            if response.hovered() {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                ui.painter()
-                    .hline(rect.x_range(), rect.bottom() - 1.0, (1.0, self.color));
-            }
-            clicked = response.clicked();
-        }
-        ui.painter().galley(at, galley, self.color);
-        (clicked, rect.width())
-    }
 }
 
 /// The shape artwork is cut to.

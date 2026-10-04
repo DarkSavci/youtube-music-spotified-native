@@ -27,6 +27,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         preload_video_id: rest.first().cloned().unwrap_or_default(),
         playing: true,
         volume: 0.25,
+        gapless: true,
         ..Target::default()
     };
     let step = |label: &str, target: &Target, seconds: u64| {

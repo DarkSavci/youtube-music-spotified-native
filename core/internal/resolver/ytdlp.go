@@ -132,10 +132,12 @@ func (y *Ytdlp) Resolve(ctx context.Context, videoID string) (domain.Stream, Qua
 }
 
 func (y *Ytdlp) resolveWith(ctx context.Context, videoID string, extra []string, base string) (domain.Stream, Quality, error) {
-	return y.resolveMedia(ctx, videoID, extra, base, false)
+	return y.resolveMedia(ctx, videoID, extra, base, nil)
 }
 
-func (y *Ytdlp) resolveMedia(ctx context.Context, videoID string, extra []string, base string, video bool) (domain.Stream, Quality, error) {
+// resolveMedia asks for the audio, or for the picture when a pick is given.
+func (y *Ytdlp) resolveMedia(ctx context.Context, videoID string, extra []string, base string, pick *VideoPick) (domain.Stream, Quality, error) {
+	video := pick != nil
 	args := []string{
 		"--dump-single-json",
 		"--no-warnings",
@@ -145,7 +147,7 @@ func (y *Ytdlp) resolveMedia(ctx context.Context, videoID string, extra []string
 		"-f", "bestaudio[protocol^=http][acodec!=none][vcodec=none]/bestaudio",
 	}
 	if video {
-		args[len(args)-1] = "bestvideo[protocol^=http][height<=1080]/best[protocol^=http][height<=1080]"
+		args[len(args)-1] = pick.selector()
 	}
 	if y.CookiePath != "" {
 		if _, err := os.Stat(y.CookiePath); err == nil {
@@ -176,7 +178,7 @@ func (y *Ytdlp) resolveMedia(ctx context.Context, videoID string, extra []string
 	best := bestYtdlpAudio(info.Formats)
 	mimeKind := "audio"
 	if video {
-		best = bestYtdlpVideo(info.Formats)
+		best = bestYtdlpVideo(info.Formats, *pick)
 		mimeKind = "video"
 	}
 	if best == nil {
@@ -254,25 +256,81 @@ func codecName(acodec string) string {
 	}
 }
 
+// VideoPick narrows which picture stream is chosen. The zero value is what
+// the Electron app's <video> element plays: the best picture up to 1080p in
+// whatever codec YouTube offers, usually VP9 or AV1.
+type VideoPick struct {
+	// Codec is "" for any, or "h264": the one codec every Windows install
+	// decodes without an extension from the Store, which is what a client
+	// decoding through Media Foundation needs.
+	Codec string
+	// MaxHeight caps the picture; 0 means 1080.
+	MaxHeight int
+}
+
+func (p VideoPick) height() int {
+	if p.MaxHeight <= 0 || p.MaxHeight > 1080 {
+		return 1080
+	}
+	return p.MaxHeight
+}
+
+func (p VideoPick) accepts(f *ytdlpFormat) bool {
+	if f.Height <= 0 || f.Height > p.height() {
+		return false
+	}
+	if p.Codec == "h264" {
+		return f.Ext == "mp4" && strings.HasPrefix(f.VCodec, "avc1")
+	}
+	return f.Ext == "mp4" || f.Ext == "webm"
+}
+
+func (p VideoPick) selector() string {
+	filter := fmt.Sprintf("[protocol^=http][height<=%d]", p.height())
+	if p.Codec == "h264" {
+		filter += "[vcodec^=avc1]"
+	}
+	return "bestvideo" + filter + "/best" + filter
+}
+
 // ResolveVideo supplies a progressive picture stream. The UI mutes it and
 // retains the native audio engine as the single playback clock and sound source.
 func (y *Ytdlp) ResolveVideo(ctx context.Context, id string) (domain.Stream, error) {
+	return y.ResolveVideoAs(ctx, id, VideoPick{})
+}
+
+// ResolveVideoAs is ResolveVideo for a client that cannot play every codec.
+func (y *Ytdlp) ResolveVideoAs(ctx context.Context, id string, pick VideoPick) (domain.Stream, error) {
 	if y.Timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, y.Timeout)
 		defer cancel()
 	}
-	st, _, err := y.resolveMedia(ctx, id, musicClientArgs, "https://music.youtube.com/watch?v=", true)
+	type attempt struct {
+		extra []string
+		base  string
+	}
+	music := attempt{musicClientArgs, "https://music.youtube.com/watch?v="}
+	anything := attempt{nil, "https://www.youtube.com/watch?v="}
+	order := []attempt{music, anything}
+	if pick.Codec != "" {
+		// Measured signed out: the YouTube Music client offers one H.264
+		// picture, 360p with the sound muxed in, and being a valid answer it
+		// ended the search there. The default clients list H.264 up to 1080p.
+		order = []attempt{anything, music}
+	}
+	st, _, err := y.resolveMedia(ctx, id, order[0].extra, order[0].base, &pick)
 	if err != nil && ctx.Err() == nil && !errors.Is(err, ErrRateLimited) {
-		st, _, err = y.resolveMedia(ctx, id, nil, "https://www.youtube.com/watch?v=", true)
+		st, _, err = y.resolveMedia(ctx, id, order[1].extra, order[1].base, &pick)
 	}
 	return st, err
 }
-func bestYtdlpVideo(formats []ytdlpFormat) *ytdlpFormat {
+
+func bestYtdlpVideo(formats []ytdlpFormat, pick VideoPick) *ytdlpFormat {
 	var best *ytdlpFormat
 	for i := range formats {
 		f := &formats[i]
-		if f.URL == "" || f.VCodec == "" || f.VCodec == "none" || f.Height <= 0 || f.Height > 1080 || !strings.HasPrefix(f.Protocol, "http") || (f.Ext != "mp4" && f.Ext != "webm") {
+		if f.URL == "" || f.VCodec == "" || f.VCodec == "none" || !strings.HasPrefix(f.Protocol, "http") || !pick.accepts(f) {
 			continue
 		}
 		if best == nil || f.Height > best.Height || (f.Height == best.Height && f.TBR > best.TBR) {

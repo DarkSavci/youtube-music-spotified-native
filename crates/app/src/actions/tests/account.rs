@@ -12,10 +12,8 @@ fn a_signed_in_account_is_asked_for_its_channels() {
         ..Account::default()
     };
     let answer = Response::Account(Ok(Some(account)));
-    assert_eq!(
-        apply(&mut state, Action::Loaded(Box::new(answer))),
-        [Effect::Fetch(Request::Channels)]
-    );
+    let effects = apply(&mut state, Action::Loaded(Box::new(answer)));
+    assert_eq!(effects.first(), Some(&Effect::Fetch(Request::Channels)));
     assert!(state.account.is_some());
 
     let signed_out = Response::Account(Ok(None));

@@ -9,7 +9,7 @@ use eframe::egui::{self, Align2, Margin, Rect, Sense, Ui, pos2, vec2};
 use spotified_client::session::Repeat;
 
 use super::widgets::{self, ArtShape};
-use super::{format, visualizer};
+use super::{format, speed, visualizer, volume};
 use crate::actions::Action;
 use crate::settings::RightPanel;
 use crate::state::{Page, Playback, State};
@@ -25,14 +25,19 @@ const GUTTERS: Margin = Margin {
 const COVER: f32 = 56.0;
 /// How much of the playing cover's colour the bar takes.
 const BAR_TINT: f32 = 0.12;
-const PLAY_DISC: f32 = 36.0;
-const TRANSPORT_GAP: f32 = 10.0;
+const PLAY_DISC: f32 = 38.0;
+const TRANSPORT_GAP: f32 = 12.0;
 /// The buttons sit above the bar's midline and the progress row below it.
-const TRANSPORT_RISE: f32 = 9.0;
-const PROGRESS_DROP: f32 = 29.0;
-const VOLUME_WIDTH: f32 = 92.0;
-/// The width of the right-hand zone at which the mini player's button fits.
-const MINI_BUTTON_NEEDS: f32 = 244.0;
+const TRANSPORT_RISE: f32 = 10.0;
+const PROGRESS_DROP: f32 = 30.0;
+const VOLUME_WIDTH: f32 = 96.0;
+/// How far apart the middles of the buttons at the right are.
+const EXTRA_STEP: f32 = 36.0;
+/// The least the middle zone is, and the part of the bar it takes.
+const CENTRE_LEAST: f32 = 320.0;
+const CENTRE_SHARE: f32 = 0.38;
+/// The room each of the two times has beside the seek bar.
+const TIME_WIDTH: f32 = 40.0;
 
 pub fn show(state: &State, ui: &mut Ui, actions: &mut Vec<Action>) {
     let palette = &state.palette;
@@ -48,21 +53,22 @@ pub fn show(state: &State, ui: &mut Ui, actions: &mut Vec<Action>) {
                 widgets::round_off(ui, bar, palette);
             }
             let inner = bar.shrink2(vec2(PADDING, 0.0));
-            let side = (inner.width() * 0.30).clamp(200.0, 420.0);
-            let left = Rect::from_min_size(inner.min, vec2(side, inner.height()));
+            // The middle takes its share of the bar, and the two sides
+            // what is left, evenly: the transport stays centred.
+            let middle = (inner.width() * CENTRE_SHARE)
+                .max(CENTRE_LEAST)
+                .min(inner.width());
+            let side = (inner.width() - middle) / 2.0 - PADDING;
+            let left = Rect::from_min_size(inner.min, vec2(side.max(0.0), inner.height()));
             let right = Rect::from_min_max(pos2(inner.right() - side, inner.top()), inner.max);
-            let centre = Rect::from_min_max(left.right_top(), right.left_bottom());
-            // With nothing queued there is nothing for the controls to act
-            // on, so they are drawn in their resting, disabled state.
+            let centre = Rect::from_center_size(inner.center(), vec2(middle, inner.height()));
             let playback = state
                 .playback
                 .as_ref()
                 .filter(|playback| playback.current().is_some());
-            ui.add_enabled_ui(playback.is_some(), |ui| {
-                now_playing(state, ui, actions, playback, left);
-                transport(state, ui, actions, playback, centre);
-                extras(state, ui, actions, right);
-            });
+            now_playing(state, ui, actions, playback, left);
+            transport(state, ui, actions, playback, centre);
+            extras(state, ui, actions, right);
         });
 }
 
@@ -91,72 +97,57 @@ fn now_playing(
     zone: Rect,
 ) {
     let palette = &state.palette;
-    let cover = Rect::from_min_size(
-        pos2(zone.left() + 4.0, zone.center().y - COVER / 2.0),
-        egui::Vec2::splat(COVER),
-    );
-    let left = cover.right() + 12.0;
+    // With nothing playing the bar says so, and shows no empty cover.
     let Some(track) = playback.and_then(Playback::current) else {
-        ui.painter()
-            .rect_filled(cover, theme::RADIUS_ROW, palette.surface_hover);
-        widgets::paint_icon(ui, Icon::Music, cover, 24.0, palette.dim);
         widgets::text_at(
             ui,
-            pos2(left, zone.center().y),
+            zone.left_center(),
             Align2::LEFT_CENTER,
             "Nothing playing",
-            theme::medium(14.0),
-            palette.dim,
+            theme::regular(12.0),
+            palette.secondary,
         );
         return;
     };
-    let shape = ArtShape::Rounded(theme::RADIUS_ROW);
+    let cover = Rect::from_min_size(
+        pos2(zone.left(), zone.center().y - COVER / 2.0),
+        egui::Vec2::splat(COVER),
+    );
+    let left = cover.right() + 12.0;
+    let shape = ArtShape::Rounded(4);
     widgets::artwork(ui, state, &track.artwork, cover, shape, Icon::Music);
-    // The text leaves room for the heart that follows it.
-    let width = (zone.right() - left - 44.0).max(20.0);
+    // The text leaves room for the heart and the share button after it.
+    let width = (zone.right() - left - 76.0).max(20.0);
     // The title leads to the album and the artists to the artist.
     let album_page = track
         .album
         .as_ref()
         .filter(|album| !album.id.is_empty())
         .map(|album| Page::Album(album.id.clone()));
-    let artist_page = track
-        .artists
-        .iter()
-        .find(|artist| !artist.id.is_empty())
-        .map(|artist| Page::Artist(artist.id.clone()));
-    let lines = [
-        (
-            &track.title,
-            theme::medium(14.0),
-            palette.text,
-            -18.0,
-            album_page,
-        ),
-        (
-            &track.artist_names(),
-            theme::regular(12.0),
-            palette.secondary,
-            2.0,
-            artist_page,
-        ),
-    ];
-    let mut text_width = 0.0f32;
-    for (index, (text, font, color, offset, page)) in lines.into_iter().enumerate() {
-        let link = widgets::Link {
-            text,
-            font,
-            color,
-            width,
-        };
-        let at = pos2(left, zone.center().y + offset);
-        let id = ui.id().with(("now-playing", index));
-        let (clicked, drawn) = link.show_measured(ui, id, at, page.is_some());
-        text_width = text_width.max(drawn);
-        if let (true, Some(page)) = (clicked, page) {
-            actions.push(Action::Open(page));
-        }
+    let title = widgets::Link {
+        text: &track.title,
+        font: theme::medium(14.0),
+        color: palette.text,
+        width,
+    };
+    let at = pos2(left, zone.center().y - 18.0);
+    let id = ui.id().with(("now-playing", 0));
+    let (clicked, title_width) = title.show_measured(ui, id, at, album_page.is_some());
+    if let (true, Some(page)) = (clicked, album_page) {
+        actions.push(Action::Open(page));
     }
+    let artists = widgets::Artists {
+        artists: &track.artists,
+        font: theme::regular(12.0),
+        color: palette.secondary,
+        width,
+    };
+    let at = pos2(left, zone.center().y + 2.0);
+    let (artist, artists_width) = artists.show(ui, ui.id().with(("now-playing", 1)), at);
+    if let Some(artist) = artist {
+        actions.push(Action::Open(Page::Artist(artist)));
+    }
+    let text_width = title_width.max(artists_width);
 
     let liked = state.likes.is_liked(&track.id);
     let heart = widgets::IconButton {
@@ -173,9 +164,21 @@ fn now_playing(
         },
         active: liked,
     };
-    let at = pos2(left + text_width + 21.0, zone.center().y);
+    let at = pos2(left + text_width + 12.0 + 16.0, zone.center().y);
     if heart.show_at(ui, palette, at).clicked() {
         actions.push(Action::ToggleLike(track.clone()));
+    }
+    let share = widgets::IconButton {
+        icon: Icon::Share,
+        size: 17.0,
+        tooltip: "Share",
+        active: false,
+    };
+    if share.show_at(ui, palette, at + vec2(32.0, 0.0)).clicked() {
+        actions.push(Action::Share {
+            kind: crate::share::Kind::Track,
+            id: track.id.clone(),
+        });
     }
 }
 
@@ -191,7 +194,13 @@ pub(super) fn transport(
     let palette = &state.palette;
     let row_y = zone.center().y - TRANSPORT_RISE;
     let centre = pos2(zone.center().x, row_y);
-    play_disc(ui, palette, actions, playback, centre);
+    // With nothing queued there is nothing to play, skip or seek in, so
+    // those are drawn in their resting, disabled state. Shuffle and repeat
+    // are the session's, and can be set before anything plays.
+    let has_track = playback.is_some();
+    ui.add_enabled_ui(has_track, |ui| {
+        play_disc(ui, palette, actions, playback, centre);
+    });
 
     let shuffle_on = playback.is_some_and(|playback| playback.session.shuffle);
     let repeat = playback.map_or(Repeat::Off, |playback| playback.session.repeat);
@@ -201,15 +210,16 @@ pub(super) fn transport(
         Icon::Repeat
     };
     // Outwards from the disc, mirrored left and right.
-    let near = PLAY_DISC / 2.0 + TRANSPORT_GAP + 15.0;
-    let far = near + 18.0 + 12.0 + TRANSPORT_GAP;
+    let near = PLAY_DISC / 2.0 + TRANSPORT_GAP + 16.0;
+    let far = near + 32.0 + TRANSPORT_GAP;
+    let session = state.playback.is_some();
     let buttons = [
         (
             Icon::SkipBackFilled,
             18.0,
             -near,
             "Previous",
-            false,
+            (false, has_track),
             Action::Previous,
         ),
         (
@@ -217,27 +227,27 @@ pub(super) fn transport(
             18.0,
             near,
             "Next",
-            false,
+            (false, has_track),
             Action::Next,
         ),
         (
             Icon::Shuffle,
-            17.0,
+            18.0,
             -far,
             "Shuffle",
-            shuffle_on,
+            (shuffle_on, session),
             Action::ToggleShuffle,
         ),
         (
             repeat_icon,
-            17.0,
+            18.0,
             far,
             "Repeat",
-            repeat != Repeat::Off,
+            (repeat != Repeat::Off, session),
             Action::CycleRepeat,
         ),
     ];
-    for (icon, size, offset, tooltip, active, action) in buttons {
+    for (icon, size, offset, tooltip, (active, enabled), action) in buttons {
         let at = pos2(centre.x + offset, row_y);
         let button = widgets::IconButton {
             icon,
@@ -245,12 +255,14 @@ pub(super) fn transport(
             tooltip,
             active,
         };
-        if button.show_at(ui, palette, at).clicked() {
-            actions.push(action);
-        }
+        ui.add_enabled_ui(enabled, |ui| {
+            if button.show_at(ui, palette, at).clicked() {
+                actions.push(action);
+            }
+        });
     }
 
-    progress(ui, palette, actions, playback, zone, row_y + PROGRESS_DROP);
+    progress(state, ui, actions, playback, zone, row_y + PROGRESS_DROP);
 }
 
 /// The round play and pause button, centred on `centre`.
@@ -295,28 +307,86 @@ pub(super) fn play_disc(
 }
 
 fn progress(
+    state: &State,
     ui: &mut Ui,
-    palette: &Palette,
     actions: &mut Vec<Action>,
     playback: Option<&Playback>,
     zone: Rect,
     y: f32,
 ) {
-    let width = (zone.width() - 120.0).clamp(120.0, 620.0);
+    let palette = &state.palette;
+    // A time either side of the bar, each in a place of its own width.
+    let beside = TIME_WIDTH + 12.0;
+    let width = (zone.width() - beside * 2.0).max(80.0);
     let bar = Rect::from_center_size(pos2(zone.center().x, y), vec2(width, 16.0));
-    let (shown, duration) = seek_bar(ui, palette, actions, playback, bar);
-    for (x, anchor, ms) in [
-        (bar.left() - 10.0, Align2::RIGHT_CENTER, shown),
-        (bar.right() + 10.0, Align2::LEFT_CENTER, duration),
-    ] {
-        widgets::text_at(
-            ui,
-            pos2(x, y),
-            anchor,
-            &format::duration(ms),
-            theme::regular(11.5),
-            palette.secondary,
-        );
+    // With nothing playing there is nothing to seek in.
+    let (shown, duration) = ui
+        .add_enabled_ui(playback.is_some(), |ui| {
+            seek_bar(ui, palette, actions, playback, bar)
+        })
+        .inner;
+    let offset = 12.0 + TIME_WIDTH / 2.0;
+    // With nothing playing there is no time to show.
+    let Some(_) = playback else {
+        for x in [bar.left() - offset, bar.right() + offset] {
+            widgets::text_at(
+                ui,
+                pos2(x, y),
+                Align2::CENTER_CENTER,
+                format::NO_TIME,
+                theme::regular(11.0),
+                palette.secondary,
+            );
+        }
+        return;
+    };
+    widgets::text_at(
+        ui,
+        pos2(bar.left() - offset, y),
+        Align2::CENTER_CENTER,
+        &format::duration(shown),
+        theme::regular(11.0),
+        palette.secondary,
+    );
+    let end = EndTime {
+        at: pos2(bar.right() + offset, y),
+        shown,
+        duration,
+        color: palette.secondary,
+    };
+    end.show(state, ui, actions);
+}
+
+/// The time at the end of a seek bar: the song's length, or, once clicked,
+/// how much of it is left. Clicked again it is the length once more.
+pub(super) struct EndTime {
+    /// Where its middle goes.
+    pub at: egui::Pos2,
+    /// The position the seek bar shows, and the song's length.
+    pub shown: u64,
+    pub duration: u64,
+    pub color: egui::Color32,
+}
+
+impl EndTime {
+    pub(super) fn show(&self, state: &State, ui: &mut Ui, actions: &mut Vec<Action>) {
+        let remaining = state.settings.remaining_time;
+        let text = format::end_time(remaining, self.shown, self.duration);
+        let font = theme::regular(11.0);
+        let galley = ui.painter().layout_no_wrap(text, font, self.color);
+        let rect = Rect::from_center_size(self.at, galley.size());
+        let id = ui.id().with("end-time");
+        let response = ui.interact(rect.expand2(vec2(4.0, 4.0)), id, Sense::click());
+        let name = if remaining {
+            "Show total duration"
+        } else {
+            "Show remaining time"
+        };
+        widgets::name(ui, &response, name);
+        ui.painter().galley(rect.min, galley, self.color);
+        if response.on_hover_text(name).clicked() {
+            actions.push(Action::ToggleRemainingTime);
+        }
     }
 }
 
@@ -353,48 +423,32 @@ pub(super) fn seek_bar(
 fn extras(state: &State, ui: &mut Ui, actions: &mut Vec<Action>, zone: Rect) {
     let palette = &state.palette;
     let y = zone.center().y;
-    let volume = state
-        .playback
-        .as_ref()
-        .map_or(0.0, |playback| playback.session.volume);
+    // From the right: the mini player, the volume and its mute, the
+    // playback speed, the queue and the lyrics.
+    let mini_at = pos2(zone.right() - 16.0, y);
+    let bar_right = zone.right() - 36.0;
     let bar = Rect::from_min_max(
-        pos2(zone.right() - VOLUME_WIDTH, y - 8.0),
-        pos2(zone.right(), y + 8.0),
+        pos2(bar_right - VOLUME_WIDTH, y - 8.0),
+        pos2(bar_right, y + 8.0),
     );
-    // Volume follows the drag as it happens: it is heard, not just seen.
-    let slider = widgets::slider(ui, palette, bar, volume.min(1.0), "volume");
-    if let Some(level) = slider.dragging.or(slider.released)
-        && (level - volume).abs() >= 0.01
-    {
-        actions.push(Action::SetVolume(level));
-    }
-    let icon = match volume {
-        v if v <= 0.0 => Icon::VolumeX,
-        v if v < 0.5 => Icon::Volume1,
-        _ => Icon::Volume2,
+    let mute_at = pos2(bar.left() - 24.0, y);
+    let speed_at = mute_at - vec2(EXTRA_STEP, 0.0);
+    let queue_at = mute_at - vec2(EXTRA_STEP * 2.0, 0.0);
+    let lyrics_at = queue_at - vec2(EXTRA_STEP, 0.0);
+    let control = volume::Volume {
+        bar: Some(bar),
+        mute_at,
+        icon: 18.0,
     };
-    let mute = widgets::IconButton {
-        icon,
-        size: 18.0,
-        tooltip: "Mute",
-        active: false,
-    };
-    if mute
-        .show_at(ui, palette, pos2(bar.left() - 21.0, y))
-        .clicked()
-    {
-        actions.push(Action::ToggleMute);
-    }
+    control.show(state, palette, ui, actions, state.playback.as_ref());
+    speed::button(state, palette, ui, actions, speed_at);
     let queue = widgets::IconButton {
         icon: Icon::ListMusic,
         size: 18.0,
         tooltip: "Queue",
         active: state.settings.panel == RightPanel::Queue,
     };
-    if queue
-        .show_at(ui, palette, pos2(bar.left() - 57.0, y))
-        .clicked()
-    {
+    if queue.show_at(ui, palette, queue_at).clicked() {
         actions.push(Action::ToggleQueue);
     }
     let lyrics = widgets::IconButton {
@@ -403,27 +457,16 @@ fn extras(state: &State, ui: &mut Ui, actions: &mut Vec<Action>, zone: Rect) {
         tooltip: "Lyrics",
         active: state.settings.panel == RightPanel::Lyrics,
     };
-    if lyrics
-        .show_at(ui, palette, pos2(bar.left() - 93.0, y))
-        .clicked()
-    {
+    if lyrics.show_at(ui, palette, lyrics_at).clicked() {
         actions.push(Action::ToggleLyrics);
     }
-    // The narrowest bar has no room for a fourth button; the shortcut and
-    // the tray still lead there.
-    if zone.width() < MINI_BUTTON_NEEDS {
-        return;
-    }
     let mini = widgets::IconButton {
-        icon: Icon::Shrink,
-        size: 17.0,
+        icon: Icon::PictureInPicture,
+        size: 18.0,
         tooltip: "Mini player",
-        active: false,
+        active: state.mini_player,
     };
-    if mini
-        .show_at(ui, palette, pos2(bar.left() - 129.0, y))
-        .clicked()
-    {
+    if mini.show_at(ui, palette, mini_at).clicked() {
         actions.push(Action::ToggleMiniPlayer);
     }
 }
