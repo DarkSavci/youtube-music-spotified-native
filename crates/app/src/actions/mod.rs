@@ -7,6 +7,7 @@
 
 mod account;
 mod desktop;
+mod equalizer;
 mod library;
 mod listening;
 mod loading;
@@ -17,9 +18,10 @@ mod preferences;
 mod songs;
 mod together;
 mod types;
+pub mod video;
 
 pub use account::busy as account_busy;
-pub use types::{Action, Effect};
+pub use types::{Action, Effect, VideoAsk};
 
 use spotified_client::session::Command;
 
@@ -371,10 +373,8 @@ pub fn apply(state: &mut State, action: Action) -> Vec<Effect> {
         }
         Action::OpenThemesFolder => vec![Effect::OpenThemesFolder],
         Action::ReloadThemes => vec![Effect::ReloadThemes],
-        Action::SetEqualizerOn(_)
-        | Action::SetEqualizerBand(..)
-        | Action::SetEqualizer(_)
-        | Action::SetVisualizer(_)
+        Action::Equalizer(ask) => equalizer::asked(state, ask),
+        Action::SetVisualizer(_)
         | Action::SetCrossfade(_)
         | Action::SetNormaliseVolume(_)
         | Action::SetVolumeLevel(_)
@@ -386,6 +386,7 @@ pub fn apply(state: &mut State, action: Action) -> Vec<Effect> {
         | Action::SetReportToYouTube(_)
         | Action::SetCacheSize(_)
         | Action::SetReduceMotion(_)
+        | Action::SetShowMusicVideos(_)
         | Action::ToggleRemainingTime
         | Action::SetSpeed(_)
         | Action::ResetPreferences => preferences::preferences(state, action),
@@ -483,7 +484,12 @@ pub fn apply(state: &mut State, action: Action) -> Vec<Effect> {
         | Action::ToggleMute
         | Action::ToggleShuffle
         | Action::CycleRepeat => control(state, action),
-        Action::SessionChanged(projection) => playback::session_changed(state, *projection),
+        Action::SessionChanged(projection) => {
+            let mut effects = playback::session_changed(state, *projection);
+            effects.extend(video::session_changed(state));
+            effects
+        }
+        Action::Video(ask) => video::asked(state, ask),
         Action::SwitchChannel(_)
         | Action::SignIn
         | Action::SignOut

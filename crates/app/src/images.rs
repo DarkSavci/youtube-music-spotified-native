@@ -70,6 +70,17 @@ impl Images {
         }
     }
 
+    /// The texture for `url` if it has already loaded, without asking for
+    /// it: for a picture that would only stand in for another.
+    pub fn ready(&self, url: &str) -> Option<(TextureId, egui::Vec2)> {
+        let entry = self.entries.get(url)?;
+        let Slot::Ready(texture) = &entry.slot else {
+            return None;
+        };
+        entry.last_drawn.set(self.frame);
+        Some((texture.id(), texture.size_vec2()))
+    }
+
     /// The tint of the cover at `url`, once it has loaded. Asking does not
     /// load it: a tint follows a cover that is on screen anyway.
     pub fn tint(&self, url: &str) -> Option<Color32> {

@@ -163,6 +163,8 @@ pub struct Settings {
     pub together_mode: crate::together::Mode,
     /// Say what happens in a room as it happens.
     pub together_notifications: bool,
+    /// Show or hide the video when someone who steers the room does.
+    pub together_follow_video: bool,
     /// The version that last ran here, to notice an update by.
     pub last_seen_version: String,
     /// The newest release whose notes have been opened.
@@ -204,6 +206,9 @@ pub struct Settings {
     pub cache_max_mb: u32,
     /// Do without animation.
     pub reduce_motion: bool,
+    /// Show music videos among the songs of shelves and lists. Off, as in
+    /// the Electron app: this is a player of songs first.
+    pub show_music_videos: bool,
     /// Show the time left, not the length, at the end of the seek bar.
     pub remaining_time: bool,
     /// How fast playback runs, as a multiple of normal. Kept across songs
@@ -217,6 +222,12 @@ pub struct Settings {
     pub equalizer_on: bool,
     /// Decibels for each of the equalizer's ten bands.
     pub equalizer: [f32; 10],
+    /// Decibels the equalizer raises or lowers everything by.
+    pub equalizer_preamp: f32,
+    /// Take off the level what the curve adds to it, so nothing clips.
+    pub equalizer_headroom: bool,
+    /// Curves saved under names of the listener's own.
+    pub equalizer_presets: Vec<crate::equalizer::Saved>,
     /// How the core knows this installation among its devices. Made up on
     /// the first run and kept.
     pub device_id: String,
@@ -246,6 +257,7 @@ impl Default for Settings {
             together_room_name: String::new(),
             together_mode: crate::together::Mode::Collaborative,
             together_notifications: false,
+            together_follow_video: false,
             last_seen_version: String::new(),
             release_notes_read: String::new(),
             recent_searches: Vec::new(),
@@ -260,6 +272,7 @@ impl Default for Settings {
             report_to_youtube: true,
             cache_max_mb: 2048,
             reduce_motion: false,
+            show_music_videos: false,
             remaining_time: false,
             playback_speed: 1.0,
             visualizer: false,
@@ -268,6 +281,9 @@ impl Default for Settings {
             crossfade_seconds: DEFAULT_CROSSFADE_SECONDS,
             equalizer_on: false,
             equalizer: [0.0; 10],
+            equalizer_preamp: 0.0,
+            equalizer_headroom: true,
+            equalizer_presets: Vec::new(),
             device_id: String::new(),
         }
     }
@@ -338,10 +354,12 @@ impl Settings {
             together_room_name: std::mem::take(&mut self.together_room_name),
             together_mode: self.together_mode,
             together_notifications: self.together_notifications,
+            together_follow_video: self.together_follow_video,
             last_seen_version: std::mem::take(&mut self.last_seen_version),
             release_notes_read: std::mem::take(&mut self.release_notes_read),
             recent_searches: std::mem::take(&mut self.recent_searches),
             recent_searches_by: std::mem::take(&mut self.recent_searches_by),
+            equalizer_presets: std::mem::take(&mut self.equalizer_presets),
             device_id: std::mem::take(&mut self.device_id),
             ..fresh
         };
@@ -378,6 +396,7 @@ pub fn load(path: &Path) -> Settings {
                 settings.crossfade_seconds = 0;
             }
             settings.playback_speed = clamp_speed(settings.playback_speed);
+            crate::equalizer::hold(&mut settings, text);
             crate::together::servers::adopt(
                 &mut settings.together_servers,
                 &mut settings.together_selected,
@@ -441,6 +460,7 @@ mod tests {
             together_room_name: "Friday night".into(),
             together_mode: crate::together::Mode::Listen,
             together_notifications: true,
+            together_follow_video: true,
             last_seen_version: "0.1.0".into(),
             release_notes_read: "0.1.0".into(),
             recent_searches: vec!["bonobo".into(), "air".into()],
@@ -455,12 +475,16 @@ mod tests {
             report_to_youtube: false,
             cache_max_mb: 5120,
             reduce_motion: true,
+            show_music_videos: true,
             remaining_time: true,
             playback_speed: 1.25,
             visualizer: true,
             crossfade_seconds: 3,
             equalizer_on: true,
             equalizer: [3.0; 10],
+            equalizer_preamp: -2.0,
+            equalizer_headroom: false,
+            equalizer_presets: Vec::new(),
             device_id: "native-1".into(),
         };
         save(&path, &settings)?;
@@ -529,6 +553,8 @@ mod tests {
             crossfade_seconds: 0,
             playback_speed: 2.0,
             reduce_motion: true,
+            show_music_videos: true,
+            together_follow_video: true,
             report_to_youtube: false,
             equalizer_on: true,
             sidebar_width: 320.0,
@@ -541,6 +567,9 @@ mod tests {
         assert_eq!(settings.crossfade_seconds, fresh.crossfade_seconds);
         assert_eq!(settings.playback_speed, 1.0);
         assert!(!settings.reduce_motion);
+        assert!(!settings.show_music_videos);
+        // A room's own choices are made in the room, not on the page.
+        assert!(settings.together_follow_video);
         assert!(settings.report_to_youtube);
         assert!(!settings.equalizer_on);
         // Not on the page, so not the page's to reset.

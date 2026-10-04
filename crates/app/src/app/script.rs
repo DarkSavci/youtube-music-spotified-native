@@ -98,3 +98,32 @@ impl App {
         ctx.request_repaint();
     }
 }
+
+/// How far into a track a screenshot waits, so it shows playback under way.
+const SHOT_PLAYED_MS: u64 = 3000;
+
+impl super::App {
+    /// When something has been asked to play, whether it has been playing
+    /// for a moment.
+    pub(super) fn heard_if_playing(&self) -> bool {
+        match &self.state.playback {
+            Some(playback) if playback.wants_to_play() => {
+                playback.is_playing() && playback.position_ms(Instant::now()) >= SHOT_PLAYED_MS
+            }
+            _ => true,
+        }
+    }
+
+    /// Whether the window shows what it is going to show, for `--screenshot`.
+    pub(super) fn settled(&self) -> bool {
+        self.state.core != crate::sidecar::CoreStatus::Starting
+            && self.requests_in_flight == 0
+            && self.script.is_done()
+            && self.search_due.is_none()
+            && self.room_search_due.is_none()
+            && self.lookup_due.is_none()
+            && !self.state.images.loading()
+            && self.state.migration.running.is_none()
+            && self.heard_if_playing()
+    }
+}

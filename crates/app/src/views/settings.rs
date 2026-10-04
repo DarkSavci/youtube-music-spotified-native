@@ -3,7 +3,7 @@
 
 use eframe::egui::{self, Align, Frame, Layout, Margin, Ui};
 
-use super::{cards, format, widgets};
+use super::{cards, equalizer, format, widgets};
 use crate::actions::Action;
 use crate::report;
 use crate::state::{Page, State};
@@ -29,7 +29,9 @@ pub fn show(state: &State, ui: &mut Ui, actions: &mut Vec<Action>) {
     section(state, ui, "Playback", |ui| {
         playback::show(state, ui, actions)
     });
-    section(state, ui, "Equalizer", |ui| equalizer(state, ui, actions));
+    section(state, ui, "Equalizer", |ui| {
+        equalizer::panel(state, ui, actions, equalizer::Place::Page);
+    });
     section(state, ui, "Appearance", |ui| {
         themes(state, ui, actions);
         ui.add_space(12.0);
@@ -50,6 +52,16 @@ pub fn show(state: &State, ui: &mut Ui, actions: &mut Vec<Action>) {
         row(state, ui, label, about, |ui| {
             if widgets::switch(ui, &state.palette, on, label).clicked() {
                 actions.push(Action::SetReduceMotion(!on));
+            }
+        });
+    });
+    section(state, ui, "Content", |ui| {
+        let on = state.settings.show_music_videos;
+        let label = "Show music videos";
+        let about = "Off by default. This is an audio-first player; videos appear in their                      own shelves when enabled. Videos in a playlist always show.";
+        row(state, ui, label, about, |ui| {
+            if widgets::switch(ui, &state.palette, on, label).clicked() {
+                actions.push(Action::SetShowMusicVideos(!on));
             }
         });
     });
@@ -302,74 +314,5 @@ fn row_with_room(
             );
         });
         ui.with_layout(Layout::right_to_left(Align::Center), control);
-    });
-}
-
-/// Shapes to start from. Each is decibels for the ten bands, low to high.
-const PRESETS: [(&str, [f32; 10]); 5] = [
-    ("Flat", [0.0; 10]),
-    (
-        "Bass boost",
-        [6.0, 5.0, 4.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-    ),
-    (
-        "Treble boost",
-        [0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 2.0, 4.0, 5.0, 6.0],
-    ),
-    (
-        "Vocal",
-        [-2.0, -2.0, -1.0, 1.0, 3.0, 4.0, 3.0, 1.0, 0.0, -1.0],
-    ),
-    (
-        "Loudness",
-        [5.0, 4.0, 2.0, 0.0, -1.0, -1.0, 0.0, 2.0, 4.0, 5.0],
-    ),
-];
-
-fn equalizer(state: &State, ui: &mut Ui, actions: &mut Vec<Action>) {
-    let on = state.settings.equalizer_on;
-    let label = "Equalizer";
-    let about = "Raise or lower ten bands, from deep bass on the left to treble on the right.";
-    row(state, ui, label, about, |ui| {
-        if widgets::switch(ui, &state.palette, on, label).clicked() {
-            actions.push(Action::SetEqualizerOn(!on));
-        }
-    });
-    ui.add_space(8.0);
-    ui.horizontal_wrapped(|ui| {
-        for (name, gains) in PRESETS {
-            let active = on && state.settings.equalizer == gains;
-            if widgets::chip(ui, &state.palette, name, active).clicked() {
-                actions.push(Action::SetEqualizer(gains));
-            }
-        }
-    });
-    ui.add_space(12.0);
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 18.0;
-        for (band, hz) in spotified_audio::eq::BANDS.into_iter().enumerate() {
-            ui.vertical(|ui| {
-                // The view may not change state, so it moves a copy and asks.
-                let mut decibels = state.settings.equalizer[band];
-                let range = -spotified_audio::eq::RANGE_DB..=spotified_audio::eq::RANGE_DB;
-                let slider = egui::Slider::new(&mut decibels, range)
-                    .vertical()
-                    .show_value(false)
-                    .step_by(0.5);
-                if ui.add(slider).changed() {
-                    actions.push(Action::SetEqualizerBand(band, decibels));
-                }
-                let name = if hz >= 1000.0 {
-                    format!("{}k", hz / 1000.0)
-                } else {
-                    format!("{hz}")
-                };
-                ui.label(
-                    egui::RichText::new(name)
-                        .font(theme::regular(11.5))
-                        .color(state.palette.secondary),
-                );
-            });
-        }
     });
 }

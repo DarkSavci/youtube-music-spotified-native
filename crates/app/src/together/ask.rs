@@ -115,4 +115,6 @@ pub enum Ask {
     Resync,
     /// Say what happens in the room as it happens, or not.
     Notifications(bool),
+    /// Show or hide the video when someone who steers the room does.
+    FollowVideo(bool),
 }

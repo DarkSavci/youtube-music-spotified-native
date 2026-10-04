@@ -4,7 +4,6 @@
 
 use std::time::Instant;
 
-use spotified_audio::eq::RANGE_DB as EQ_RANGE_DB;
 use spotified_client::session::Command;
 
 use super::{Action, Effect, MAX_CROSSFADE_SECONDS};
@@ -18,24 +17,6 @@ fn heard() -> Vec<Effect> {
 
 pub(super) fn preferences(state: &mut State, action: Action) -> Vec<Effect> {
     match action {
-        Action::SetEqualizerOn(on) => {
-            state.settings.equalizer_on = on;
-            heard()
-        }
-        Action::SetEqualizerBand(band, decibels) => {
-            let Some(gain) = state.settings.equalizer.get_mut(band) else {
-                return Vec::new();
-            };
-            *gain = decibels.clamp(-EQ_RANGE_DB, EQ_RANGE_DB);
-            // Moving a slider is a wish to hear it.
-            state.settings.equalizer_on = true;
-            heard()
-        }
-        Action::SetEqualizer(gains) => {
-            state.settings.equalizer = gains;
-            state.settings.equalizer_on = true;
-            heard()
-        }
         Action::SetVisualizer(on) => {
             state.settings.visualizer = on;
             heard()
@@ -97,6 +78,10 @@ pub(super) fn preferences(state: &mut State, action: Action) -> Vec<Effect> {
         }
         Action::SetReduceMotion(on) => {
             state.settings.reduce_motion = on;
+            vec![Effect::SaveSettings]
+        }
+        Action::SetShowMusicVideos(on) => {
+            state.settings.show_music_videos = on;
             vec![Effect::SaveSettings]
         }
         Action::ToggleRemainingTime => {

@@ -45,6 +45,23 @@ fn the_position_runs_on_while_playing_and_stops_at_the_songs_end() {
 }
 
 #[test]
+fn a_rooms_last_display_change_is_read_when_there_is_one() {
+    let room: Room = serde_json::from_str(
+        r#"{"revision":9,"video":{"shown":true,"by":"m2","revision":8,"more":1}}"#,
+    )
+    .expect("a room");
+    let change = RoomVideo {
+        shown: true,
+        by: "m2".into(),
+        revision: 8,
+    };
+    assert_eq!(room.video, Some(change));
+    let quiet: Room = serde_json::from_str(r#"{"revision":9,"video":null}"#).expect("a room");
+    assert_eq!(quiet.video, None);
+    assert_eq!(Room::default().video, None);
+}
+
+#[test]
 fn who_may_steer_follows_the_rooms_mode() {
     let mut room = Room {
         owner: "leader".into(),

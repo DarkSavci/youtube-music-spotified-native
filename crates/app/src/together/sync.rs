@@ -256,6 +256,12 @@ pub fn route(command: &Command, room: &Room, me: &str, position_ms: u64) -> Rout
         _ if !steers => return Routed::Refused(LEADER_PLAYS),
         Command::Toggle if room.playing => ("pause", json!({})),
         Command::Toggle => ("play", json!({})),
+        // The other edit of the song, its video or back: the room's entry
+        // changes, and everyone hears the same one.
+        Command::SwitchVariant { expected, track } => (
+            "variant",
+            json!({ "track": super::protocol::track_json(track), "expectedID": expected }),
+        ),
         Command::Next => ("next", json!({})),
         Command::Previous => (
             "previous",

@@ -436,7 +436,9 @@ impl Worker {
             if let Some(equalizer) = &mut self.equalizer {
                 equalizer.process(&mut self.shaped);
             }
-            self.tap.write(&self.shaped);
+            let queued = output.queued_frames() + self.shaped.len() / 2;
+            let ahead = Duration::from_secs_f64(queued as f64 / f64::from(output.sample_rate()));
+            self.tap.write(&self.shaped, ahead + output.delay());
             output.push(&self.shaped);
             self.last_audio = Instant::now();
             self.stall_reported = false;

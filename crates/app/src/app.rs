@@ -8,7 +8,7 @@ use eframe::egui::{self, ColorImage};
 use spotified_client::session::Command;
 
 use crate::accounts::{AccountStore, SavedAccount};
-use crate::actions::{self, Action};
+use crate::actions::{self, Action, VideoAsk};
 use crate::backend::{Backend, Response};
 use crate::images::ImageLoader;
 use crate::paths::Paths;
@@ -104,6 +104,7 @@ mod effects;
 mod migration;
 mod open;
 mod script;
+mod video;
 
 use open::{opening_action, opening_commands, waits};
 use script::Script;
@@ -183,6 +184,8 @@ pub struct App {
     /// not update itself.
     update_due: Option<Instant>,
     screenshot: Option<Screenshot>,
+    /// The music video's decoder and the texture its pictures go into.
+    video: video::Screen,
 }
 
 impl App {
@@ -327,6 +330,7 @@ impl App {
             together: None,
             together_ticked: launch.started,
             screenshot: launch.screenshot.map(Screenshot::new),
+            video: video::Screen::default(),
         }
     }
 
@@ -435,7 +439,10 @@ impl App {
                 self.actions.push(Action::SessionChanged(projection));
             }
             // Shown to the person once there are toasts to show it in.
-            Event::Session(session::Update::Refused(reason)) => log::warn!("{reason}"),
+            Event::Session(session::Update::Refused(reason)) => {
+                log::warn!("{reason}");
+                self.actions.push(Action::Video(VideoAsk::Refused));
+            }
             Event::Session(session::Update::RateLimited) => {
                 self.actions.push(Action::Notify(Notice::RateLimited));
             }
@@ -443,34 +450,7 @@ impl App {
             Event::Image(url, image) => self.state.images.loaded(ctx, url, image),
         }
     }
-
-    /// When something has been asked to play, whether it has been playing
-    /// for a moment.
-    fn heard_if_playing(&self) -> bool {
-        match &self.state.playback {
-            Some(playback) if playback.wants_to_play() => {
-                playback.is_playing() && playback.position_ms(Instant::now()) >= SHOT_PLAYED_MS
-            }
-            _ => true,
-        }
-    }
-
-    /// Whether the window shows what it is going to show, for `--screenshot`.
-    fn settled(&self) -> bool {
-        self.state.core != CoreStatus::Starting
-            && self.requests_in_flight == 0
-            && self.script.is_done()
-            && self.search_due.is_none()
-            && self.room_search_due.is_none()
-            && self.lookup_due.is_none()
-            && !self.state.images.loading()
-            && self.state.migration.running.is_none()
-            && self.heard_if_playing()
-    }
 }
-
-/// How far into a track a screenshot waits, so it shows playback under way.
-const SHOT_PLAYED_MS: u64 = 3000;
 
 /// A callback for a background thread: wraps what it reports as an event,
 /// queues it, and wakes the window, which would otherwise sleep until the
@@ -567,6 +547,7 @@ impl eframe::App for App {
         views::show(&self.state, ui, &mut self.actions);
         self.show_mini(ui);
         self.show_flyout(ui);
+        self.show_video(ui.ctx());
         self.state.images.end_frame(&self.images);
         if self
             .state

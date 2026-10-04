@@ -165,6 +165,7 @@ fn heard(state: &mut State, event: Event) -> Vec<Effect> {
             if let Some(previous) = previous {
                 room_changed(state, &previous);
             }
+            super::video::room_heard(state);
             let mut effects = keep_up(state);
             effects.extend(radio::add_radio(state));
             effects.extend(radio::top_up(state));

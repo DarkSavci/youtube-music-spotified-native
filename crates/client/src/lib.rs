@@ -242,6 +242,23 @@ impl Client {
         Ok(tracks.unwrap_or_default())
     }
 
+    /// The song and its music video, as YouTube pairs them: both, when it
+    /// names a pair, and otherwise the one that was asked about or nothing.
+    pub fn versions(&self, track_id: &str) -> Result<Vec<Track>, ApiError> {
+        let tracks: Option<Vec<Track>> =
+            self.get(&format!("/v1/tracks/{}/versions", encode(track_id)))?;
+        Ok(tracks.unwrap_or_default())
+    }
+
+    /// Where the core serves a video's picture, without its sound.
+    pub fn video_stream_url(origin: &str, track_id: &str) -> String {
+        format!(
+            "{}/v1/video-stream/{}",
+            origin.trim_end_matches('/'),
+            encode(track_id)
+        )
+    }
+
     pub fn search(&self, query: &str, filter: SearchFilter) -> Result<SearchResults, ApiError> {
         let path = format!("/v1/search?q={}&filter={}", encode(query), filter.wire());
         self.get(&path)
@@ -301,8 +318,11 @@ impl Client {
     /// when no source has any.
     pub fn lyrics(&self, track: &Track) -> Result<Option<Lyrics>, ApiError> {
         let album = track.album.as_ref().map_or("", |album| album.name.as_str());
+        // A video's title and length seldom match a lyrics source; said to
+        // be one, the core looks for the words of the song it is paired with.
+        let video = if track.is_video { "&video=1" } else { "" };
         let path = format!(
-            "/v1/tracks/{}/lyrics?title={}&artist={}&album={}&durationMs={}&timed=1",
+            "/v1/tracks/{}/lyrics?title={}&artist={}&album={}&durationMs={}&timed=1{video}",
             encode(&track.id),
             encode(&track.title),
             encode(&track.artist_names()),

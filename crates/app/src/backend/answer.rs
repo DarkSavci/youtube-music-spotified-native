@@ -216,6 +216,10 @@ pub(super) fn answer(client: &Client, request: Request) -> Response {
             let result = client.radio_of(&seed);
             Response::Radio(seed, result)
         }
+        Request::Versions(track_id) => {
+            let result = client.versions(&track_id);
+            Response::Versions { track_id, result }
+        }
         Request::Search {
             serial,
             query,

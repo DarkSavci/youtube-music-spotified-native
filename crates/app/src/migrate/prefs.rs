@@ -30,9 +30,9 @@ const RAIL_AT_MOST: f32 = 170.0;
 const OLD_BANDS: [f32; 5] = [60.0, 250.0, 1000.0, 4000.0, 12000.0];
 
 /// What the Electron app has a setting for and this app does not.
-pub const NOT_BROUGHT: &str = "Music videos, the playback engine, the quality badge, timed \
-                               lyrics and the sidebar's width have no setting to take them \
-                               here, so they were left.";
+pub const NOT_BROUGHT: &str = "The playback engine, the quality badge, timed lyrics and the \
+                               sidebar's width have no setting to take them here, so they \
+                               were left.";
 
 /// The settings object, as the page's store wrote it. Every field may be
 /// missing: an older version of the app knew fewer.
@@ -45,6 +45,7 @@ pub struct OldSettings {
     normalization_level: Option<String>,
     theme: Option<String>,
     reduce_motion: Option<bool>,
+    show_music_videos: Option<bool>,
     resume_on_launch: Option<bool>,
     #[serde(rename = "continueFromYouTubeMusic")]
     continue_from_youtube_music: Option<bool>,
@@ -72,6 +73,7 @@ pub struct OldRooms {
     /// The picture shown to a room; empty for none.
     avatar: String,
     notifications: bool,
+    follow_video: bool,
 }
 
 /// The mini player's window, as the shell wrote it.
@@ -314,6 +316,8 @@ pub fn apply(settings: &mut Settings, old: &OldPrefs, scope: &str) -> Vec<String
         bring(&mut settings.theme, worn, "theme", c);
         let still = theirs.reduce_motion;
         bring(&mut settings.reduce_motion, still, "reduce motion", c);
+        let videos = theirs.show_music_videos;
+        bring(&mut settings.show_music_videos, videos, "music videos", c);
         let resume = theirs.resume_on_launch;
         bring(
             &mut settings.resume_on_launch,
@@ -459,6 +463,9 @@ fn apply_rooms(settings: &mut Settings, rooms: &OldRooms, changed: &mut Vec<Stri
     let notify = Some(rooms.notifications);
     let name = "room notifications";
     bring(&mut settings.together_notifications, notify, name, changed);
+    let follow = Some(rooms.follow_video);
+    let name = "following a room's video";
+    bring(&mut settings.together_follow_video, follow, name, changed);
 }
 
 /// The Electron app's five-band curve as this app's ten bands hear it: a

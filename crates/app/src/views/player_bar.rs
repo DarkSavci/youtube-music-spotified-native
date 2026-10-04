@@ -9,7 +9,7 @@ use eframe::egui::{self, Align2, Margin, Rect, Sense, Ui, pos2, vec2};
 use spotified_client::session::Repeat;
 
 use super::widgets::{self, ArtShape};
-use super::{format, speed, visualizer, volume};
+use super::{equalizer, format, speed, video, visualizer, volume};
 use crate::actions::Action;
 use crate::settings::RightPanel;
 use crate::state::{Page, Playback, State};
@@ -31,6 +31,9 @@ const TRANSPORT_GAP: f32 = 12.0;
 const TRANSPORT_RISE: f32 = 10.0;
 const PROGRESS_DROP: f32 = 30.0;
 const VOLUME_WIDTH: f32 = 96.0;
+/// How far the transport's buttons reach either side of the bar's middle,
+/// with a little room to spare.
+const TRANSPORT_REACH: f32 = 150.0;
 /// How far apart the middles of the buttons at the right are.
 const EXTRA_STEP: f32 = 36.0;
 /// The least the middle zone is, and the part of the bar it takes.
@@ -424,7 +427,8 @@ fn extras(state: &State, ui: &mut Ui, actions: &mut Vec<Action>, zone: Rect) {
     let palette = &state.palette;
     let y = zone.center().y;
     // From the right: the mini player, the volume and its mute, the
-    // playback speed, the queue and the lyrics.
+    // video button, the playback speed, the queue, the lyrics and the
+    // equalizer.
     let mini_at = pos2(zone.right() - 16.0, y);
     let bar_right = zone.right() - 36.0;
     let bar = Rect::from_min_max(
@@ -432,9 +436,17 @@ fn extras(state: &State, ui: &mut Ui, actions: &mut Vec<Action>, zone: Rect) {
         pos2(bar_right, y + 8.0),
     );
     let mute_at = pos2(bar.left() - 24.0, y);
-    let speed_at = mute_at - vec2(EXTRA_STEP, 0.0);
-    let queue_at = mute_at - vec2(EXTRA_STEP * 2.0, 0.0);
+    let video_at = mute_at - vec2(EXTRA_STEP, 0.0);
+    let speed_at = video_at - vec2(EXTRA_STEP, 0.0);
+    let queue_at = speed_at - vec2(EXTRA_STEP, 0.0);
     let lyrics_at = queue_at - vec2(EXTRA_STEP, 0.0);
+    let equalizer_at = lyrics_at - vec2(EXTRA_STEP, 0.0);
+    // The last in, and the one that goes where a narrow window would put
+    // it on the transport: the queue's heading has the same button.
+    let transport_ends = ui.max_rect().center().x + TRANSPORT_REACH;
+    if equalizer_at.x - EXTRA_STEP / 2.0 >= transport_ends {
+        equalizer::button_at(state, ui, actions, equalizer_at);
+    }
     let control = volume::Volume {
         bar: Some(bar),
         mute_at,
@@ -442,6 +454,15 @@ fn extras(state: &State, ui: &mut Ui, actions: &mut Vec<Action>, zone: Rect) {
     };
     control.show(state, palette, ui, actions, state.playback.as_ref());
     speed::button(state, palette, ui, actions, speed_at);
+    // Only with something playing, as the Electron app had it.
+    if state
+        .playback
+        .as_ref()
+        .and_then(Playback::current)
+        .is_some()
+    {
+        video::switch(state, palette, ui, actions, video_at);
+    }
     let queue = widgets::IconButton {
         icon: Icon::ListMusic,
         size: 18.0,

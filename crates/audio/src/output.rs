@@ -7,6 +7,7 @@
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::time::Duration;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, SampleFormat, SizedSample, StreamConfig};
@@ -64,6 +65,9 @@ struct Shared {
     flush: AtomicBool,
     /// The device reported an error: unplugged, or taken away by the system.
     lost: AtomicBool,
+    /// How long the device takes to play what it is handed, in
+    /// microseconds, as it last said.
+    delay: AtomicU32,
 }
 
 pub struct Output {
@@ -101,6 +105,7 @@ impl Output {
             paused: AtomicBool::new(true),
             flush: AtomicBool::new(false),
             lost: AtomicBool::new(false),
+            delay: AtomicU32::new(0),
         });
         let stream = match format {
             SampleFormat::F32 => build::<f32>(&device, config, consumer, shared.clone()),
@@ -143,6 +148,12 @@ impl Output {
     /// Frames queued and not yet played.
     pub fn queued_frames(&self) -> usize {
         (self.capacity - self.producer.slots()) / 2
+    }
+
+    /// How long after leaving the queue a frame is heard, by the device's
+    /// own account: what draws the music waits this long too.
+    pub fn delay(&self) -> Duration {
+        Duration::from_micros(u64::from(self.shared.delay.load(Ordering::Relaxed)))
     }
 
     /// Queues interleaved stereo. The caller checks `free` first.
@@ -199,7 +210,11 @@ where
     let mut gain = 0.0f32;
     let mut limiter = Limiter { gain: 1.0 };
     let errors = shared.clone();
-    let callback = move |data: &mut [T], _: &cpal::OutputCallbackInfo| {
+    let callback = move |data: &mut [T], info: &cpal::OutputCallbackInfo| {
+        let stamp = info.timestamp();
+        let delay = stamp.playback.duration_since(stamp.callback);
+        let micros = u32::try_from(delay.as_micros()).unwrap_or(u32::MAX);
+        shared.delay.store(micros, Ordering::Relaxed);
         if shared.flush.swap(false, Ordering::Relaxed) {
             let queued = consumer.slots();
             if let Ok(chunk) = consumer.read_chunk(queued) {

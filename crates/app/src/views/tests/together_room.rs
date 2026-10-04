@@ -419,6 +419,12 @@ fn a_listeners_own_preferences_are_theirs_to_set() {
         .click();
     harness.run();
     assert!(asked_room(&harness, |ask| *ask == Ask::Notifications(true)));
+    let follow = "Follow others\u{2019} video display changes";
+    harness
+        .get_by_role_and_label(Role::CheckBox, follow)
+        .click();
+    harness.run();
+    assert!(asked_room(&harness, |ask| *ask == Ask::FollowVideo(true)));
     harness.get_by_label("Resync me").click();
     harness.run();
     assert!(asked_room(&harness, |ask| *ask == Ask::Resync));

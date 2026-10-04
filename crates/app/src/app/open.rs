@@ -14,7 +14,7 @@ use spotified_client::models::{
 use spotified_client::session::Command;
 
 use crate::accounts::{self, Accounts, SavedChannel};
-use crate::actions::Action;
+use crate::actions::{Action, VideoAsk};
 use crate::backend::Response;
 use crate::state::{Page, SongOrder, State, Surface};
 use crate::together;
@@ -41,6 +41,10 @@ pub(super) fn waits(spec: &str) -> bool {
                 | "search-filter"
                 | "fullscreen"
                 | "speed"
+                | "eq"
+                | "video"
+                | "seek"
+                | "playing"
                 | "flyout"
                 | "report"
                 | "accounts-demo"
@@ -246,6 +250,7 @@ pub(super) fn opening_action(spec: &str) -> Option<Action> {
         "library-wide" => Action::ToggleLibraryExpanded,
         "library-demo" => Action::Loaded(Box::new(Response::Library(Ok(demo_library())))),
         "lyrics" => Action::ToggleLyrics,
+        "queue" => Action::ToggleQueue,
         // The built-in theme to look at it in.
         "theme" => Action::SetTheme(match value.as_str() {
             "light" => crate::themes::Choice::Light,
@@ -268,6 +273,20 @@ pub(super) fn opening_action(spec: &str) -> Option<Action> {
         // What is playing, given the screen; it needs something playing.
         "fullscreen" => Action::SetFullscreenPlayer(true),
         "speed" => Action::SetSpeed(value.parse().ok()?),
+        // The equalizer: `eq:off`, `eq:on`, or a built-in curve by name.
+        "eq" => Action::Equalizer(match value.as_str() {
+            "off" => crate::equalizer::Ask::On(false),
+            "on" => crate::equalizer::Ask::On(true),
+            name => crate::equalizer::PRESETS
+                .into_iter()
+                .find(|(preset, _)| preset.eq_ignore_ascii_case(name))
+                .map(|(_, gains)| crate::equalizer::Ask::Curve(gains))?,
+        }),
+        // `video` shows the music video of what plays; `video:off` goes
+        // back to the song.
+        "video" => Action::Video(VideoAsk::Set(value != "off")),
+        "seek" => Action::Seek(value.parse().ok()?),
+        "playing" => Action::SetPlaying(value != "off"),
         "history" => Action::Open(Page::History),
         "explore" => Action::Open(Page::Browse(Surface::explore())),
         "moods" => Action::Open(Page::Browse(Surface::moods())),

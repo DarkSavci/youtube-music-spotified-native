@@ -48,10 +48,14 @@ pub fn show(state: &State, ui: &mut Ui, actions: &mut Vec<Action>) {
         top_result(state, ui, actions, results, &origin);
         // Every song found, as one table: the arrangement that makes an
         // unfiltered search scannable.
+        // A video searched for under Videos is what was asked for; among
+        // other results it is shown only when the settings ask for them.
+        let videos = state.search.filter == SearchFilter::Videos;
         let songs: Vec<&Track> = results
             .shelves
             .iter()
             .flat_map(|shelf| songs_of(&shelf.items))
+            .filter(|track| videos || state.shows(track))
             .collect();
         if !songs.is_empty() {
             cards::section_title(ui, "Songs");

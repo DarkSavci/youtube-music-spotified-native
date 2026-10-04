@@ -53,6 +53,7 @@ pub fn show(state: &State, ui: &mut Ui, actions: &mut Vec<Action>, most: f32) {
                     if widgets::icon_button(ui, palette, Icon::X, 16.0, "Close").clicked() {
                         actions.push(Action::ToggleQueue);
                     }
+                    super::equalizer::button(state, ui, actions);
                 });
             });
             continue_from_remote(state, ui, actions);

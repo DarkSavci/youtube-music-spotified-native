@@ -2,7 +2,7 @@
 //! releases.
 
 use eframe::egui::Ui;
-use spotified_client::models::{Affinity, Artist, BrowseLink, MixSeed};
+use spotified_client::models::{Affinity, Artist, BrowseLink, MixSeed, Track};
 
 use super::hero::{self, Hero, Part, Plays};
 use super::{LOADING, about, actions_row, page_tint};
@@ -187,8 +187,13 @@ fn popular(state: &State, ui: &mut Ui, actions: &mut Vec<Action>, artist: &Artis
     // No covers and no album: on an artist's own page the songs are
     // told apart by their names and, since YouTube gives these no
     // lengths, their plays.
+    let shown: Vec<&Track> = artist
+        .top_tracks
+        .iter()
+        .filter(|track| state.shows(track))
+        .collect();
     let list = tracks::List {
-        tracks: &artist.top_tracks,
+        tracks: &shown,
         origin: &artist.name,
         editable_playlist: None,
         columns: tracks::Columns {

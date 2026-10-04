@@ -50,6 +50,13 @@ pub fn show(state: &State, ui: &mut Ui, actions: &mut Vec<Action>, room: &Room) 
         if parts::check(ui, palette, notified, "Show room activity notifications") {
             actions.push(Action::Room(Ask::Notifications(!notified)));
         }
+        let follows = state.settings.together_follow_video;
+        let label = "Follow others\u{2019} video display changes";
+        if parts::check(ui, palette, follows, label) {
+            actions.push(Action::Room(Ask::FollowVideo(!follows)));
+        }
+        let about = "Everyone hears the same version. You decide whether to show its video.";
+        parts::small(state, ui, about);
         ui.add_space(4.0);
         ui.horizontal(|ui| {
             // The words line up with the tick boxes above them.

@@ -1,203 +1,258 @@
-//! A ten-band equalizer and the limiter that follows it.
+//! A ten-band equalizer, its preamp, and the limiter that follows them.
 //!
-//! Each band is a peaking filter an octave wide, centred where graphic
-//! equalizers have had their sliders since the hi-fi rack. Raising bands
-//! can push peaks past full scale, so the signal then goes through a
-//! limiter that turns the level down for as long as a peak lasts.
+//! The bands sit where graphic equalizers have had their sliders since the
+//! hi-fi rack, an octave apart. What each filter is, and how the ten are
+//! chosen so that the curve passes through the sliders, is in [`design`].
+//!
+//! Where it stands among the stages a track goes through:
+//!
+//! 1. decoded, and resampled to the device's rate;
+//! 2. turned down to the loudness target (per track, so two songs crossing
+//!    are each at their own level);
+//! 3. stretched to the playback speed;
+//! 4. mixed with the track it fades from or into;
+//! 5. **equalized, and the preamp applied** (here);
+//! 6. limited, so nothing the equalizer or a crossfade raised clips (here);
+//! 7. copied to the visualizer's tap, and queued for the device;
+//! 8. scaled by the volume in the device's callback, where boost past 100%
+//!    has a limiter of its own.
+//!
+//! It comes after the mix so that there is one equalizer however many
+//! decks play, and before the volume so that the volume never changes how
+//! hard the limiter works.
+//!
+//! Nothing here allocates, and switched off or flat the equalizer is not
+//! in the path at all: the samples are not read.
 
-use std::f32::consts::PI;
+mod design;
+mod limiter;
+#[cfg(test)]
+mod tests;
+
+pub use design::{Biquad, Design, Shape};
+use limiter::Limiter;
 
 /// The centre of each band, in hertz.
 pub const BANDS: [f32; 10] = [
     31.0, 62.0, 125.0, 250.0, 500.0, 1000.0, 2000.0, 4000.0, 8000.0, 16000.0,
 ];
-/// The most a band is raised or lowered, in decibels.
+/// The most a band, or the preamp, is raised or lowered, in decibels.
 pub const RANGE_DB: f32 = 12.0;
-/// How wide each band is: an octave.
-const Q: f32 = 1.41;
 
-/// The level the limiter holds peaks under, a little below full scale.
-const CEILING: f32 = 0.98;
-/// How long the limiter takes to let the level back up, in seconds.
-const RELEASE: f32 = 0.1;
+/// How long a change takes to arrive, in seconds. Long enough that a
+/// dragged slider is a glide and not a staircase, short enough to be heard
+/// as the hand moves.
+const RAMP: f32 = 0.03;
+/// Filter memory smaller than this is nothing: it is cleared, so that a
+/// long silence does not leave the filters grinding through numbers too
+/// small for the processor to handle quickly.
+const NOTHING: f64 = 1e-30;
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct Settings {
     pub enabled: bool,
     /// Decibels for each of [`BANDS`].
     pub gains: [f32; 10],
+    /// Decibels the whole signal is raised or lowered by.
+    pub preamp: f32,
+    /// Turn the level down by as much as the curve raises it, so that
+    /// nothing comes out louder than it went in and the limiter is left
+    /// with nothing to do.
+    pub headroom: bool,
 }
 
-/// One peaking filter, for both channels.
-#[derive(Clone, Copy, Default)]
+/// One band while it plays: the filter in force, where it is heading, and
+/// what it remembers of each channel.
+#[derive(Clone, Copy)]
 struct Band {
-    // The filter's coefficients, normalised.
-    b: [f32; 3],
-    a: [f32; 2],
-    /// The last two inputs and outputs of each channel.
-    history: [[f32; 4]; 2],
+    now: Biquad,
+    target: Biquad,
+    /// What `now` moves by each frame of a ramp.
+    step: [f64; 5],
+    /// Two numbers a channel: the filter in its transposed form, which
+    /// stays quiet while its coefficients move.
+    memory: [[f64; 2]; 2],
+    /// Left out of the path while it is flat and staying so.
+    active: bool,
 }
 
 impl Band {
-    /// A peaking filter at `hz`, raising or lowering by `db` (from Robert
-    /// Bristow-Johnson's Audio EQ Cookbook).
-    fn peaking(hz: f32, db: f32, sample_rate: f32) -> Self {
-        let amplitude = 10f32.powf(db / 40.0);
-        let omega = 2.0 * PI * hz / sample_rate;
-        let alpha = omega.sin() / (2.0 * Q);
-        let a0 = 1.0 + alpha / amplitude;
-        Self {
-            b: [
-                (1.0 + alpha * amplitude) / a0,
-                -2.0 * omega.cos() / a0,
-                (1.0 - alpha * amplitude) / a0,
-            ],
-            a: [-2.0 * omega.cos() / a0, (1.0 - alpha / amplitude) / a0],
-            history: [[0.0; 4]; 2],
+    const IDLE: Band = Band {
+        now: Biquad::FLAT,
+        target: Biquad::FLAT,
+        step: [0.0; 5],
+        memory: [[0.0; 2]; 2],
+        active: false,
+    };
+
+    /// Heads for `target` over `frames`. Every filter on the way is
+    /// stable: each lies on the straight line between two that are.
+    fn head_for(&mut self, target: Biquad, frames: f64) {
+        self.target = target;
+        self.active = self.active || target != Biquad::FLAT;
+        let (from, to) = (flatten(&self.now), flatten(&target));
+        self.step = std::array::from_fn(|at| (to[at] - from[at]) / frames);
+    }
+
+    fn advance(&mut self) {
+        for (value, step) in self.now.b.iter_mut().zip(&self.step[..3]) {
+            *value += step;
+        }
+        for (value, step) in self.now.a.iter_mut().zip(&self.step[3..]) {
+            *value += step;
         }
     }
 
-    fn process(&mut self, channel: usize, input: f32) -> f32 {
-        let [x1, x2, y1, y2] = self.history[channel];
-        let output =
-            self.b[0] * input + self.b[1] * x1 + self.b[2] * x2 - self.a[0] * y1 - self.a[1] * y2;
-        self.history[channel] = [input, x1, output, y1];
+    /// Arrives: exactly the target, whatever the steps added up to.
+    fn settle(&mut self) {
+        self.now = self.target;
+        if self.target == Biquad::FLAT {
+            *self = Band::IDLE;
+        }
+    }
+
+    fn filter(&mut self, channel: usize, input: f64) -> f64 {
+        let [b0, b1, b2] = self.now.b;
+        let [a1, a2] = self.now.a;
+        let memory = &mut self.memory[channel];
+        let output = b0 * input + memory[0];
+        memory[0] = b1 * input - a1 * output + memory[1];
+        memory[1] = b2 * input - a2 * output;
         output
+    }
+
+    /// Clears memory that has faded to nothing, or that bad input broke.
+    fn tidy(&mut self) {
+        for value in self.memory.iter_mut().flatten() {
+            if !(value.abs() >= NOTHING && value.is_finite()) {
+                *value = 0.0;
+            }
+        }
     }
 }
 
+fn flatten(filter: &Biquad) -> [f64; 5] {
+    let [b0, b1, b2] = filter.b;
+    let [a1, a2] = filter.a;
+    [b0, b1, b2, a1, a2]
+}
+
 pub struct Equalizer {
-    sample_rate: f32,
+    design: Design,
     settings: Settings,
-    bands: Vec<Band>,
-    /// The limiter's gain: 1 when nothing is being held back.
-    limit: f32,
-    /// How much of the way back to 1 the limiter's gain moves per frame.
-    release: f32,
+    bands: [Band; 10],
+    /// The level in force, as a multiplier, and where it is heading.
+    gain: f64,
+    gain_target: f64,
+    gain_step: f64,
+    /// A change takes this many frames to arrive, and this many are left.
+    ramp: u32,
+    ramp_left: u32,
+    limiter: Limiter,
 }
 
 impl Equalizer {
     pub fn new(sample_rate: u32) -> Self {
-        let sample_rate = sample_rate as f32;
         Self {
-            sample_rate,
+            design: Design::new(sample_rate),
             settings: Settings::default(),
-            bands: Vec::new(),
-            limit: 1.0,
-            release: 1.0 - (-1.0 / (RELEASE * sample_rate)).exp(),
+            bands: [Band::IDLE; 10],
+            gain: 1.0,
+            gain_target: 1.0,
+            gain_step: 0.0,
+            ramp: ((sample_rate as f32 * RAMP) as u32).max(1),
+            ramp_left: 0,
+            limiter: Limiter::new(sample_rate as f32),
         }
     }
 
+    /// Takes new settings. The filters and the level glide to them from
+    /// wherever they are, so a slider dragged, or the whole thing switched
+    /// off, never clicks.
     pub fn set(&mut self, settings: Settings) {
         if settings == self.settings {
             return;
         }
         self.settings = settings;
-        // A flat band does nothing but cost time, so it is left out. A band
-        // above what the device can carry cannot be built at all.
-        let nyquist = self.sample_rate / 2.0;
-        self.bands = BANDS
-            .iter()
-            .zip(settings.gains)
-            .filter(|(hz, db)| settings.enabled && db.abs() > 0.05 && **hz < nyquist)
-            .map(|(hz, db)| Band::peaking(*hz, db.clamp(-RANGE_DB, RANGE_DB), self.sample_rate))
-            .collect();
+        let shape = self.design.shape(&settings);
+        let gain = 10f64.powf(f64::from(shape.gain_db) / 20.0);
+        let headed = self.bands.iter().map(|band| &band.target);
+        // A setting that comes to the same sound (a slider moved while it
+        // is switched off) is no change to glide to.
+        if gain == self.gain_target && headed.eq(&shape.filters) {
+            return;
+        }
+        let frames = f64::from(self.ramp);
+        for (band, target) in self.bands.iter_mut().zip(shape.filters) {
+            band.head_for(target, frames);
+        }
+        self.gain_target = gain;
+        self.gain_step = (self.gain_target - self.gain) / frames;
+        self.ramp_left = self.ramp;
+    }
+
+    /// Whether the equalizer is out of the path: off, or flat, with no
+    /// change still arriving.
+    pub fn is_idle(&self) -> bool {
+        self.ramp_left == 0 && self.gain == 1.0 && self.bands.iter().all(|band| !band.active)
     }
 
     /// Shapes interleaved stereo in place, then holds its peaks under the
-    /// ceiling. With every band flat only the limiter runs, and it leaves
-    /// alone what is already under the ceiling.
+    /// ceiling. Idle, the samples go to the limiter as they came, and it
+    /// leaves alone what is already under the ceiling.
     pub fn process(&mut self, samples: &mut [f32]) {
-        for frame in samples.as_chunks_mut::<2>().0 {
+        if !self.is_idle() {
+            let frames = samples.as_chunks_mut::<2>().0;
+            let ramped = frames.len().min(self.ramp_left as usize);
+            let (moving, steady) = frames.split_at_mut(ramped);
+            self.glide(moving);
+            self.shape(steady);
             for band in &mut self.bands {
-                frame[0] = band.process(0, frame[0]);
-                frame[1] = band.process(1, frame[1]);
+                band.tidy();
             }
-            let peak = frame[0].abs().max(frame[1].abs());
-            // Down at once for a peak, back up gently after it.
-            let needed = if peak > CEILING { CEILING / peak } else { 1.0 };
-            if needed < self.limit {
-                self.limit = needed;
-            } else {
-                self.limit += (needed - self.limit) * self.release;
+        }
+        self.limiter.hold(samples);
+    }
+
+    /// The frames during which a change is arriving: every filter and the
+    /// level move a step a frame.
+    fn glide(&mut self, frames: &mut [[f32; 2]]) {
+        for frame in frames {
+            self.gain += self.gain_step;
+            let mut pair = [f64::from(frame[0]), f64::from(frame[1])];
+            for band in self.bands.iter_mut().filter(|band| band.active) {
+                band.advance();
+                pair = [band.filter(0, pair[0]), band.filter(1, pair[1])];
             }
-            frame[0] *= self.limit;
-            frame[1] *= self.limit;
+            *frame = [(pair[0] * self.gain) as f32, (pair[1] * self.gain) as f32];
+            self.ramp_left -= 1;
+            if self.ramp_left == 0 {
+                self.gain = self.gain_target;
+                for band in &mut self.bands {
+                    band.settle();
+                }
+            }
         }
     }
-}
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    const RATE: u32 = 48_000;
-
-    fn tone(hz: f32, amplitude: f32) -> Vec<f32> {
-        (0..RATE as usize)
-            .flat_map(|frame| {
-                let value = amplitude * (2.0 * PI * hz * frame as f32 / RATE as f32).sin();
-                [value, value]
-            })
-            .collect()
-    }
-
-    fn rms(samples: &[f32]) -> f32 {
-        (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt()
-    }
-
-    /// The level of a tone after the equalizer, relative to before, in dB.
-    fn change_db(equalizer: &mut Equalizer, hz: f32) -> f32 {
-        let mut samples = tone(hz, 0.1);
-        let before = rms(&samples);
-        equalizer.process(&mut samples);
-        // Past the filter's settling.
-        20.0 * (rms(&samples[RATE as usize..]) / before).log10()
-    }
-
-    fn with_band(index: usize, db: f32) -> Equalizer {
-        let mut gains = [0.0; 10];
-        gains[index] = db;
-        let mut equalizer = Equalizer::new(RATE);
-        equalizer.set(Settings {
-            enabled: true,
-            gains,
-        });
-        equalizer
-    }
-
-    #[test]
-    fn a_raised_band_raises_its_own_frequency_and_leaves_distant_ones() {
-        let mut equalizer = with_band(5, 6.0); // 1 kHz
-        assert!((change_db(&mut equalizer, 1000.0) - 6.0).abs() < 0.3);
-        assert!(change_db(&mut with_band(5, 6.0), 62.0).abs() < 0.3);
-        assert!(change_db(&mut with_band(5, 6.0), 12_000.0).abs() < 0.3);
-    }
-
-    #[test]
-    fn a_lowered_band_lowers() {
-        assert!((change_db(&mut with_band(2, -9.0), 125.0) + 9.0).abs() < 0.4);
-    }
-
-    #[test]
-    fn switched_off_it_changes_nothing() {
-        let mut equalizer = Equalizer::new(RATE);
-        equalizer.set(Settings {
-            enabled: false,
-            gains: [12.0; 10],
-        });
-        let original = tone(1000.0, 0.5);
-        let mut samples = original.clone();
-        equalizer.process(&mut samples);
-        assert_eq!(samples, original);
-    }
-
-    #[test]
-    fn the_limiter_holds_peaks_under_the_ceiling() {
-        let mut equalizer = with_band(5, 12.0);
-        let mut samples = tone(1000.0, 0.9);
-        equalizer.process(&mut samples);
-        let peak = samples.iter().fold(0.0f32, |peak, s| peak.max(s.abs()));
-        assert!(peak <= CEILING + 1e-4, "peak {peak}");
+    /// The frames with everything at rest, a band at a time: each filter
+    /// runs over the block with its numbers held in registers.
+    fn shape(&mut self, frames: &mut [[f32; 2]]) {
+        if frames.is_empty() {
+            return;
+        }
+        for band in self.bands.iter_mut().filter(|band| band.active) {
+            for frame in frames.iter_mut() {
+                frame[0] = band.filter(0, f64::from(frame[0])) as f32;
+                frame[1] = band.filter(1, f64::from(frame[1])) as f32;
+            }
+        }
+        if self.gain != 1.0 {
+            let gain = self.gain as f32;
+            for frame in frames.iter_mut() {
+                frame[0] *= gain;
+                frame[1] *= gain;
+            }
+        }
     }
 }

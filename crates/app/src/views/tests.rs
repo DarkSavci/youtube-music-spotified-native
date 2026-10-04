@@ -4,6 +4,7 @@
 mod browse;
 mod controls;
 mod desktop;
+mod equalizer;
 mod library;
 mod menus;
 mod migration;
@@ -13,6 +14,7 @@ mod selection;
 mod shell;
 mod together;
 mod together_room;
+mod video;
 
 use std::time::Instant;
 

@@ -3,7 +3,7 @@
 use spotified_client::models::Track;
 use spotified_client::session::Command;
 
-use super::{Effect, listening, paging, songs, together};
+use super::{Effect, listening, paging, songs, together, video};
 use crate::backend::{Request, Response};
 use crate::state::{Loadable, Page, State, Surface};
 
@@ -303,6 +303,9 @@ pub(super) fn store(state: &mut State, response: Response) -> Vec<Effect> {
         Response::RoomSearch { .. } | Response::Radio(..) => {
             return together::answered(state, response);
         }
+        Response::Versions { track_id, result } => {
+            return video::answered(state, track_id, result);
+        }
         other => return store_rest(state, other),
     };
     effects.extend(play_pending(state));
@@ -572,6 +575,7 @@ fn store_data(state: &mut State, response: Response) {
         | Response::RemovedFromPlaylist { .. }
         | Response::RoomSearch { .. }
         | Response::Radio(..)
+        | Response::Versions { .. }
         | Response::FollowingSet { .. } => {}
         Response::Search { serial, result } => {
             // An answer to a query that has since been replaced, or cleared.

@@ -1,23 +1,44 @@
 //! A window onto what is being played, for drawing it.
 //!
-//! The engine copies the audio it hands to the device into a small ring
-//! here; the app reads the latest stretch and turns it into a spectrum.
-//! Nothing is copied unless someone has asked to look.
+//! The engine copies the audio it hands to the device into a ring here; the
+//! app reads the stretch being heard and turns it into a spectrum. Nothing
+//! is copied unless someone has asked to look.
+//!
+//! What is handed to the device is not heard yet: a quarter of a second is
+//! queued ahead of it, and the device has a delay of its own. So each copy
+//! comes with when it will be heard, and the reader looks back from the
+//! newest sample to the one at the ear now. Drawing the newest instead made
+//! the picture run a quarter of a second ahead of the music.
 
 use std::f32::consts::PI;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 /// Samples a spectrum is made from. A power of two, for the transform, and
 /// long enough to tell bass notes apart: about 23 Hz a step at 48 kHz.
 pub const WINDOW: usize = 2048;
+/// Samples kept: what is queued ahead of the device, its own delay, and a
+/// window besides. Two thirds of a second at 48 kHz.
+const RING: usize = 32_768;
+/// How long a spectrum takes to reach the eye once read: on average half
+/// the wait for the next drawing, and a frame for the screen to show it.
+const TO_THE_EYE: Duration = Duration::from_millis(30);
+
+struct Ring {
+    /// The latest mono samples.
+    samples: Vec<f32>,
+    /// Where the next one goes.
+    at: usize,
+    /// When the newest sample reaches the ear.
+    heard: Option<Instant>,
+}
 
 pub struct Tap {
     watching: AtomicBool,
     /// The rate the samples are at: the device's.
     sample_rate: AtomicU32,
-    /// The latest mono samples, and where the next one goes.
-    ring: Mutex<([f32; WINDOW], usize)>,
+    ring: Mutex<Ring>,
 }
 
 impl Default for Tap {
@@ -25,7 +46,11 @@ impl Default for Tap {
         Self {
             watching: AtomicBool::new(false),
             sample_rate: AtomicU32::new(48_000),
-            ring: Mutex::new(([0.0; WINDOW], 0)),
+            ring: Mutex::new(Ring {
+                samples: vec![0.0; RING],
+                at: 0,
+                heard: None,
+            }),
         }
     }
 }
@@ -36,23 +61,32 @@ impl Tap {
         self.watching.store(watching, Ordering::Relaxed);
     }
 
+    /// The rate of the device being played through; until there is one,
+    /// the usual 48 kHz.
+    pub fn sample_rate(&self) -> u32 {
+        self.sample_rate.load(Ordering::Relaxed)
+    }
+
     pub fn set_sample_rate(&self, rate: u32) {
         self.sample_rate.store(rate, Ordering::Relaxed);
     }
 
-    /// Called by the engine with interleaved stereo on its way out.
-    pub fn write(&self, stereo: &[f32]) {
+    /// Called by the engine with interleaved stereo on its way out, and
+    /// how long it is until the last of it is heard: what is queued before
+    /// it, its own length, and the device's delay.
+    pub fn write(&self, stereo: &[f32], ahead: Duration) {
         if !self.watching.load(Ordering::Relaxed) {
             return;
         }
         let Ok(mut ring) = self.ring.lock() else {
             return;
         };
-        let (samples, at) = &mut *ring;
+        let ring = &mut *ring;
         for frame in stereo.as_chunks::<2>().0 {
-            samples[*at] = (frame[0] + frame[1]) * 0.5;
-            *at = (*at + 1) % WINDOW;
+            ring.samples[ring.at] = (frame[0] + frame[1]) * 0.5;
+            ring.at = (ring.at + 1) % RING;
         }
+        ring.heard = Some(Instant::now() + ahead);
     }
 
     /// How loud each of `bars` bands is right now, low to high, from 0 to 1. The bands are spaced as pitch is heard: evenly in octaves.
@@ -62,17 +96,29 @@ impl Tap {
             let Ok(ring) = self.ring.lock() else {
                 return vec![0.0; bars];
             };
-            let (samples, at) = &*ring;
+            let skip = unheard(ring.heard, self.sample_rate());
+            let start = ring.at + RING - WINDOW - skip;
             let window = &tables().window;
             for (index, slot) in real.iter_mut().enumerate() {
                 // Oldest first, shaped so the ends of the stretch do not
                 // show up as a splash across every band.
-                *slot = samples[(at + index) % WINDOW] * window[index];
+                *slot = ring.samples[(start + index) % RING] * window[index];
             }
         }
         let magnitudes = magnitudes(&mut real);
         bands(&magnitudes, bars, self.sample_rate.load(Ordering::Relaxed))
     }
+}
+
+/// How many of the newest samples to leave out, so that the window's
+/// middle, where it weighs the most, is what will be at the ear when the
+/// drawing is seen.
+fn unheard(heard: Option<Instant>, sample_rate: u32) -> usize {
+    let ahead = heard
+        .map(|heard| heard.saturating_duration_since(Instant::now() + TO_THE_EYE))
+        .unwrap_or_default();
+    let frames = (ahead.as_secs_f32() * sample_rate as f32) as usize;
+    frames.saturating_sub(WINDOW / 2).min(RING - WINDOW)
 }
 
 /// What the transform needs on every run and that never changes, worked
@@ -177,7 +223,7 @@ mod tests {
     #[test]
     fn nothing_is_copied_until_someone_looks() {
         let tap = Tap::default();
-        tap.write(&tone(1000.0));
+        tap.write(&tone(1000.0), Duration::ZERO);
         assert!(tap.spectrum(32).iter().all(|level| *level == 0.0));
     }
 
@@ -185,14 +231,9 @@ mod tests {
     fn a_tone_lights_the_band_it_falls_in() {
         let tap = Tap::default();
         tap.set_watching(true);
-        tap.write(&tone(1000.0));
+        tap.write(&tone(1000.0), Duration::ZERO);
         let spectrum = tap.spectrum(32);
-        let loudest = spectrum
-            .iter()
-            .enumerate()
-            .max_by(|a, b| a.1.total_cmp(b.1))
-            .map(|(bar, _)| bar)
-            .expect("bars");
+        let loudest = loudest(&spectrum);
         // 1 kHz sits a little past half way from 50 Hz to 16 kHz in octaves.
         assert!((15..=18).contains(&loudest), "bar {loudest}");
         assert!(spectrum[loudest] > 0.6);
@@ -203,7 +244,34 @@ mod tests {
     fn silence_is_flat() {
         let tap = Tap::default();
         tap.set_watching(true);
-        tap.write(&vec![0.0; WINDOW * 2]);
+        tap.write(&vec![0.0; WINDOW * 2], Duration::ZERO);
         assert!(tap.spectrum(16).iter().all(|level| *level == 0.0));
+    }
+
+    fn loudest(spectrum: &[f32]) -> usize {
+        spectrum
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1.total_cmp(b.1))
+            .map(|(bar, _)| bar)
+            .expect("bars")
+    }
+
+    #[test]
+    fn what_is_drawn_is_what_is_heard_not_what_is_queued() {
+        let tap = Tap::default();
+        tap.set_watching(true);
+        let low: Vec<f32> = tone(1000.0).repeat(RING / WINDOW);
+        tap.write(&low, Duration::ZERO);
+        // A fifth of a second of a higher tone, the last of it a quarter
+        // of a second from the ear: the low one is still what is heard.
+        let high = &tone(5000.0).repeat(4)[..9600 * 2];
+        tap.write(high, Duration::from_millis(250));
+        let low_bar = loudest(&tap.spectrum(32));
+        assert!((15..=18).contains(&low_bar), "bar {low_bar}");
+        // With nothing queued ahead of it, the high one is.
+        tap.write(high, Duration::ZERO);
+        let high_bar = loudest(&tap.spectrum(32));
+        assert!(high_bar > 22, "bar {high_bar}");
     }
 }

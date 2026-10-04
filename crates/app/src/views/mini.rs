@@ -148,7 +148,7 @@ fn bar(mini: &Mini<'_>, ui: &mut Ui, actions: &mut Vec<Action>, area: Rect, art:
         pos2(area.left() + PADDING, y - side / 2.0),
         vec2(side, side),
     );
-    cover(mini, ui, thumb, 4);
+    cover(mini, ui, actions, thumb, 4);
     let right = pos2(area.right() - 8.0, y);
     let mut buttons = window_buttons(mini, ui, actions, right, area.width() > 400.0);
     // The buttons step in as the width allows, the least needed last.
@@ -174,7 +174,7 @@ fn bar(mini: &Mini<'_>, ui: &mut Ui, actions: &mut Vec<Action>, area: Rect, art:
 /// in the window, on a shade that lets them be read on any cover.
 fn square(mini: &Mini<'_>, ui: &mut Ui, actions: &mut Vec<Action>, area: Rect) {
     drag(ui, area);
-    cover(mini, ui, area, 0);
+    cover(mini, ui, actions, area, 0);
     let inside = ui.rect_contains_pointer(area);
     let lift = widgets::hover_of(ui, ui.id().with("mini-overlay"), inside);
     if lift <= 0.0 {
@@ -232,7 +232,7 @@ fn wide(mini: &Mini<'_>, ui: &mut Ui, actions: &mut Vec<Action>, area: Rect, art
     let side = area.with_min_x(picture.right());
     let head = side.with_max_y(side.top() + HEAD + 8.0);
     drag(ui, head);
-    cover(mini, ui, picture, 0);
+    cover(mini, ui, actions, picture, 0);
     let buttons_at = pos2(side.right() - 6.0, side.top() + HEAD / 2.0 + 2.0);
     let mut buttons = window_buttons(mini, ui, actions, buttons_at, true);
     let speed_at = pos2(buttons_at.x - buttons, buttons_at.y);
@@ -295,7 +295,7 @@ fn tall(mini: &Mini<'_>, ui: &mut Ui, actions: &mut Vec<Action>, area: Rect, art
             let room = middle.shrink2(vec2(24.0, 8.0));
             let side = room.width().min(room.height());
             let picture = Rect::from_center_size(room.center(), vec2(side, side));
-            cover(mini, ui, picture, theme::RADIUS);
+            cover(mini, ui, actions, picture, theme::RADIUS);
         }
         MiniPanel::Queue | MiniPanel::Lyrics => {
             let inside = middle.shrink2(vec2(8.0, 0.0));
@@ -325,7 +325,7 @@ fn tall(mini: &Mini<'_>, ui: &mut Ui, actions: &mut Vec<Action>, area: Rect, art
     if panel != MiniPanel::Art {
         let at = pos2(title.left(), title.center().y - THUMB / 2.0);
         let thumb = Rect::from_min_size(at, vec2(THUMB, THUMB));
-        cover(mini, ui, thumb, 4);
+        cover(mini, ui, actions, thumb, 4);
         text_left = thumb.right() + PADDING;
     }
     like(

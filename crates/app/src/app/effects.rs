@@ -117,6 +117,11 @@ impl App {
                     apply_audio_settings(session, &self.state);
                 }
             }
+            Effect::ApplyEqualizer => {
+                if let Some(session) = &self.session {
+                    session.set_equalizer(crate::equalizer::for_engine(&self.state.settings));
+                }
+            }
             Effect::SignIn => self.sign_in(ctx),
             Effect::SwitchAccount(id) => {
                 self.change_account(ctx, super::accounts::Change::Switch(id));
@@ -265,7 +270,7 @@ pub(super) fn apply_audio_settings(session: &Session, state: &State) {
     let settings = &state.settings;
     session.set_normalise_volume(settings.normalise_volume);
     session.set_loudness_target(settings.volume_level.lufs());
-    session.set_equalizer(settings.equalizer_on, settings.equalizer);
+    session.set_equalizer(crate::equalizer::for_engine(settings));
     session.set_speed(state.speed());
     session.tap().set_watching(settings.visualizer);
     session.set_settings(spotified_client::session::Settings {

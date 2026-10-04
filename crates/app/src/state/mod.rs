@@ -13,6 +13,7 @@ pub mod playback;
 pub mod searches;
 pub mod selection;
 pub mod stats;
+pub mod video;
 
 pub use artist_songs::{ArtistSongs, SongOrder};
 pub use likes::Likes;
@@ -314,6 +315,8 @@ pub struct State {
     /// The question in front of everything, when there is one.
     pub dialog: Option<Dialog>,
     pub lyrics: TrackLyrics,
+    /// The music video of what plays: whether it shows, and its picture.
+    pub video: video::Video,
     /// The lyrics have the whole window, and the window the whole screen.
     pub lyrics_fullscreen: bool,
     /// What is playing has the whole window, and the window the screen.
@@ -336,6 +339,8 @@ pub struct State {
     pub toasts: Vec<Toast>,
     /// What is being played, to draw; `None` until there is an engine.
     pub audio_tap: Option<Arc<Tap>>,
+    /// A name being typed for a curve of the equalizer's.
+    pub equalizer_naming: Option<crate::equalizer::Naming>,
     /// `None` until the core has said what the session holds.
     pub playback: Option<Playback>,
     /// The volume to go back to when unmuting.
@@ -405,6 +410,7 @@ impl State {
             dialog: None,
             pending_play: None,
             lyrics: TrackLyrics::default(),
+            video: video::Video::default(),
             lyrics_fullscreen: false,
             fullscreen_player: false,
             notice: None,
@@ -417,6 +423,7 @@ impl State {
             selection: Selection::default(),
             toasts: Vec::new(),
             audio_tap: None,
+            equalizer_naming: None,
             playback: None,
             volume_before_mute: DEFAULT_VOLUME,
             migration: Migration::default(),
@@ -457,6 +464,12 @@ impl State {
         self.albums = PageCache::new(ALBUMS_KEPT);
         self.artists = PageCache::new(ARTISTS_KEPT);
         self.playlists = PageCache::new(PLAYLISTS_KEPT);
+    }
+
+    /// Whether a song among others is shown: a music video only when the
+    /// settings ask for them. An album or a playlist shows all it holds.
+    pub fn shows(&self, track: &Track) -> bool {
+        self.settings.show_music_videos || !track.is_video
     }
 
     pub fn toast(&mut self, text: impl Into<String>) {

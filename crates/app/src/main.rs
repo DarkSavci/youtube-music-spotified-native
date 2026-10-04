@@ -14,6 +14,7 @@ mod backend;
 mod changelog;
 mod channel;
 mod cli;
+mod equalizer;
 mod fonts;
 mod icon;
 mod images;
@@ -37,6 +38,7 @@ mod themes;
 mod tint;
 mod together;
 mod update;
+mod video;
 mod views;
 
 use std::process::ExitCode;

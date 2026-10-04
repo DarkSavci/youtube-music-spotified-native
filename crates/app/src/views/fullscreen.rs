@@ -13,7 +13,7 @@ use eframe::egui::{self, Align2, Color32, Frame, Pos2, Rect, Sense, Ui, pos2, ve
 use spotified_client::session::Repeat;
 
 use super::widgets::{self, ArtShape};
-use super::{format, player_bar, speed, volume};
+use super::{format, player_bar, speed, video, volume};
 use crate::actions::Action;
 use crate::state::{Page, Playback, State};
 use crate::theme::{self, Icon, Palette};
@@ -52,8 +52,12 @@ pub fn show(state: &State, ui: &mut Ui, actions: &mut Vec<Action>, playback: &Pl
         .frame(Frame::new().fill(Color32::BLACK))
         .show(ui, |ui| {
             let area = ui.max_rect();
-            let shape = ArtShape::Rounded(0);
-            widgets::artwork(ui, state, &track.artwork, area, shape, Icon::Music);
+            if state.video.enabled {
+                video::surface(state, ui, actions, area, false);
+            } else {
+                let shape = ArtShape::Rounded(0);
+                widgets::artwork(ui, state, &track.artwork, area, shape, Icon::Music);
+            }
 
             let foot = area.with_min_y(area.bottom() - (BOTTOM + PLAY_DISC + 16.0 * 4.0 + THUMB));
             let head = Rect::from_min_max(area.min, pos2(area.right(), area.top() + TOP + 40.0));
@@ -65,7 +69,7 @@ pub fn show(state: &State, ui: &mut Ui, actions: &mut Vec<Action>, playback: &Pl
                 ui.scope(|ui| {
                     ui.set_opacity(shown);
                     scrim(ui, area);
-                    context(ui, actions, playback, &palette, area);
+                    context(ui, actions, playback, &palette, video::notice(state), area);
                     self::foot(state, &palette, ui, actions, playback, area);
                 });
             }
@@ -134,6 +138,7 @@ fn context(
     actions: &mut Vec<Action>,
     playback: &Playback,
     palette: &Palette,
+    why: Option<&str>,
     area: Rect,
 ) {
     let origin = playback.session.queue.origin.trim();
@@ -152,6 +157,11 @@ fn context(
     let name = widgets::elided(ui, name, font, Color32::WHITE, room.0, 1);
     ui.painter()
         .galley(pos2(left, area.top() + TOP + 16.0), name, Color32::WHITE);
+    if let Some(why) = why {
+        let why = widgets::elided(ui, why, theme::regular(13.0), quiet, room.0, 2);
+        ui.painter()
+            .galley(pos2(left, area.top() + TOP + 40.0), why, quiet);
+    }
 
     let close = widgets::IconButton {
         icon: Icon::X,
@@ -262,7 +272,9 @@ fn foot(
         icon: 18.0,
     };
     control.show(state, palette, ui, actions, Some(playback));
-    speed::button(state, palette, ui, actions, mute_at - vec2(44.0, 0.0));
+    // Leftwards from the volume: the video button, then the speed.
+    video::switch(state, palette, ui, actions, mute_at - vec2(36.0, 0.0));
+    speed::button(state, palette, ui, actions, mute_at - vec2(80.0, 0.0));
 }
 
 /// Who the song is by and the album it is on, each leading to its page.

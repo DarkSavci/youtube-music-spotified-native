@@ -129,8 +129,7 @@ impl Session {
         })
     }
 
-    pub fn set_equalizer(&self, enabled: bool, gains: [f32; 10]) {
-        let settings = spotified_audio::eq::Settings { enabled, gains };
+    pub fn set_equalizer(&self, settings: spotified_audio::eq::Settings) {
         self.shared.engine.set_equalizer(settings);
     }
 

@@ -162,6 +162,8 @@ pub enum Request {
     },
     /// The songs this one's radio would play, for a room to carry on with.
     Radio(String),
+    /// The song and the music video YouTube pairs with this track.
+    Versions(String),
     /// `serial` counts searches, so an answer to an older query can be told
     /// from the answer to the one on screen.
     Search {
@@ -288,6 +290,11 @@ pub enum Response {
     },
     /// For the song it was asked of.
     Radio(String, Result<Vec<Track>, ApiError>),
+    /// The song and its video, for the track they were asked of.
+    Versions {
+        track_id: String,
+        result: Result<Vec<Track>, ApiError>,
+    },
 }
 
 pub struct Backend {

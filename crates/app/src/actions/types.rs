@@ -18,6 +18,25 @@ use crate::themes;
 use crate::together;
 use crate::update;
 
+/// What is asked about the music video of what plays.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VideoAsk {
+    /// Show the video, switching to that edit of the song if need be, or
+    /// go back to the song.
+    Set(bool),
+    /// The pointer has reached a video button: find out whether the song
+    /// has a video, if that is not known.
+    Check,
+    /// Fetch the picture again after it failed.
+    Retry,
+    /// The picture is on its way, or has arrived.
+    Loading(bool),
+    /// The picture could not be had.
+    Failed,
+    /// The player refused a command, which may have been the switch.
+    Refused,
+}
+
 #[derive(Debug)]
 pub enum Action {
     Open(Page),
@@ -260,6 +279,10 @@ pub enum Action {
     /// Hold the kept songs to this many megabytes.
     SetCacheSize(u32),
     SetReduceMotion(bool),
+    /// Show music videos among the songs of shelves and lists, or leave
+    /// them out.
+    SetShowMusicVideos(bool),
+    Video(VideoAsk),
     /// Show the time left at the end of the seek bar, or the length again.
     ToggleRemainingTime,
     /// Play this many times as fast as normal.
@@ -286,11 +309,8 @@ pub enum Action {
     SetCloseToTray(bool),
     SetSystemTitleBar(bool),
     SetStartAtLogin(bool),
-    SetEqualizerOn(bool),
-    /// Set one band, in decibels.
-    SetEqualizerBand(usize, f32),
-    /// Set every band at once, as a preset does.
-    SetEqualizer([f32; 10]),
+    /// Something asked of the equalizer's panel.
+    Equalizer(crate::equalizer::Ask),
     ToggleMute,
     ToggleShuffle,
     CycleRepeat,
@@ -423,6 +443,9 @@ pub enum Effect {
     SetDecorations(bool),
     /// Tell the engine what the audio settings now are.
     ApplyAudioSettings,
+    /// Tell the engine the equalizer alone: a dragged slider changes it
+    /// many times a second, and nothing else has changed.
+    ApplyEqualizer,
     /// Name this channel in the credentials, then restart the core.
     SwitchChannel(String),
     OpenLogs,

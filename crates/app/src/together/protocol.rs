@@ -107,6 +107,18 @@ pub struct Room {
     /// The last edit of the queue, while it can still be taken back.
     pub undo: Option<Undo>,
     pub last_controlled_by: Option<Person>,
+    /// The last time someone who steers showed or hid the video.
+    pub video: Option<RoomVideo>,
+}
+
+/// A change to whether the room's video is shown: by whom, and which
+/// change of the room it was.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub struct RoomVideo {
+    pub shown: bool,
+    pub by: String,
+    pub revision: u64,
 }
 
 impl Room {

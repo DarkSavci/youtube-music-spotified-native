@@ -6,12 +6,15 @@ use spotified_client::models::Track;
 use spotified_client::session::Repeat;
 
 use super::super::widgets::{self, ArtShape};
-use super::super::{chrome, format, player_bar, speed, volume};
+use super::super::{chrome, format, player_bar, speed, video, volume};
 use crate::actions::Action;
 use crate::state::{MiniPanel, Page, Playback, State};
 use crate::theme::{self, Icon};
 
 const WINDOW_BUTTON: f32 = 28.0;
+/// A cover wider than this gives its place to the video; smaller, it is a
+/// thumbnail and stays the cover.
+const VIDEO_LEAST: f32 = 120.0;
 const VOLUME_WIDTH: f32 = 88.0;
 
 /// What every piece of the player needs.
@@ -57,9 +60,20 @@ pub(super) fn wash(ui: &Ui, area: Rect, art: Option<Color32>, sideways: bool) {
     }
 }
 
-pub(super) fn cover(mini: &Mini<'_>, ui: &mut Ui, rect: Rect, radius: u8) {
+pub(super) fn cover(
+    mini: &Mini<'_>,
+    ui: &mut Ui,
+    actions: &mut Vec<Action>,
+    rect: Rect,
+    radius: u8,
+) {
     let palette = &mini.state.palette;
     match mini.track {
+        // The video takes the cover's place wherever the cover is large; a
+        // thumbnail stays the cover.
+        Some(_) if mini.state.video.enabled && rect.width() > VIDEO_LEAST => {
+            video::surface(mini.state, ui, actions, rect, false);
+        }
         Some(track) => {
             let shape = ArtShape::Rounded(radius);
             widgets::artwork(ui, mini.state, &track.artwork, rect, shape, Icon::Music);
@@ -286,6 +300,7 @@ pub(super) fn extras(
         (Icon::ListMusic, "Queue", MiniPanel::Queue),
         (Icon::MicVocal, "Lyrics", MiniPanel::Lyrics),
     ];
+    video::switch(mini.state, palette, ui, actions, pos2(row.left() + 14.0, y));
     for (index, (icon, tooltip, panel)) in toggles.into_iter().enumerate() {
         let button = widgets::IconButton {
             icon,
@@ -293,7 +308,7 @@ pub(super) fn extras(
             tooltip,
             active: showing == panel,
         };
-        let at = pos2(row.left() + 14.0 + index as f32 * 34.0, y);
+        let at = pos2(row.left() + 48.0 + index as f32 * 34.0, y);
         if button.show_at(ui, palette, at).clicked() {
             // Pressing the one that is showing goes back to the cover.
             let next = if showing == panel {

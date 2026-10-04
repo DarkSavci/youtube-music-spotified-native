@@ -72,6 +72,10 @@ pub(in crate::actions) fn asked(state: &mut State, ask: Ask) -> Vec<Effect> {
             state.settings.together_notifications = on;
             vec![Effect::SaveSettings]
         }
+        Ask::FollowVideo(on) => {
+            state.settings.together_follow_video = on;
+            vec![Effect::SaveSettings]
+        }
         Ask::DismissError => {
             state.together.error = None;
             Vec::new()

@@ -2,6 +2,26 @@
 
 Every release of Youtube Music Spotified Native, newest first.
 
+## 0.4.4 — 2026-10-04
+
+### New
+
+- A new equalizer, opened from the player bar, the queue or Settings: the real response drawn as a curve with the sliders on it, a preamp, "Prevent clipping", sixteen presets and your own saved ones. A band set to +6 now measures +6, and moving a slider no longer clicks
+
+### Fixed
+
+- The visualizer ran about a quarter of a second ahead of the music: it drew sound as it was queued, not as it was heard
+
+## 0.4.3 — 2026-10-04
+
+### New
+
+- Music videos: a song that has one can be switched to its video, shown above the page, in the full-screen player and in the mini player, kept in step with the sound at any speed. "Show music videos" in Settings decides whether videos appear among songs, and a Listen Together room can follow each other's choice
+
+### Fixed
+
+- The cover in the mini player turned into the placeholder while the window was being resized
+
 ## 0.4.2 — 2026-10-04
 
 ### New

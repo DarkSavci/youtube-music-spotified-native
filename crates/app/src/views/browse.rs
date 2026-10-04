@@ -2,7 +2,7 @@
 //! one mood's page, the whole of a shelf. And what the account played lately.
 
 use eframe::egui::{self, Color32, Sense, Ui, vec2};
-use spotified_client::models::{BrowsePage, MoodChip, Shelf, Track};
+use spotified_client::models::{BrowsePage, Item, MoodChip, Shelf, Track};
 
 use super::{cards, pages, tracks, widgets};
 use crate::actions::Action;
@@ -58,8 +58,9 @@ pub fn surface(state: &State, ui: &mut Ui, actions: &mut Vec<Action>, surface: &
             if !same_title(&only.title, title) {
                 cards::section_title(ui, &only.title);
             }
-            cards::grid(ui, only.items.len(), |ui, index| {
-                cards::item(state, ui, actions, &only.items[index]);
+            let shown = Shown::of(state, &only.items);
+            cards::grid(ui, shown.len(), |ui, index| {
+                cards::item(state, ui, actions, shown.at(index));
             });
         } else {
             // What there is to hear, with its covers, before the tiles.
@@ -96,8 +97,11 @@ pub fn shelves(
     shelves: &[Shelf],
     group: &str,
 ) {
-    let shown = shelves.iter().filter(|shelf| !shelf.items.is_empty());
-    for (index, shelf) in shown.enumerate() {
+    let shown = shelves
+        .iter()
+        .map(|shelf| (shelf, Shown::of(state, &shelf.items)))
+        .filter(|(_, items)| items.len() > 0);
+    for (index, (shelf, items)) in shown.enumerate() {
         let whole = (!shelf.show_all_id.is_empty()).then(|| {
             Page::Browse(Surface {
                 id: shelf.show_all_id.clone(),
@@ -112,10 +116,38 @@ pub fn shelves(
             } else {
                 cards::linked_title(state, ui, actions, (&shelf.title, "Show all"), whole);
             }
-            cards::row(ui, shelf.items.len(), |ui, index| {
-                cards::item(state, ui, actions, &shelf.items[index]);
+            cards::row(ui, items.len(), |ui, index| {
+                cards::item(state, ui, actions, items.at(index));
             });
         });
+    }
+}
+
+/// The items of a shelf that are shown: all of them, unless music videos
+/// are left out and it holds some.
+struct Shown<'a> {
+    items: &'a [Item],
+    /// Which are kept; `None` when all are, which is nearly always and
+    /// costs nothing.
+    kept: Option<Vec<usize>>,
+}
+
+impl<'a> Shown<'a> {
+    fn of(state: &State, items: &'a [Item]) -> Self {
+        let hidden = |item: &Item| matches!(item, Item::Track(track) if !state.shows(track));
+        let kept = items.iter().any(hidden).then(|| {
+            let kept = items.iter().enumerate().filter(|(_, item)| !hidden(item));
+            kept.map(|(index, _)| index).collect()
+        });
+        Self { items, kept }
+    }
+
+    fn len(&self) -> usize {
+        self.kept.as_ref().map_or(self.items.len(), Vec::len)
+    }
+
+    fn at(&self, index: usize) -> &'a Item {
+        &self.items[self.kept.as_ref().map_or(index, |kept| kept[index])]
     }
 }
 

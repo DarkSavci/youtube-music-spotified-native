@@ -3,6 +3,7 @@
 mod account;
 mod accounts;
 mod desktop;
+mod equalizer;
 mod library;
 mod listening;
 mod migration;
@@ -16,6 +17,7 @@ mod room_servers;
 mod search;
 mod shell;
 mod together;
+mod video;
 
 use spotified_client::ApiError;
 use spotified_client::models::{
@@ -127,16 +129,6 @@ pub(super) fn leaving_a_page_lets_go_of_its_selection() {
     assert!(state.selection.contains(7, 2));
     apply(&mut state, Action::Open(Page::Search));
     assert!(state.selection.is_empty());
-}
-
-#[test]
-pub(super) fn moving_an_equalizer_band_switches_it_on_and_holds_the_range() {
-    let mut state = ready();
-    let effects = apply(&mut state, Action::SetEqualizerBand(0, 40.0));
-    assert!(state.settings.equalizer_on);
-    assert_eq!(state.settings.equalizer[0], 12.0);
-    assert_eq!(effects, [Effect::SaveSettings, Effect::ApplyAudioSettings]);
-    assert!(apply(&mut state, Action::SetEqualizerBand(99, 1.0)).is_empty());
 }
 
 #[test]

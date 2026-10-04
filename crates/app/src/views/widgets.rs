@@ -379,8 +379,7 @@ pub fn artwork(
         ArtShape::Rounded(radius) => CornerRadius::same(radius),
         ArtShape::Circle => CornerRadius::same(u8::MAX),
     };
-    let texture = artwork_address(ui, art, rect.width()).and_then(|url| state.images.texture(&url));
-    let Some((id, size)) = texture else {
+    let Some((id, size)) = artwork_texture(ui, state, art, rect.width()) else {
         let palette = &state.palette;
         ui.painter()
             .rect_filled(rect, radius, palette.surface_hover);
@@ -401,7 +400,38 @@ fn artwork_address(
     width: f32,
 ) -> Option<String> {
     let pixels = (width * ui.pixels_per_point()).ceil() as u32;
-    spotified_client::models::artwork_url(art, pixels)
+    spotified_client::models::artwork_url(art, art_step(pixels))
+}
+
+/// The sizes artwork is asked for at. Asking at the exact size drawn made a
+/// window being resized ask for a new picture at every pixel, and show the
+/// placeholder while each one came.
+const ART_STEPS: [u32; 9] = [64, 96, 128, 192, 256, 384, 544, 800, 1200];
+
+fn art_step(pixels: u32) -> u32 {
+    ART_STEPS
+        .into_iter()
+        .find(|step| *step >= pixels)
+        .unwrap_or(ART_STEPS[ART_STEPS.len() - 1])
+}
+
+/// The picture for artwork drawn `width` points wide. While the right size
+/// is on its way, any size already loaded stands in for it, so growing a
+/// cover past a step shows the smaller picture rather than nothing.
+fn artwork_texture(
+    ui: &Ui,
+    state: &crate::state::State,
+    art: &[spotified_client::models::Artwork],
+    width: f32,
+) -> Option<(egui::TextureId, egui::Vec2)> {
+    let wanted = artwork_address(ui, art, width)?;
+    state.images.texture(&wanted).or_else(|| {
+        ART_STEPS
+            .into_iter()
+            .rev()
+            .filter_map(|step| spotified_client::models::artwork_url(art, step))
+            .find_map(|url| state.images.ready(&url))
+    })
 }
 
 /// How far a picture on a browse tile is tipped over.
@@ -507,5 +537,13 @@ mod tests {
     fn a_square_image_is_shown_whole_in_a_square_box() {
         let uv = centre_crop(vec2(226.0, 226.0), vec2(148.0, 148.0));
         assert_eq!(uv, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)));
+    }
+
+    #[test]
+    fn artwork_is_asked_for_at_the_step_above_the_size_drawn() {
+        assert_eq!(art_step(1), 64);
+        assert_eq!(art_step(256), 256);
+        assert_eq!(art_step(257), 384);
+        assert_eq!(art_step(5000), 1200);
     }
 }

@@ -11,6 +11,7 @@ mod chrome;
 mod collection;
 mod dialogs;
 mod drag;
+mod equalizer;
 pub mod flyout;
 pub(crate) mod format;
 mod fullscreen;
@@ -34,6 +35,7 @@ mod toasts;
 mod together;
 mod topbar;
 mod tracks;
+mod video;
 mod visualizer;
 mod volume;
 pub mod widgets;
@@ -200,6 +202,14 @@ fn page(state: &State, ui: &mut Ui, actions: &mut Vec<Action>, beside_sidebar: b
         .show(ui, |ui| {
             let card = ui.max_rect();
             ui.data_mut(|data| data.insert_temp(egui::Id::new(PAGE_CARD), card));
+            // The music video sits above the page, which scrolls under it.
+            video::notice_line(state, ui);
+            if state.video.enabled {
+                let height = video::main_height(ui.ctx().content_rect().height());
+                let size = egui::vec2(ui.available_width(), height);
+                let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+                video::surface(state, ui, actions, rect, true);
+            }
             let mut area = egui::ScrollArea::vertical()
                 .id_salt(("page", state.nav.page()))
                 .auto_shrink([false, false]);
