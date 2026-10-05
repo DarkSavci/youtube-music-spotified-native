@@ -36,6 +36,10 @@ pub fn show(state: &State, ui: &mut Ui, actions: &mut Vec<Action>) {
     section(state, ui, "Appearance", |ui| {
         themes(state, ui, actions);
         ui.add_space(12.0);
+        skins(state, ui, actions);
+        ui.add_space(12.0);
+        milkdrop(state, ui, actions);
+        ui.add_space(12.0);
         let on = state.settings.visualizer;
         let label = "Player bar visualizer";
         let about = "Draws the music behind the player bar. The window is redrawn thirty \
@@ -210,7 +214,7 @@ fn themes(state: &State, ui: &mut Ui, actions: &mut Vec<Action>) {
     let palette = &state.palette;
     let about = "Follow system uses Windows' light or dark setting. Themes in the \
                  folder are small JSON files; copy one to make your own.";
-    row(state, ui, "Theme", about, |ui| {
+    row_with_room(state, ui, ("Theme", about), TWO_BUTTONS_ROOM, |ui| {
         if widgets::outline_button(ui, palette, "Reload").clicked() {
             actions.push(Action::ReloadThemes);
         }
@@ -235,6 +239,125 @@ fn themes(state: &State, ui: &mut Ui, actions: &mut Vec<Action>) {
             if widgets::chip(ui, palette, &theme.label(), active).clicked() && !active {
                 actions.push(Action::SetCustomTheme(theme.file.clone()));
             }
+        }
+    });
+}
+
+/// The Winamp skins the mini player can wear, as chips, with the ways to
+/// get more. Choosing one opens the mini player in it.
+fn skins(state: &State, ui: &mut Ui, actions: &mut Vec<Action>) {
+    use crate::skins::{self, Ask};
+    let palette = &state.palette;
+    let about = "The mini player can wear a Winamp skin: a classic one (.wsz), or a modern \
+                 one (.wal), which is drawn as it rests, since its scripts are not run. Drop \
+                 the file on the window to add it, or choose one with Add a skin.";
+    ui.label(egui::RichText::new("Mini player skin").font(theme::medium(14.0)));
+    ui.label(
+        egui::RichText::new(about)
+            .font(theme::regular(12.5))
+            .color(palette.secondary),
+    );
+    ui.add_space(8.0);
+    // On a line of their own, which wraps: four buttons beside the words
+    // would run into them in a narrow window.
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
+        if widgets::outline_button(ui, palette, "Add a skin\u{2026}").clicked() {
+            actions.push(Action::Skin(Ask::Pick));
+        }
+        if widgets::outline_button(ui, palette, "Get skins").clicked() {
+            actions.push(Action::Skin(Ask::OpenMuseum));
+        }
+        if widgets::outline_button(ui, palette, "Skins folder").clicked() {
+            actions.push(Action::Skin(Ask::OpenFolder));
+        }
+        if widgets::outline_button(ui, palette, "Reload skins").clicked() {
+            actions.push(Action::Skin(Ask::Reload));
+        }
+    });
+    ui.add_space(8.0);
+    let worn = state.settings.mini_skin.as_deref();
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
+        if widgets::chip(ui, palette, "No skin", worn.is_none()).clicked() && worn.is_some() {
+            actions.push(Action::Skin(Ask::Wear(None)));
+        }
+        let built_in = std::iter::once(skins::BUILT_IN);
+        let installed = state.skins.iter().map(|skin| skin.file.as_str());
+        for file in built_in.chain(installed) {
+            let active = worn == Some(file);
+            if widgets::chip(ui, palette, skins::label(file), active).clicked() && !active {
+                actions.push(Action::Skin(Ask::Wear(Some(file.to_owned()))));
+            }
+        }
+    });
+    if worn.is_none() {
+        return;
+    }
+    ui.add_space(10.0);
+    let about = "How large the skin is drawn. Its pixels stay sharp at every size.";
+    ui.label(egui::RichText::new("Skin size").font(theme::medium(14.0)));
+    ui.label(
+        egui::RichText::new(about)
+            .font(theme::regular(12.5))
+            .color(palette.secondary),
+    );
+    ui.add_space(8.0);
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
+        for scale in skins::SCALES {
+            let active = state.settings.skin_scale == scale;
+            let label = format!("{scale}x");
+            if widgets::chip(ui, palette, &label, active).clicked() && !active {
+                actions.push(Action::Skin(Ask::Scale(scale)));
+            }
+        }
+    });
+}
+
+/// MilkDrop: its window, and the presets it draws, of which the app comes
+/// with none.
+fn milkdrop(state: &State, ui: &mut Ui, actions: &mut Vec<Action>) {
+    use crate::milkdrop::{Ask, PACKS};
+    let palette = &state.palette;
+    let status = state.milkdrop;
+    let presets = match status.presets {
+        0 => "It has no presets yet: get some here.".to_owned(),
+        1 => "One preset is in its folder.".to_owned(),
+        count => format!("{count} presets are in its folder."),
+    };
+    let about = format!(
+        "The music drawn by MilkDrop's presets, in a window of its own. {presets} In the \
+         window, Space is the next preset, L stays on one, and F fills the screen."
+    );
+    ui.label(egui::RichText::new("MilkDrop").font(theme::medium(14.0)));
+    ui.label(
+        egui::RichText::new(about)
+            .font(theme::regular(12.5))
+            .color(palette.secondary),
+    );
+    ui.add_space(8.0);
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
+        let toggle = if status.open {
+            "Close MilkDrop"
+        } else {
+            "Open MilkDrop"
+        };
+        if widgets::outline_button(ui, palette, toggle).clicked() {
+            actions.push(Action::MilkDrop(Ask::Toggle));
+        }
+        if status.fetching {
+            widgets::spinner(ui, palette, 18.0);
+        } else {
+            for (index, pack) in PACKS.iter().enumerate() {
+                if widgets::outline_button(ui, palette, pack.label).clicked() {
+                    actions.push(Action::MilkDrop(Ask::GetPresets(index)));
+                }
+            }
+        }
+        if widgets::outline_button(ui, palette, "Presets folder").clicked() {
+            actions.push(Action::MilkDrop(Ask::OpenFolder));
         }
     });
 }
@@ -288,6 +411,8 @@ fn section(state: &State, ui: &mut Ui, title: &str, contents: impl FnOnce(&mut U
 
 /// The room a row leaves at its right for one control.
 const CONTROL_ROOM: f32 = 140.0;
+/// The least width a row's words are read at beside its controls.
+const WORDS_LEAST: f32 = 200.0;
 /// The room for two buttons side by side.
 const TWO_BUTTONS_ROOM: f32 = 310.0;
 
@@ -304,16 +429,30 @@ fn row_with_room(
     room: f32,
     control: impl FnOnce(&mut Ui),
 ) {
+    let words = |ui: &mut Ui| {
+        ui.label(egui::RichText::new(label).font(theme::medium(14.0)));
+        ui.label(
+            egui::RichText::new(about)
+                .font(theme::regular(12.5))
+                .color(state.palette.secondary),
+        );
+    };
+    // In a narrow window the words and the controls do not fit side by
+    // side, and the controls would be drawn over the words: they go under.
+    if ui.available_width() < room + WORDS_LEAST {
+        words(ui);
+        ui.add_space(8.0);
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing.y = 8.0;
+            control(ui);
+        });
+        return;
+    }
     ui.horizontal(|ui| {
         ui.vertical(|ui| {
             // Leave the control its room; the text wraps in what is left.
-            ui.set_max_width((ui.available_width() - room).max(140.0));
-            ui.label(egui::RichText::new(label).font(theme::medium(14.0)));
-            ui.label(
-                egui::RichText::new(about)
-                    .font(theme::regular(12.5))
-                    .color(state.palette.secondary),
-            );
+            ui.set_max_width(ui.available_width() - room);
+            words(ui);
         });
         ui.with_layout(Layout::right_to_left(Align::Center), control);
     });

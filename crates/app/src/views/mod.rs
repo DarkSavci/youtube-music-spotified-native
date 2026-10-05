@@ -60,8 +60,24 @@ pub(super) const RIGHT_PANEL_GUTTERS: Margin = Margin {
     bottom: GUTTER,
 };
 
+/// Installs the Winamp skins dropped on the window this frame: a `.wsz`
+/// let go over either window is put in the skins folder and worn.
+pub fn drop_skins(ctx: &egui::Context, actions: &mut Vec<Action>) {
+    let skins: Vec<std::path::PathBuf> = ctx.input(|input| {
+        let dropped = input.raw.dropped_files.iter();
+        dropped
+            .map(|file| file.path().to_path_buf())
+            .filter(|path| crate::skins::is_skin_file(path))
+            .collect()
+    });
+    if !skins.is_empty() {
+        actions.push(Action::Skin(crate::skins::Ask::Install(skins)));
+    }
+}
+
 pub fn show(state: &State, ui: &mut Ui, actions: &mut Vec<Action>) {
     keys::handle(ui.ctx(), actions);
+    drop_skins(ui.ctx(), actions);
     notice::announce(state, ui);
     // What is playing, given the whole window, with its own transport.
     // With nothing playing there is nothing to give it to, and it closes.

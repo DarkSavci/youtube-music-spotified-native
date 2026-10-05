@@ -15,3 +15,5 @@ mod silence;
 pub mod source;
 mod stretch;
 pub mod tap;
+
+pub use output::{OutputDevice, output_devices};

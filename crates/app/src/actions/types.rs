@@ -10,7 +10,7 @@ use crate::accounts::Accounts;
 use crate::backend::{Request, Response};
 use crate::blocked;
 use crate::migrate;
-use crate::settings::{LibrarySort, VolumeLevel};
+use crate::settings::{LibrarySort, OutputDevice, VolumeLevel};
 use crate::share;
 use crate::sidecar::CoreStatus;
 use crate::state::Notice;
@@ -279,6 +279,13 @@ pub enum Action {
     SetVolumeLevel(VolumeLevel),
     /// Let the volume go past 100%, or hold it to that.
     SetVolumeBoost(bool),
+    /// Play through this sound device, or with `None` through whichever
+    /// the system is set to.
+    SetOutputDevice(Option<OutputDevice>),
+    /// Ask the system what sound devices there are.
+    ListOutputDevices,
+    /// It answered.
+    OutputDevicesListed(Vec<OutputDevice>),
     SetGapless(bool),
     /// Keep playing similar songs when the queue runs out, or stop.
     SetAutoplay(bool),
@@ -315,6 +322,10 @@ pub enum Action {
     OpenThemesFolder,
     /// Read the themes folder again.
     ReloadThemes,
+    /// Something asked of MilkDrop.
+    MilkDrop(crate::milkdrop::Ask),
+    /// Something asked about the mini player's Winamp skins.
+    Skin(crate::skins::Ask),
     SetCloseToTray(bool),
     SetSystemTitleBar(bool),
     SetStartAtLogin(bool),
@@ -455,6 +466,9 @@ pub enum Effect {
     /// Tell the engine the equalizer alone: a dragged slider changes it
     /// many times a second, and nothing else has changed.
     ApplyEqualizer,
+    /// Ask the system what sound devices there are; the answer comes back
+    /// as [`Action::OutputDevicesListed`].
+    ListOutputDevices,
     /// Name this channel in the credentials, then restart the core.
     SwitchChannel(String),
     OpenLogs,
@@ -483,4 +497,22 @@ pub enum Effect {
     OpenThemesFolder,
     /// Read the themes folder again.
     ReloadThemes,
+    /// Open MilkDrop's window, or close it.
+    OpenMilkDrop,
+    CloseMilkDrop,
+    /// Fetch this one of MilkDrop's preset packs.
+    FetchPresets(usize),
+    OpenMilkDropFolder,
+    /// Put these skin files in the skins folder and wear the last.
+    InstallSkins(Vec<PathBuf>),
+    /// Ask the person for skin files, and install what they choose.
+    PickSkins,
+    OpenSkinsFolder,
+    /// Read the skins folder again.
+    ReloadSkins,
+    /// Open this address in the browser.
+    OpenUrl(&'static str),
+    /// Tell the engine the balance alone: a dragged slider changes it many
+    /// times a second.
+    ApplyBalance,
 }

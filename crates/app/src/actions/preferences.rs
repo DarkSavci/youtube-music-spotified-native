@@ -33,6 +33,15 @@ pub(super) fn preferences(state: &mut State, action: Action) -> Vec<Effect> {
             state.settings.volume_level = level;
             heard()
         }
+        Action::SetOutputDevice(device) => {
+            state.settings.output_device = device;
+            heard()
+        }
+        Action::ListOutputDevices => vec![Effect::ListOutputDevices],
+        Action::OutputDevicesListed(devices) => {
+            state.output_devices = devices;
+            Vec::new()
+        }
         Action::SetGapless(on) => {
             state.settings.gapless = on;
             heard()

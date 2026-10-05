@@ -31,6 +31,8 @@ pub enum DeckError {
 enum Message {
     Ready {
         duration_ms: Option<u64>,
+        /// The whole stream's length in bytes, when the core stated it.
+        bytes: Option<u64>,
     },
     Chunk {
         seek: u64,
@@ -70,6 +72,21 @@ pub struct Deck {
     /// Set by the thread when it gives up, so a deck waiting its turn can be
     /// checked without taking its audio.
     failed: Arc<AtomicBool>,
+    /// The stream's bitrate in kilobits a second, once it is open and
+    /// both its size and its length are known; until then, nought.
+    kbps: u32,
+}
+
+/// A stream's average bitrate in kilobits a second: its size over its
+/// length. Nought when either is unknown.
+fn kbps_of(bytes: Option<u64>, duration_ms: Option<u64>) -> u32 {
+    match (bytes, duration_ms) {
+        (Some(bytes), Some(duration_ms)) if duration_ms > 0 => {
+            let bits_a_second = bytes.saturating_mul(8000) / duration_ms;
+            ((bits_a_second + 500) / 1000).min(u64::from(u32::MAX)) as u32
+        }
+        _ => 0,
+    }
 }
 
 impl Deck {
@@ -114,7 +131,13 @@ impl Deck {
             seeks,
             seek: 0,
             failed,
+            kbps: 0,
         }
+    }
+
+    /// The stream's bitrate in kilobits a second; nought until it is known.
+    pub fn kbps(&self) -> u32 {
+        self.kbps
     }
 
     pub fn video_id(&self) -> &str {
@@ -129,7 +152,10 @@ impl Deck {
     pub fn poll(&mut self) -> Poll {
         loop {
             return match self.messages.try_recv() {
-                Ok(Message::Ready { duration_ms }) => Poll::Ready { duration_ms },
+                Ok(Message::Ready { duration_ms, bytes }) => {
+                    self.kbps = kbps_of(bytes, duration_ms);
+                    Poll::Ready { duration_ms }
+                }
                 Ok(Message::Chunk {
                     seek,
                     samples,
@@ -166,6 +192,7 @@ fn run(
     gain: &Gain,
 ) -> Result<(), DeckError> {
     let source = HttpSource::open(agent, url).map_err(DeckError::Stream)?;
+    let bytes = source.length();
     let mut decoder = Decoder::open(Box::new(source)).map_err(decode_error)?;
     if start_ms > 0 {
         decoder.seek(start_ms).map_err(decode_error)?;
@@ -176,6 +203,7 @@ fn run(
     if out
         .send(Message::Ready {
             duration_ms: decoder.duration_ms(),
+            bytes,
         })
         .is_err()
     {
@@ -295,5 +323,20 @@ mod tests {
         assert_eq!(stereo, [0.1, 0.1, 0.2, 0.2]);
         to_stereo(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], 3, &mut stereo);
         assert_eq!(stereo, [1.0, 2.0, 4.0, 5.0]);
+    }
+}
+
+#[cfg(test)]
+mod kbps_tests {
+    use super::kbps_of;
+
+    #[test]
+    fn a_streams_bitrate_is_its_size_over_its_length() {
+        // 3.3 MB over three and a half minutes is an Opus stream at 126.
+        assert_eq!(kbps_of(Some(3_300_000), Some(210_000)), 126);
+        assert_eq!(kbps_of(Some(8_000_000), Some(250_000)), 256);
+        assert_eq!(kbps_of(None, Some(210_000)), 0);
+        assert_eq!(kbps_of(Some(3_300_000), None), 0);
+        assert_eq!(kbps_of(Some(3_300_000), Some(0)), 0);
     }
 }

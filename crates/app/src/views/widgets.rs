@@ -14,7 +14,7 @@ pub mod menu;
 mod text;
 
 pub use avatar::Avatar;
-pub use inputs::{TextField, slider};
+pub use inputs::{TextField, select, slider};
 pub use text::{
     Artists, Link, artist_page_id, elided, selectable, selectable_galley, text_at, tracked,
 };

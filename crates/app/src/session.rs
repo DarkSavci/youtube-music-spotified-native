@@ -144,6 +144,17 @@ impl Session {
         let _ = self.jobs.send(Job::Settings(settings));
     }
 
+    /// The sound device to play through, by its id; `None` for whichever
+    /// the system plays through.
+    pub fn set_output_device(&self, id: Option<String>) {
+        self.shared.engine.set_output_device(id);
+    }
+
+    /// How far the sound is turned to one side, from -1 (left) to 1.
+    pub fn set_balance(&self, balance: f32) {
+        self.shared.engine.set_balance(balance);
+    }
+
     /// How fast the music plays, 1 being normal.
     pub fn set_speed(&self, speed: f32) {
         self.shared.engine.set_speed(speed);

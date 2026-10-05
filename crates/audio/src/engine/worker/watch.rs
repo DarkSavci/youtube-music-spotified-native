@@ -6,19 +6,36 @@ use std::time::Instant;
 use super::super::{Event, gain_for};
 use super::{DEVICE_CHECK, POSITION_INTERVAL, Playing, STALL_AFTER, Worker};
 use crate::deck::DeckError;
-use crate::output::Output;
 use crate::source::StreamError;
 
 impl Worker {
+    /// The device the app last asked for; `None` for the system's.
+    pub(super) fn wanted_device(&self) -> Option<String> {
+        self.dials.device.lock().ok().and_then(|id| id.clone())
+    }
+
     /// Moves to another sound device when the one in use has gone or is no
-    /// longer the one the system plays through. The decks resample to the
-    /// device's rate, so they are opened again where the music had got to.
+    /// longer the one to play through: another was chosen, the chosen one
+    /// came back, or the system's own choice moved. The decks resample to
+    /// the device's rate, so they are opened again where the music had got
+    /// to.
     pub(super) fn follow_device(&mut self) {
-        if !self.target.playing || self.device_checked.elapsed() < DEVICE_CHECK {
+        let wanted = self.wanted_device();
+        let chosen_anew = wanted != self.device;
+        self.device = wanted;
+        // A choice is acted on at once; what the system does by itself is
+        // looked for now and then, and only while there is music to move.
+        let due = self.target.playing && self.device_checked.elapsed() >= DEVICE_CHECK;
+        if !chosen_anew && !due {
             return;
         }
         self.device_checked = Instant::now();
-        if !self.output.as_ref().is_some_and(Output::stale) {
+        let wanted = self.device.as_deref();
+        if !self
+            .output
+            .as_ref()
+            .is_some_and(|output| output.stale(wanted))
+        {
             return;
         }
         log::info!("the sound device changed; moving to the new one");
@@ -39,7 +56,10 @@ impl Worker {
         self.restart_watches();
         if let Some(output) = &self.output {
             output.set_gain(gain_for(self.target.volume));
-            output.play();
+            // A device chosen while paused is opened and left quiet.
+            if self.target.playing {
+                output.play();
+            }
         }
     }
 

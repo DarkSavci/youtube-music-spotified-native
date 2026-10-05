@@ -76,9 +76,39 @@ pub struct Output {
     shared: Arc<Shared>,
     sample_rate: u32,
     capacity: usize,
-    /// Which device this is, to tell when the system's choice has moved on.
-    /// `None` where the device has no identity to compare.
+    /// Which device this is, to tell when the one to play through has moved
+    /// on. `None` where the device has no identity to compare.
     device: Option<String>,
+}
+
+/// A sound device there is to play through.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OutputDevice {
+    /// What the system knows it by: the same after a restart, and after it
+    /// has been unplugged and put back.
+    pub id: String,
+    pub name: String,
+}
+
+/// The devices there are to play through now.
+pub fn output_devices() -> Vec<OutputDevice> {
+    let devices = match cpal::default_host().output_devices() {
+        Ok(devices) => devices,
+        Err(error) => {
+            log::warn!("the sound devices could not be listed: {error}");
+            return Vec::new();
+        }
+    };
+    devices
+        .filter_map(|device| {
+            let id = device.id().ok()?.to_string();
+            let name = match device.description() {
+                Ok(description) => description.name().to_owned(),
+                Err(_) => id.clone(),
+            };
+            Some(OutputDevice { id, name })
+        })
+        .collect()
 }
 
 /// The identity of the device the system plays through now.
@@ -88,10 +118,20 @@ fn default_device() -> Option<(cpal::Device, Option<String>)> {
     Some((device, id))
 }
 
+/// The device chosen by its id, if it is there to play through now.
+fn chosen_device(id: &str) -> Option<cpal::Device> {
+    let id = id.parse::<cpal::DeviceId>().ok()?;
+    cpal::default_host().device_by_id(&id)
+}
+
 impl Output {
-    /// Opens the default output device in its own format.
-    pub fn open() -> Result<Self, String> {
-        let (device, id) = default_device().ok_or("no sound output device")?;
+    /// Opens the device `wanted` names, in its own format; the one the
+    /// system plays through when none is named, or the one named has gone.
+    pub fn open(wanted: Option<&str>) -> Result<Self, String> {
+        let chosen = wanted.and_then(|id| Some((chosen_device(id)?, Some(id.to_owned()))));
+        let (device, id) = chosen
+            .or_else(default_device)
+            .ok_or("no sound output device")?;
         let supported = device
             .default_output_config()
             .map_err(|error| format!("the sound device has no usable format: {error}"))?;
@@ -124,13 +164,25 @@ impl Output {
     }
 
     /// Whether to open the output again: this device has gone, or it is no
-    /// longer the one the system plays through (headphones went in or out).
-    pub fn stale(&self) -> bool {
+    /// longer the one to play through. That is the one `wanted` names while
+    /// it is there, and otherwise the one the system plays through
+    /// (headphones went in or out).
+    pub fn stale(&self, wanted: Option<&str>) -> bool {
         if self.shared.lost.load(Ordering::Relaxed) {
             return true;
         }
-        match (&self.device, default_device()) {
-            (Some(opened), Some((_, Some(now)))) => *opened != now,
+        let Some(opened) = self.device.as_deref() else {
+            return false;
+        };
+        if wanted == Some(opened) {
+            return false;
+        }
+        // Newly chosen, or chosen before and now plugged back in.
+        if wanted.is_some_and(|id| chosen_device(id).is_some()) {
+            return true;
+        }
+        match default_device() {
+            Some((_, Some(now))) => opened != now,
             // No device at all: nothing better to move to.
             _ => false,
         }

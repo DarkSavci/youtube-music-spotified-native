@@ -80,6 +80,16 @@ impl Paths {
         self.config.join("themes")
     }
 
+    /// Where MilkDrop's presets are kept.
+    pub fn milkdrop_folder(&self) -> PathBuf {
+        self.config.join("milkdrop")
+    }
+
+    /// Where the mini player's Winamp skins are kept.
+    pub fn skins_folder(&self) -> PathBuf {
+        self.config.join("skins")
+    }
+
     pub fn settings_file(&self) -> PathBuf {
         self.config.join("settings.json")
     }

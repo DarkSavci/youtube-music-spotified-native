@@ -1,9 +1,10 @@
 //! The Playback card of the Settings page, and the list of shortcuts.
 
-use eframe::egui::{self, Ui};
+use eframe::egui::{self, Response, Ui};
 
+use super::super::widgets::menu::{self, Entry};
 use super::super::{keys, widgets};
-use super::row;
+use super::{row, row_with_room};
 use crate::actions::{Action, MAX_CROSSFADE_SECONDS};
 use crate::settings::{CACHE_SIZES_MB, VolumeLevel};
 use crate::state::State;
@@ -11,6 +12,14 @@ use crate::theme;
 
 /// The room between one setting and the next.
 const BETWEEN: f32 = 10.0;
+
+/// How wide the list of sound devices is: their names run long.
+const OUTPUT_WIDTH: f32 = 240.0;
+/// What following the system's choice of sound device is called.
+const SYSTEM_DEFAULT: &str = "System default";
+/// How wide a list of a few short choices is, and how tall any list.
+pub(super) const LIST_WIDTH: f32 = 132.0;
+const LIST_HEIGHT: f32 = 40.0;
 
 /// A setting that is on or off.
 fn toggle(
@@ -30,6 +39,14 @@ fn toggle(
 
 pub(super) fn show(state: &State, ui: &mut Ui, actions: &mut Vec<Action>) {
     let settings = &state.settings;
+    let about = "Where the music plays. System default follows whichever device Windows \
+                 is set to; a device chosen here that is unplugged is waited for, with the \
+                 system's standing in.";
+    let words = ("Output device", about);
+    row_with_room(state, ui, words, OUTPUT_WIDTH + 24.0, |ui| {
+        output_device(state, ui, actions);
+    });
+    ui.add_space(BETWEEN);
     let about = "Fades each song into the next as it ends. Off at zero.";
     row(state, ui, "Crossfade", about, |ui| {
         // The view may not change state, so it moves a copy and asks.
@@ -126,41 +143,70 @@ pub(super) fn show(state: &State, ui: &mut Ui, actions: &mut Vec<Action>) {
     toggle(state, ui, actions, text, report, Action::SetReportToYouTube);
 }
 
+/// A drop-down `width` wide, closed, at the right of its row: the app's
+/// own, as its menu is, so that both answer the pointer as every other
+/// does. The caller hangs the menu of choices on what this returns.
+pub(super) fn list(state: &State, ui: &mut Ui, label: &str, chosen: &str, width: f32) -> Response {
+    let size = egui::vec2(width, LIST_HEIGHT);
+    let closed = |ui: &mut Ui| widgets::select(ui, &state.palette, label, chosen, true);
+    ui.allocate_ui(size, closed).inner
+}
+
+/// The system's own device or one of those there are, from a list. The
+/// list is asked for again each time it is opened: devices come and go.
+fn output_device(state: &State, ui: &mut Ui, actions: &mut Vec<Action>) {
+    let chosen = state.settings.output_device.as_ref();
+    let here = |id: &str| state.output_devices.iter().any(|device| device.id == id);
+    let shown = chosen.map_or(SYSTEM_DEFAULT, |device| device.name.as_str());
+    let select = list(state, ui, "Output device", shown, OUTPUT_WIDTH);
+    if select.clicked() {
+        actions.push(Action::ListOutputDevices);
+    }
+    menu::popup(&select, &state.palette, |menu| {
+        let following = chosen.is_none();
+        if menu.entry(Entry::plain(SYSTEM_DEFAULT).checked(following)) && !following {
+            actions.push(Action::SetOutputDevice(None));
+        }
+        for device in &state.output_devices {
+            let current = chosen.is_some_and(|chosen| chosen.id == device.id);
+            if menu.entry(Entry::plain(&device.name).checked(current)) && !current {
+                actions.push(Action::SetOutputDevice(Some(device.clone())));
+            }
+        }
+        // Still the choice, though there is nothing to play through.
+        if let Some(gone) = chosen.filter(|chosen| !here(&chosen.id)) {
+            menu.entry(Entry::plain(&gone.name).checked(true).enabled(false));
+            menu.note("Not connected. Playing through the system's.");
+        }
+    });
+}
+
 /// Quiet, normal or loud, from a list.
 fn volume_level(state: &State, ui: &mut Ui, actions: &mut Vec<Action>) {
     let chosen = state.settings.volume_level;
-    let combo = egui::ComboBox::from_id_salt("volume-level")
-        .selected_text(chosen.label())
-        .show_ui(ui, |ui| {
-            for level in VolumeLevel::EVERY {
-                let current = level == chosen;
-                if ui.selectable_label(current, level.label()).clicked() && !current {
-                    actions.push(Action::SetVolumeLevel(level));
-                }
+    let select = list(state, ui, "Volume level", chosen.label(), LIST_WIDTH);
+    menu::popup(&select, &state.palette, |menu| {
+        for level in VolumeLevel::EVERY {
+            let current = level == chosen;
+            if menu.entry(Entry::plain(level.label()).checked(current)) && !current {
+                actions.push(Action::SetVolumeLevel(level));
             }
-        });
-    name_list(&combo.response, "Volume level");
+        }
+    });
 }
 
 /// The cap on the songs kept on disk, from a list.
 pub(super) fn cache_size(state: &State, ui: &mut Ui, actions: &mut Vec<Action>) {
     let chosen = state.settings.cache_max_mb;
-    let combo = egui::ComboBox::from_id_salt("cache-size")
-        .selected_text(megabytes(chosen))
-        .show_ui(ui, |ui| {
-            for size in CACHE_SIZES_MB {
-                let current = size == chosen;
-                if ui.selectable_label(current, megabytes(size)).clicked() && !current {
-                    actions.push(Action::SetCacheSize(size));
-                }
+    let select = list(state, ui, "Song cache size", &megabytes(chosen), LIST_WIDTH);
+    menu::popup(&select, &state.palette, |menu| {
+        for size in CACHE_SIZES_MB {
+            let current = size == chosen;
+            if menu.entry(Entry::plain(&megabytes(size)).checked(current)) && !current {
+                actions.push(Action::SetCacheSize(size));
             }
-        });
-    name_list(&combo.response, "Song cache size");
-}
-
-/// Names a list for screen readers, and for the tests that find it so.
-fn name_list(response: &egui::Response, label: &str) {
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, label));
+        }
+    });
 }
 
 /// A cache size as the list names it: `512 MB`, `2 GB`.

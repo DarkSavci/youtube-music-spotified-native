@@ -3,7 +3,7 @@
 use spotified_client::models::RemoteQueue;
 
 use super::*;
-use crate::settings::VolumeLevel;
+use crate::settings::{OutputDevice, VolumeLevel};
 use crate::state::{LaunchPickup, Notice};
 use crate::together::Phase;
 
@@ -122,6 +122,38 @@ fn the_settings_the_engine_and_the_core_act_on_are_passed_on() {
     assert!(!state.settings.report_to_youtube);
     assert_eq!(apply(&mut state, Action::SetCacheSize(5120)), HEARD);
     assert_eq!(state.settings.cache_max_mb, 5120);
+}
+
+#[test]
+fn a_sound_device_is_kept_and_the_engine_told() {
+    let mut state = ready();
+    let headphones = OutputDevice {
+        id: "wasapi:headphones".into(),
+        name: "Headphones".into(),
+    };
+    // The list is the system's to give: asked for, then taken as it comes.
+    assert_eq!(
+        apply(&mut state, Action::ListOutputDevices),
+        [Effect::ListOutputDevices]
+    );
+    let listed = Action::OutputDevicesListed(vec![headphones.clone()]);
+    assert!(apply(&mut state, listed).is_empty());
+    assert_eq!(state.output_devices, std::slice::from_ref(&headphones));
+
+    let choose = Action::SetOutputDevice(Some(headphones.clone()));
+    assert_eq!(apply(&mut state, choose), HEARD);
+    assert_eq!(state.settings.output_device, Some(headphones));
+    // Back to whichever the system plays through.
+    assert_eq!(apply(&mut state, Action::SetOutputDevice(None)), HEARD);
+    assert_eq!(state.settings.output_device, None);
+}
+
+#[test]
+fn opening_settings_asks_what_sound_devices_there_are() {
+    let mut state = ready();
+    let effects = apply(&mut state, Action::Open(Page::Settings));
+    assert!(effects.contains(&Effect::ListOutputDevices));
+    assert!(effects.contains(&Effect::Fetch(Request::CacheUsage)));
 }
 
 #[test]

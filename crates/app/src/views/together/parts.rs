@@ -7,6 +7,7 @@ use eframe::egui::{
 use spotified_client::models::{Artwork, artwork_url};
 
 use super::super::widgets;
+pub use super::super::widgets::select;
 use crate::state::State;
 use crate::theme::{self, Icon, Palette};
 
@@ -248,55 +249,6 @@ pub fn check(ui: &mut Ui, palette: &Palette, on: bool, label: &str) -> bool {
         ui.painter().galley(at, galley, ink);
     }
     response.clicked()
-}
-
-/// A drop-down, closed: what is chosen, and a chevron. `framed` gives it a
-/// field's box; without, it is only its words, as in the server bar. The
-/// caller hangs the menu of choices on what this returns.
-pub fn select(ui: &mut Ui, palette: &Palette, label: &str, chosen: &str, framed: bool) -> Response {
-    let height = if framed { 40.0 } else { 32.0 };
-    let width = if framed {
-        ui.available_width()
-    } else {
-        let text =
-            ui.painter()
-                .layout_no_wrap(chosen.to_owned(), theme::regular(13.0), palette.text);
-        (text.size().x + 44.0).min(230.0)
-    };
-    let (rect, response) = ui.allocate_exact_size(vec2(width, height), Sense::click());
-    widgets::name(ui, &response, label);
-    if !ui.is_rect_visible(rect) {
-        return response;
-    }
-    let lift = widgets::hover(ui, &response);
-    if framed {
-        let outline = crate::tint::blend(palette.outline, palette.dim, lift);
-        ui.painter().rect(
-            rect,
-            theme::RADIUS,
-            palette.surface,
-            (1.0, outline),
-            egui::StrokeKind::Inside,
-        );
-    } else {
-        ui.painter()
-            .rect_filled(rect, theme::RADIUS, widgets::wash(ui, lift));
-    }
-    let ink = if ui.is_enabled() {
-        palette.text
-    } else {
-        palette.dim
-    };
-    let room = rect.width() - 12.0 - 30.0;
-    let text = widgets::elided(ui, chosen, theme::regular(13.0), ink, room, 1);
-    let at = pos2(rect.left() + 12.0, rect.center().y - text.size().y / 2.0);
-    ui.painter().galley(at, text, ink);
-    let chevron = Rect::from_center_size(
-        pos2(rect.right() - 17.0, rect.center().y),
-        Vec2::splat(16.0),
-    );
-    widgets::paint_icon(ui, Icon::ChevronDown, chevron, 16.0, ink);
-    response
 }
 
 /// A caption above a control, as the forms label their fields.

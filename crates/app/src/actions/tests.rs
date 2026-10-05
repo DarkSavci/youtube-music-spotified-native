@@ -16,6 +16,7 @@ mod room_radio;
 mod room_servers;
 mod search;
 mod shell;
+mod skins;
 mod together;
 mod video;
 

@@ -20,6 +20,7 @@ impl App {
         if let Some(line) = self.together.take() {
             line.close(GOODBYE);
         }
+        self.milkdrop.close();
         // Stop the core here, while the log is still open to say so.
         self.session = None;
         self.backend = None;

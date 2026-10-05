@@ -104,6 +104,16 @@ impl VolumeLevel {
     }
 }
 
+/// A sound device to play through.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OutputDevice {
+    /// What the system knows it by.
+    pub id: String,
+    /// What it is called, kept so that it can still be named while it is
+    /// unplugged.
+    pub name: String,
+}
+
 /// The sizes the song cache can be held to, in megabytes.
 pub const CACHE_SIZES_MB: [u32; 5] = [512, 1024, 2048, 5120, 10_240];
 
@@ -147,6 +157,27 @@ pub struct Settings {
     /// The mini player's size, and where it was, as it was left.
     pub mini_size: [f32; 2],
     pub mini_position: Option<[f32; 2]>,
+    /// The Winamp skin the mini player wears: a file of the skins folder,
+    /// or the one the app comes with. `None` for the app's own mini player.
+    pub mini_skin: Option<String>,
+    /// How many screen pixels each of a skin's own is drawn as.
+    pub skin_scale: u8,
+    /// The skinned player is rolled up to its title bar.
+    pub skin_shaded: bool,
+    /// The skin's equalizer hangs under the player, and is rolled up.
+    pub skin_equalizer: bool,
+    pub skin_equalizer_shaded: bool,
+    /// The skin's playlist hangs under those, this many skin pixels tall.
+    pub skin_playlist: bool,
+    pub skin_playlist_height: u32,
+    pub skin_playlist_shaded: bool,
+    /// The skin's display draws the music, and draws it as a wave rather
+    /// than as a spectrum.
+    pub skin_analyser: bool,
+    pub skin_scope: bool,
+    /// How far the sound is turned to one side, from -1 (left) to 1. Set
+    /// by a skin's balance slider, and put back when the skin is taken off.
+    pub balance: f32,
     /// The one relay address a profile kept before servers were saved by
     /// name. Read so that it can be brought along; never written again.
     #[serde(skip_serializing)]
@@ -189,6 +220,9 @@ pub struct Settings {
     /// scale a limiter has to hold the peaks down, which flattens loud
     /// passages.
     pub volume_boost: bool,
+    /// The sound device the music plays through, in place of whichever the
+    /// system is set to. `None` follows the system.
+    pub output_device: Option<OutputDevice>,
     /// Start the next song the moment this one ends.
     pub gapless: bool,
     /// Keep playing similar songs once the queue runs out.
@@ -251,6 +285,17 @@ impl Default for Settings {
             mini_on_top: true,
             mini_size: [360.0, 360.0],
             mini_position: None,
+            mini_skin: None,
+            skin_scale: 2,
+            skin_shaded: false,
+            skin_equalizer: false,
+            skin_equalizer_shaded: false,
+            skin_playlist: false,
+            skin_playlist_height: crate::skin::layout::PLAYLIST_MIN_HEIGHT,
+            skin_playlist_shaded: false,
+            skin_analyser: true,
+            skin_scope: false,
+            balance: 0.0,
             together_server: String::new(),
             together_servers: Vec::new(),
             together_selected: String::new(),
@@ -267,6 +312,7 @@ impl Default for Settings {
             normalise_volume: true,
             volume_level: VolumeLevel::Normal,
             volume_boost: false,
+            output_device: None,
             gapless: true,
             autoplay: true,
             resume_on_launch: true,
@@ -350,6 +396,17 @@ impl Settings {
             mini_on_top: self.mini_on_top,
             mini_size: self.mini_size,
             mini_position: self.mini_position,
+            mini_skin: self.mini_skin.take(),
+            skin_scale: self.skin_scale,
+            skin_shaded: self.skin_shaded,
+            skin_equalizer: self.skin_equalizer,
+            skin_equalizer_shaded: self.skin_equalizer_shaded,
+            skin_playlist: self.skin_playlist,
+            skin_playlist_height: self.skin_playlist_height,
+            skin_playlist_shaded: self.skin_playlist_shaded,
+            skin_analyser: self.skin_analyser,
+            skin_scope: self.skin_scope,
+            balance: self.balance,
             together_servers: std::mem::take(&mut self.together_servers),
             together_selected: std::mem::take(&mut self.together_selected),
             together_name: std::mem::take(&mut self.together_name),
@@ -400,6 +457,7 @@ pub fn load(path: &Path) -> Settings {
                 settings.crossfade_seconds = 0;
             }
             settings.playback_speed = clamp_speed(settings.playback_speed);
+            settings.balance = crate::skins::held_balance(settings.balance);
             crate::equalizer::hold(&mut settings, text);
             crate::together::servers::adopt(
                 &mut settings.together_servers,
@@ -452,6 +510,17 @@ mod tests {
             mini_on_top: false,
             mini_size: [640.0, 280.0],
             mini_position: Some([40.0, 60.0]),
+            mini_skin: Some("Base 2.91.wsz".into()),
+            skin_scale: 3,
+            skin_shaded: true,
+            skin_equalizer: true,
+            skin_equalizer_shaded: true,
+            skin_playlist: true,
+            skin_playlist_height: 174,
+            skin_playlist_shaded: true,
+            skin_analyser: false,
+            skin_scope: true,
+            balance: -0.5,
             together_server: String::new(),
             together_servers: vec![crate::together::SavedServer {
                 id: "server-1".into(),
@@ -472,6 +541,10 @@ mod tests {
             normalise_volume: false,
             volume_level: VolumeLevel::Loud,
             volume_boost: true,
+            output_device: Some(OutputDevice {
+                id: "wasapi:{0.0.0.00000000}.{a1}".into(),
+                name: "Headphones".into(),
+            }),
             gapless: false,
             autoplay: false,
             resume_on_launch: false,

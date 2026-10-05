@@ -75,7 +75,7 @@ impl Volume {
 /// What the wheel asked of the volume this frame: up for louder. Read from
 /// the wheel's own events, so a turn is a step whatever the page under the
 /// pointer would have scrolled by.
-fn wheel(ui: &Ui) -> Option<f32> {
+pub(super) fn wheel(ui: &Ui) -> Option<f32> {
     let notches: f32 = ui.input(|input| {
         input
             .events

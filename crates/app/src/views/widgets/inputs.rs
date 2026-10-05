@@ -6,6 +6,61 @@ use eframe::egui::{self, Frame, Margin, Rect, Sense, Ui, pos2, vec2};
 use super::{hand, hover_of};
 use crate::theme::{self, Icon, Palette};
 
+/// A drop-down, closed: what is chosen, and a chevron. `framed` gives it a
+/// field's box; without, it is only its words, as in Listen Together's
+/// server bar. The caller hangs the menu of choices on what this returns.
+pub fn select(
+    ui: &mut Ui,
+    palette: &Palette,
+    label: &str,
+    chosen: &str,
+    framed: bool,
+) -> egui::Response {
+    let height = if framed { 40.0 } else { 32.0 };
+    let width = if framed {
+        ui.available_width()
+    } else {
+        let text =
+            ui.painter()
+                .layout_no_wrap(chosen.to_owned(), theme::regular(13.0), palette.text);
+        (text.size().x + 44.0).min(230.0)
+    };
+    let (rect, response) = ui.allocate_exact_size(vec2(width, height), Sense::click());
+    super::name(ui, &response, label);
+    if !ui.is_rect_visible(rect) {
+        return response;
+    }
+    let lift = super::hover(ui, &response);
+    if framed {
+        let outline = crate::tint::blend(palette.outline, palette.dim, lift);
+        ui.painter().rect(
+            rect,
+            theme::RADIUS,
+            palette.surface,
+            (1.0, outline),
+            egui::StrokeKind::Inside,
+        );
+    } else {
+        ui.painter()
+            .rect_filled(rect, theme::RADIUS, super::wash(ui, lift));
+    }
+    let ink = if ui.is_enabled() {
+        palette.text
+    } else {
+        palette.dim
+    };
+    let room = rect.width() - 12.0 - 30.0;
+    let text = super::elided(ui, chosen, theme::regular(13.0), ink, room, 1);
+    let at = pos2(rect.left() + 12.0, rect.center().y - text.size().y / 2.0);
+    ui.painter().galley(at, text, ink);
+    let chevron = Rect::from_center_size(
+        pos2(rect.right() - 17.0, rect.center().y),
+        egui::Vec2::splat(16.0),
+    );
+    super::paint_icon(ui, Icon::ChevronDown, chevron, 16.0, ink);
+    response
+}
+
 /// A single line of text to type into, in the app's look: a filled, rounded
 /// box that outlines itself while it has the caret.
 pub struct TextField<'a> {

@@ -195,6 +195,8 @@ impl Engine {
             loudness_target: AtomicU32::new(loudness::TARGET_LUFS.to_bits()),
             speed: AtomicU32::new(1.0f32.to_bits()),
             equalizer: Mutex::new(eq::Settings::default()),
+            device: Mutex::new(None),
+            balance: AtomicU32::new(0.0f32.to_bits()),
         });
         let shared = dials.clone();
         let tap = Arc::new(Tap::default());
@@ -249,6 +251,28 @@ impl Engine {
         let speed = if speed.is_finite() { speed } else { 1.0 };
         let speed = speed.clamp(SPEED_RANGE.0, SPEED_RANGE.1);
         self.dials.speed.store(speed.to_bits(), Ordering::Relaxed);
+    }
+
+    /// The sound device to play through, by its id as [`output_devices`]
+    /// lists it; `None` for whichever the system plays through. One that is
+    /// not there is waited for, with the system's standing in. Heard at
+    /// once while playing, and otherwise when playing next starts.
+    ///
+    /// [`output_devices`]: crate::output_devices
+    pub fn set_output_device(&self, id: Option<String>) {
+        if let Ok(mut shared) = self.dials.device.lock() {
+            *shared = id;
+        }
+    }
+
+    /// Turns the sound towards one side: -1 is all left, 1 all right, and
+    /// 0 leaves it as it is. Heard as soon as what is queued has played.
+    pub fn set_balance(&self, balance: f32) {
+        let balance = if balance.is_finite() { balance } else { 0.0 };
+        let balance = balance.clamp(-1.0, 1.0);
+        self.dials
+            .balance
+            .store(balance.to_bits(), Ordering::Relaxed);
     }
 
     pub fn apply(&self, target: Target) {

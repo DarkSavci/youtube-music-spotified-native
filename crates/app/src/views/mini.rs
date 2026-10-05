@@ -16,11 +16,14 @@ use crate::actions::Action;
 use crate::state::{MiniPanel, Playback, State};
 use crate::theme;
 
+/// The window's title, which is also how the system is asked for it.
+pub const TITLE: &str = "Mini player";
 const MIN_SIZE: [f32; 2] = [360.0, 80.0];
 /// What the window grows to, at least, to show the queue or the lyrics.
 pub const PANEL_SIZE: [f32; 2] = [360.0, 580.0];
 
 mod parts;
+pub mod skinned;
 
 use parts::{
     Mini, cover, drag, extras, like, meta, progress, speed_button, thin_progress, transport, wash,
@@ -41,23 +44,36 @@ pub fn viewport() -> ViewportId {
 /// The window, as it is asked for on every frame. Size and place are the
 /// ones it was opened with: asking again for the same changes nothing, so
 /// the person's own moving and resizing stand.
-pub fn builder(state: &State) -> ViewportBuilder {
+pub fn builder(state: &State, pixels_per_point: f32) -> ViewportBuilder {
     let level = if state.settings.mini_on_top {
         egui::WindowLevel::AlwaysOnTop
     } else {
         egui::WindowLevel::Normal
     };
     let builder = ViewportBuilder::default()
-        .with_title("Mini player")
+        .with_title(TITLE)
         // Said outright: the window is made hidden, and only a change
         // that is spelt out is passed on to it.
         .with_visible(true)
         .with_decorations(false)
         .with_resizable(true)
+        .with_drag_and_drop(true)
         .with_maximize_button(false)
-        .with_window_level(level)
-        .with_inner_size(state.mini_opened.size)
-        .with_min_inner_size(MIN_SIZE);
+        .with_window_level(level);
+    // A skin's window is the skin's size, whatever the person's own mini
+    // player was left at, and is not to be stretched.
+    let builder = match state.worn_skin() {
+        Some(worn) => {
+            let size = skinned::window_size(worn, &state.settings, pixels_per_point);
+            builder
+                .with_resizable(false)
+                .with_inner_size(size)
+                .with_min_inner_size(size)
+        }
+        None => builder
+            .with_inner_size(state.mini_opened.size)
+            .with_min_inner_size(MIN_SIZE),
+    };
     match state.mini_opened.position {
         Some(position) => builder.with_position(position),
         None => builder,
@@ -105,9 +121,14 @@ pub fn show(state: &State, ui: &mut Ui, actions: &mut Vec<Action>) {
         playback,
         track: playback.and_then(Playback::current),
     };
+    super::drop_skins(ui.ctx(), actions);
+    let worn = state.worn_skin();
     egui::CentralPanel::default()
         .frame(Frame::new().fill(state.palette.panel))
         .show(ui, |ui| {
+            if let Some(worn) = worn {
+                return skinned::show(state, worn, ui, actions);
+            }
             let area = ui.max_rect();
             let art = mini
                 .track

@@ -21,7 +21,9 @@ use crate::settings::{self, Settings};
 use crate::sidecar::{self, CoreStatus, Sidecar};
 use crate::single_instance::InstanceGuard;
 use crate::state::{Notice, Page, Playback, State};
-use crate::{changelog, migrate, resolver, theme, themes, together, update, views};
+use crate::{
+    changelog, migrate, milkdrop, resolver, skins, theme, themes, together, update, views,
+};
 
 /// Recorded responses for `--demo`, relative to the repository root.
 const FIXTURES: &str = "core/testdata/fixtures";
@@ -69,12 +71,18 @@ pub enum Event {
     StartsAtLogin(bool),
     /// Where looking for a newer version of the app has got to.
     Update(update::Status),
+    /// The sound devices there are to play through.
+    OutputDevices(Vec<crate::settings::OutputDevice>),
     /// The line to a Listen Together relay has something to say.
     Together(together::Event),
     /// A test of a relay's address ended.
     TogetherProbed(Result<(), String>),
     /// The Electron app's profile was looked at, or brought from.
     Migration(migrate::Report),
+    /// A pack of MilkDrop presets was fetched, or could not be.
+    PresetsFetched(Result<usize, String>),
+    /// The skin files chosen in the file dialog; none if it was cancelled.
+    SkinsPicked(Vec<PathBuf>),
     /// Artwork for a URL, or `None` if it could not be had.
     Image(String, Option<ColorImage>),
 }
@@ -163,6 +171,13 @@ pub struct App {
     held_commands: Vec<Command>,
     /// The speed the engine was last told to play at.
     speed_applied: f32,
+    /// Whether the engine was last told that the sound is being drawn.
+    sound_watched: bool,
+    /// MilkDrop's window, which is a process of its own.
+    milkdrop: milkdrop::host::Host,
+    /// The shape the mini player's window was last cut to, as a hash of
+    /// it: a skin that is not a rectangle has one.
+    mini_shape: Option<u64>,
     images: ImageLoader,
     /// When the search on screen is to be sent, if typing has not resumed.
     search_due: Option<Instant>,
@@ -201,6 +216,8 @@ impl App {
         let themes_folder = launch.paths.themes_folder();
         themes::write_presets(&themes_folder);
         state.themes = themes::list(&themes_folder);
+        state.skins = skins::list(&launch.paths.skins_folder());
+        state.milkdrop.presets = milkdrop::list_presets(&launch.paths.milkdrop_folder()).len();
         // What the system is set to is not known until a frame has run;
         // until then, dark, which `wear_theme` puts right.
         let theme = &state.settings;
@@ -304,6 +321,9 @@ impl App {
             session: None,
             held_commands: opening_commands(&launch.open),
             speed_applied: 1.0,
+            sound_watched: false,
+            milkdrop: milkdrop::host::Host::default(),
+            mini_shape: None,
             media_keys,
             tray,
             taskbar,
@@ -346,6 +366,59 @@ impl App {
             theme::apply(ctx, &palette);
             crate::platform::identity::dress_menus(palette.dark);
         }
+    }
+
+    /// Reads the skin the settings name, when the mini player is open and
+    /// is not wearing it yet: after one is chosen, and the first time the
+    /// mini player opens. A skin that cannot be read is given up, and said
+    /// to be, so the mini player goes back to being the app's own.
+    fn wear_skin(&mut self, ctx: &egui::Context) {
+        let Some(wanted) = self.state.settings.mini_skin.as_deref() else {
+            self.state.skin = None;
+            return;
+        };
+        if !self.state.mini_player || self.state.worn_skin().is_some() {
+            return;
+        }
+        match skins::wear(ctx, wanted, &self.paths.skins_folder()) {
+            Ok(worn) => self.state.skin = Some(worn),
+            Err(error) => {
+                log::warn!("the skin {wanted} could not be read: {error}");
+                let failed = skins::Ask::Failed(error.to_string());
+                self.actions.push(Action::Skin(failed));
+            }
+        }
+    }
+
+    /// Tells the engine whether anything draws the sound, when that has
+    /// changed: the visualizer behind the player bar, or a skin's analyser
+    /// while the mini player is open. Copying the sound aside costs a
+    /// little, and is not done for nobody.
+    fn watch_sound(&mut self) {
+        let watched = self.state.watches_sound();
+        if watched != self.sound_watched
+            && let Some(session) = &self.session
+        {
+            session.tap().set_watching(watched);
+            self.sound_watched = watched;
+        }
+    }
+
+    /// Keeps MilkDrop's window in sound while it is open, and notices when
+    /// it has been closed from inside it.
+    fn keep_milkdrop(&mut self, ctx: &egui::Context) {
+        if !self.state.milkdrop.open {
+            return;
+        }
+        if !self.milkdrop.is_running() {
+            self.actions.push(Action::MilkDrop(milkdrop::Ask::Closed));
+            return;
+        }
+        if let Some(tap) = &self.state.audio_tap {
+            self.milkdrop.feed(tap);
+        }
+        // Nothing else says that the window has gone.
+        ctx.request_repaint_after(Duration::from_millis(500));
     }
 
     /// Stills the animations when the settings ask for that, and lets them
@@ -420,6 +493,9 @@ impl App {
             Event::Thumb(action) => self.thumb_asked(action),
             Event::ResolverUpdated(result) => self.actions.push(Action::ResolverUpdated(result)),
             Event::Update(status) => self.actions.push(Action::UpdateChanged(status)),
+            Event::OutputDevices(devices) => {
+                self.actions.push(Action::OutputDevicesListed(devices));
+            }
             Event::TogetherProbed(result) => {
                 self.actions
                     .push(Action::Room(together::Ask::Tested(result)));
@@ -447,6 +523,15 @@ impl App {
                 self.actions.push(Action::Notify(Notice::RateLimited));
             }
             Event::Migration(report) => self.migration_reported(ctx, report),
+            Event::PresetsFetched(result) => {
+                let folder = self.paths.milkdrop_folder();
+                self.state.milkdrop.presets = milkdrop::list_presets(&folder).len();
+                let fetched = milkdrop::Ask::Fetched(result);
+                self.actions.push(Action::MilkDrop(fetched));
+            }
+            Event::SkinsPicked(files) => {
+                self.actions.push(Action::Skin(skins::Ask::Install(files)));
+            }
             Event::Image(url, image) => self.state.images.loaded(ctx, url, image),
         }
     }
@@ -487,6 +572,7 @@ impl eframe::App for App {
 
         self.close_to_tray(ctx);
         self.wear_theme(ctx);
+        self.wear_skin(ctx);
         self.keep_motion(ctx);
         while let Ok(event) = self.events.try_recv() {
             self.take_in(ctx, event);
@@ -528,6 +614,8 @@ impl eframe::App for App {
             session.set_speed(speed);
             self.speed_applied = speed;
         }
+        self.watch_sound();
+        self.keep_milkdrop(ctx);
         if let Some(media_keys) = &mut self.media_keys {
             media_keys.show(self.state.playback.as_ref());
         }

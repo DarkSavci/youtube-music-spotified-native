@@ -16,6 +16,7 @@ mod migration;
 mod paging;
 mod playback;
 mod preferences;
+mod skins;
 mod songs;
 mod together;
 mod types;
@@ -382,11 +383,16 @@ pub fn apply(state: &mut State, action: Action) -> Vec<Effect> {
         Action::OpenThemesFolder => vec![Effect::OpenThemesFolder],
         Action::ReloadThemes => vec![Effect::ReloadThemes],
         Action::Equalizer(ask) => equalizer::asked(state, ask),
+        Action::Skin(ask) => skins::asked(state, ask),
+        Action::MilkDrop(ask) => skins::milkdrop(state, ask),
         Action::SetVisualizer(_)
         | Action::SetCrossfade(_)
         | Action::SetNormaliseVolume(_)
         | Action::SetVolumeLevel(_)
         | Action::SetVolumeBoost(_)
+        | Action::SetOutputDevice(_)
+        | Action::ListOutputDevices
+        | Action::OutputDevicesListed(_)
         | Action::SetGapless(_)
         | Action::SetAutoplay(_)
         | Action::SetResumeOnLaunch(_)
@@ -427,7 +433,10 @@ pub fn apply(state: &mut State, action: Action) -> Vec<Effect> {
         }
         Action::MiniMoved { position, size } => {
             state.settings.mini_position = Some(position);
-            state.settings.mini_size = size;
+            // A skin's window is the skin's size, not one the person chose.
+            if state.settings.mini_skin.is_none() {
+                state.settings.mini_size = size;
+            }
             Vec::new()
         }
         Action::ShowMainWindow

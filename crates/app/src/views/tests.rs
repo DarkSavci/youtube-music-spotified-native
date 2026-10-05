@@ -12,6 +12,7 @@ mod pages;
 mod player;
 mod selection;
 mod shell;
+mod skinned;
 mod together;
 mod together_room;
 mod video;
@@ -305,6 +306,34 @@ pub(super) fn the_normalise_switch_asks_for_the_other_state() {
     assert!(asked(&harness, |action| matches!(
         action,
         Action::SetNormaliseVolume(false)
+    )));
+}
+
+#[test]
+pub(super) fn a_sound_device_is_chosen_from_the_list_of_those_there_are() {
+    let mut state = state();
+    state.nav.open(Page::Settings);
+    state.output_devices = vec![crate::settings::OutputDevice {
+        id: "wasapi:desk".into(),
+        name: "Desk speakers".into(),
+    }];
+    let mut harness = harness(state);
+    harness
+        .get_by_role_and_label(eframe::egui::accesskit::Role::Button, "Output device")
+        .click();
+    harness.run();
+    // Opening the list asks for it again: devices come and go.
+    assert!(asked(&harness, |action| matches!(
+        action,
+        Action::ListOutputDevices
+    )));
+    harness
+        .get_by_role_and_label(eframe::egui::accesskit::Role::Button, "Desk speakers")
+        .click();
+    harness.run();
+    assert!(asked(&harness, |action| matches!(
+        action,
+        Action::SetOutputDevice(Some(device)) if device.id == "wasapi:desk"
     )));
 }
 

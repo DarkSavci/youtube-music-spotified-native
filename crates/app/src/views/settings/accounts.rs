@@ -8,6 +8,7 @@ use crate::accounts::SavedAccount;
 use crate::actions::{Action, account_busy};
 use crate::state::State;
 use crate::theme;
+use crate::views::widgets::menu::{self, Entry};
 use crate::views::{migration, widgets};
 
 pub(super) fn show(state: &State, ui: &mut Ui, actions: &mut Vec<Action>) {
@@ -49,7 +50,7 @@ pub(super) fn show(state: &State, ui: &mut Ui, actions: &mut Vec<Action>) {
                 } else if account.channels.len() > 1 {
                     // Most accounts hold one channel, and then there is
                     // nothing to choose.
-                    channel_choice(account, ui, actions);
+                    channel_choice(state, account, ui, actions);
                 }
             });
         });
@@ -141,24 +142,23 @@ pub(super) fn old_app(state: &State, ui: &mut Ui, actions: &mut Vec<Action>) {
 }
 
 /// The channel the account in use acts as, to choose another from.
-fn channel_choice(account: &SavedAccount, ui: &mut Ui, actions: &mut Vec<Action>) {
+fn channel_choice(state: &State, account: &SavedAccount, ui: &mut Ui, actions: &mut Vec<Action>) {
     let current = account.channel_name().unwrap_or("Choose");
-    let chosen = egui::ComboBox::from_id_salt("channel")
-        .selected_text(current)
-        .show_ui(ui, |ui| {
-            for channel in &account.channels {
-                let chosen = channel.id == account.channel;
-                let label = if channel.handle.is_empty() {
-                    channel.name.clone()
-                } else {
-                    format!("{} ({})", channel.name, channel.handle)
-                };
-                if ui.selectable_label(chosen, label).clicked() && !chosen {
-                    actions.push(Action::SwitchChannel(channel.id.clone()));
-                }
+    let select = super::playback::list(state, ui, "YouTube channel", current, CHANNEL_WIDTH);
+    menu::popup(&select, &state.palette, |menu| {
+        for channel in &account.channels {
+            let chosen = channel.id == account.channel;
+            let label = if channel.handle.is_empty() {
+                channel.name.clone()
+            } else {
+                format!("{} ({})", channel.name, channel.handle)
+            };
+            if menu.entry(Entry::plain(&label).checked(chosen)) && !chosen {
+                actions.push(Action::SwitchChannel(channel.id.clone()));
             }
-        });
-    chosen.response.widget_info(|| {
-        egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, "YouTube channel")
+        }
     });
 }
+
+/// How wide the list of an account's channels is.
+const CHANNEL_WIDTH: f32 = 200.0;

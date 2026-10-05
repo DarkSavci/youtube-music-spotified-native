@@ -82,8 +82,14 @@ fn load_page(state: &mut State, page: Page) -> Vec<Effect> {
         Page::Search if state.search.query.trim().is_empty() => return load_search_start(state),
         // A query typed before the core was ready, or one that failed.
         Page::Search if state.search.results.needs_fetch() => return run_new_search(state),
-        // The room the kept songs take changes as music plays.
-        Page::Settings => Request::CacheUsage,
+        // The room the kept songs take changes as music plays, and the
+        // sound devices as they are plugged in and out.
+        Page::Settings => {
+            return vec![
+                Effect::Fetch(Request::CacheUsage),
+                Effect::ListOutputDevices,
+            ];
+        }
         Page::Home | Page::Search | Page::Mix(_) | Page::Together => return Vec::new(),
     };
     vec![Effect::Fetch(request)]

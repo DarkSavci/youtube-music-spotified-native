@@ -34,10 +34,20 @@ struct Ring {
     heard: Option<Instant>,
 }
 
+/// Somewhere the whole sound is sent as it is played: interleaved stereo,
+/// how long until the last of it is heard, and the rate it is at.
+pub type Sink = Box<dyn Fn(&[f32], Duration, u32) + Send + Sync>;
+
 pub struct Tap {
     watching: AtomicBool,
+    /// Where the sound itself is sent, when something wants more of it
+    /// than the window kept here: a visualizer in a process of its own.
+    sink: Mutex<Option<Sink>>,
     /// The rate the samples are at: the device's.
     sample_rate: AtomicU32,
+    /// The bitrate of the stream being played, in kilobits a second;
+    /// nought when it is not known.
+    bitrate: AtomicU32,
     ring: Mutex<Ring>,
 }
 
@@ -45,7 +55,9 @@ impl Default for Tap {
     fn default() -> Self {
         Self {
             watching: AtomicBool::new(false),
+            sink: Mutex::new(None),
             sample_rate: AtomicU32::new(48_000),
+            bitrate: AtomicU32::new(0),
             ring: Mutex::new(Ring {
                 samples: vec![0.0; RING],
                 at: 0,
@@ -67,6 +79,25 @@ impl Tap {
         self.sample_rate.load(Ordering::Relaxed)
     }
 
+    /// Sends the whole sound to `sink` from now on, or with `None` to
+    /// nobody. It is called on the engine's thread with every block on
+    /// its way out, and must not keep it waiting.
+    pub fn set_sink(&self, sink: Option<Sink>) {
+        if let Ok(mut held) = self.sink.lock() {
+            *held = sink;
+        }
+    }
+
+    /// The bitrate of the stream being played, in kilobits a second: its
+    /// size over its length. Nought when that is not known.
+    pub fn bitrate(&self) -> u32 {
+        self.bitrate.load(Ordering::Relaxed)
+    }
+
+    pub fn set_bitrate(&self, kbps: u32) {
+        self.bitrate.store(kbps, Ordering::Relaxed);
+    }
+
     pub fn set_sample_rate(&self, rate: u32) {
         self.sample_rate.store(rate, Ordering::Relaxed);
     }
@@ -75,6 +106,11 @@ impl Tap {
     /// how long it is until the last of it is heard: what is queued before
     /// it, its own length, and the device's delay.
     pub fn write(&self, stereo: &[f32], ahead: Duration) {
+        if let Ok(sink) = self.sink.lock()
+            && let Some(sink) = sink.as_ref()
+        {
+            sink(stereo, ahead, self.sample_rate());
+        }
         if !self.watching.load(Ordering::Relaxed) {
             return;
         }
@@ -107,6 +143,22 @@ impl Tap {
         }
         let magnitudes = magnitudes(&mut real);
         bands(&magnitudes, bars, self.sample_rate.load(Ordering::Relaxed))
+    }
+
+    /// The sound itself as it reaches the ear about now: `points` samples
+    /// from -1 to 1, oldest first, each `stride` samples after the last.
+    /// For an oscilloscope.
+    pub fn wave(&self, points: usize, stride: usize) -> Vec<f32> {
+        let stride = stride.max(1);
+        let span = (points * stride).min(RING / 2);
+        let Ok(ring) = self.ring.lock() else {
+            return vec![0.0; points];
+        };
+        let skip = unheard(ring.heard, self.sample_rate()).min(RING - span);
+        let start = ring.at + 2 * RING - span - skip;
+        (0..points)
+            .map(|point| ring.samples[(start + (point * stride) % span.max(1)) % RING])
+            .collect()
     }
 }
 
@@ -273,5 +325,59 @@ mod tests {
         tap.write(high, Duration::ZERO);
         let high_bar = loudest(&tap.spectrum(32));
         assert!(high_bar > 22, "bar {high_bar}");
+    }
+}
+
+#[cfg(test)]
+mod wave_tests {
+    use super::*;
+
+    #[test]
+    fn the_wave_is_the_sound_itself_and_flat_with_none() {
+        let tap = Tap::default();
+        assert!(tap.wave(75, 7).iter().all(|sample| *sample == 0.0));
+        tap.set_watching(true);
+        // A ramp in both channels, so each sample says where it was.
+        let stereo: Vec<f32> = (0..4096)
+            .flat_map(|index| [index as f32 / 4096.0; 2])
+            .collect();
+        tap.write(&stereo, Duration::ZERO);
+        let wave = tap.wave(75, 7);
+        assert_eq!(wave.len(), 75);
+        // Oldest first, seven samples apart.
+        assert!(wave.windows(2).all(|pair| pair[1] > pair[0]));
+        assert!((wave[1] - wave[0] - 7.0 / 4096.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn the_bitrate_is_what_the_engine_last_said() {
+        let tap = Tap::default();
+        assert_eq!(tap.bitrate(), 0);
+        tap.set_bitrate(128);
+        assert_eq!(tap.bitrate(), 128);
+    }
+}
+
+#[cfg(test)]
+mod sink_tests {
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicUsize;
+
+    use super::*;
+
+    #[test]
+    fn the_whole_sound_goes_to_whoever_asked_for_it_watched_or_not() {
+        let tap = Tap::default();
+        let heard = Arc::new(AtomicUsize::new(0));
+        let count = heard.clone();
+        tap.set_sink(Some(Box::new(move |stereo, ahead, rate| {
+            assert_eq!((ahead, rate), (Duration::from_millis(40), 48_000));
+            count.fetch_add(stereo.len(), Ordering::Relaxed);
+        })));
+        tap.write(&[0.5; 64], Duration::from_millis(40));
+        assert_eq!(heard.load(Ordering::Relaxed), 64);
+        tap.set_sink(None);
+        tap.write(&[0.5; 64], Duration::from_millis(40));
+        assert_eq!(heard.load(Ordering::Relaxed), 64);
     }
 }

@@ -1,6 +1,7 @@
 # Builds everything and gathers it into dist/, as a folder that runs from
 # anywhere and as a zip of it: the app, the Go core beside it, and yt-dlp
-# and deno under vendor/, which is where the app looks for them.
+# and deno under vendor/, which is where the app looks for them, and
+# libprojectM, which draws MilkDrop, with its licence.
 #
 #   scripts/package.ps1
 $ErrorActionPreference = 'Stop'
@@ -11,6 +12,7 @@ Push-Location $root
 try {
     & "$PSScriptRoot\build-core.ps1"
     & "$PSScriptRoot\fetch-tools.ps1"
+    & "$PSScriptRoot\build-projectm.ps1"
     cargo build --release -p spotified
     if ($LASTEXITCODE -ne 0) { throw 'cargo build failed' }
 
@@ -25,6 +27,10 @@ try {
     Copy-Item "$root\vendor\yt-dlp" "$folder\vendor\yt-dlp" -Recurse
     Copy-Item "$root\vendor\deno" "$folder\vendor\deno" -Recurse
     Copy-Item "$root\LICENSE", "$root\NOTICE.md" $folder
+    # A library of its own beside the app, under its own licence (LGPL),
+    # so that it can be replaced with another build of itself.
+    Copy-Item "$root\target\projectm\src\libprojectM\libprojectM-4.dll" $folder
+    Copy-Item "$root\vendor\projectm\src\LICENSE.txt" "$folder\libprojectM-LICENSE.txt"
 
     $zip = Join-Path $root "dist\youtube-music-spotified-native-$version-windows-x64.zip"
     Remove-Item $zip -ErrorAction SilentlyContinue

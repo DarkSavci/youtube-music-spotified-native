@@ -13,10 +13,11 @@ use crate::actions::{Action, Effect};
 use crate::platform::autostart;
 use crate::platform::tray::TrayAction;
 use crate::session::Session;
+use crate::settings::OutputDevice;
 use crate::state::State;
 use crate::together::sync::Routed;
 use crate::update::Then;
-use crate::{settings, themes, together, update, views};
+use crate::{settings, skins, themes, together, update, views};
 use spotified_client::session::Command;
 
 impl App {
@@ -117,6 +118,23 @@ impl App {
                     apply_audio_settings(session, &self.state);
                 }
             }
+            // On a thread of its own: the system can take a moment to say.
+            Effect::ListOutputDevices => {
+                let listed = waking(ctx, &self.events_tx, Event::OutputDevices);
+                let spawned = std::thread::Builder::new()
+                    .name("sound-devices".into())
+                    .spawn(move || {
+                        let devices = spotified_audio::output_devices().into_iter();
+                        let device = |device: spotified_audio::OutputDevice| OutputDevice {
+                            id: device.id,
+                            name: device.name,
+                        };
+                        listed(devices.map(device).collect());
+                    });
+                if let Err(error) = spawned {
+                    log::warn!("the sound devices could not be listed: {error}");
+                }
+            }
             Effect::ApplyEqualizer => {
                 if let Some(session) = &self.session {
                     session.set_equalizer(crate::equalizer::for_engine(&self.state.settings));
@@ -147,6 +165,61 @@ impl App {
             }
             Effect::ReloadThemes => {
                 self.state.themes = themes::list(&self.paths.themes_folder());
+            }
+            Effect::OpenMilkDrop => {
+                let scratch = self.paths.cache.join("milkdrop");
+                let presets = self.paths.milkdrop_folder();
+                if let Err(why) = self.milkdrop.open(&scratch, &presets) {
+                    log::warn!("MilkDrop could not open: {why}");
+                    let failed = crate::milkdrop::Ask::Failed(why);
+                    self.actions.push(Action::MilkDrop(failed));
+                }
+            }
+            Effect::CloseMilkDrop => self.milkdrop.close(),
+            Effect::FetchPresets(pack) => {
+                let fetched = waking(ctx, &self.events_tx, Event::PresetsFetched);
+                let folder = self.paths.milkdrop_folder();
+                let scratch = self.paths.cache.join("milkdrop");
+                let spawned = std::thread::Builder::new()
+                    .name("milkdrop-presets".into())
+                    .spawn(move || {
+                        let pack = &crate::milkdrop::PACKS[pack];
+                        fetched(crate::milkdrop::fetch_pack(pack, &folder, &scratch));
+                    });
+                if let Err(error) = spawned {
+                    let failed = crate::milkdrop::Ask::Fetched(Err(error.to_string()));
+                    self.actions.push(Action::MilkDrop(failed));
+                }
+            }
+            Effect::OpenMilkDropFolder => {
+                let folder = self.paths.milkdrop_folder();
+                let opened = std::fs::create_dir_all(&folder).and_then(|()| open_folder(&folder));
+                if let Err(error) = opened {
+                    log::warn!("the MilkDrop folder could not be opened: {error}");
+                }
+            }
+            Effect::InstallSkins(files) => self.install_skins(files),
+            Effect::PickSkins => self.pick_skins(ctx),
+            Effect::OpenSkinsFolder => {
+                let folder = self.paths.skins_folder();
+                // Made here: a profile that has never had a skin has none.
+                let opened = std::fs::create_dir_all(&folder).and_then(|()| open_folder(&folder));
+                if let Err(error) = opened {
+                    log::warn!("the skins folder could not be opened: {error}");
+                }
+            }
+            Effect::ReloadSkins => {
+                self.state.skins = skins::list(&self.paths.skins_folder());
+            }
+            Effect::ApplyBalance => {
+                if let Some(session) = &self.session {
+                    session.set_balance(self.state.settings.balance);
+                }
+            }
+            Effect::OpenUrl(url) => {
+                if let Err(error) = crate::platform::shell::open_url(url) {
+                    log::warn!("{url} could not be opened: {error}");
+                }
             }
             Effect::OpenLogs => {
                 if let Err(error) = open_folder(&self.paths.logs) {
@@ -194,6 +267,45 @@ impl App {
                 self.lookup_due = Some(Instant::now() + LOOKUP_DEBOUNCE);
                 ctx.request_repaint_after(LOOKUP_DEBOUNCE);
             }
+        }
+    }
+
+    /// Puts skin files in the skins folder and wears the last of them that
+    /// is a skin, saying what came of each that is not.
+    fn install_skins(&mut self, files: Vec<std::path::PathBuf>) {
+        let folder = self.paths.skins_folder();
+        let mut installed = None;
+        for file in &files {
+            match skins::install(file, &folder) {
+                Ok(name) => installed = Some(name),
+                Err(why) => {
+                    log::warn!("a skin was not installed: {why}");
+                    self.state.toast_error(why);
+                }
+            }
+        }
+        let Some(name) = installed else {
+            return;
+        };
+        self.state.skins = skins::list(&folder);
+        // Read again even if a skin of this name was being worn: the file
+        // behind the name is a new one.
+        self.state.skin = None;
+        let said = format!("{} is the mini player's skin", skins::label(&name));
+        self.state.toast(said);
+        self.actions
+            .push(Action::Skin(skins::Ask::Wear(Some(name))));
+    }
+
+    /// Asks the person for skin files, off the UI thread: the dialog is
+    /// the system's, and stays for as long as they look.
+    fn pick_skins(&mut self, ctx: &egui::Context) {
+        let picked = waking(ctx, &self.events_tx, Event::SkinsPicked);
+        let spawned = std::thread::Builder::new()
+            .name("skin-picker".into())
+            .spawn(move || picked(crate::platform::pick::skins()));
+        if let Err(error) = spawned {
+            log::warn!("the file dialog could not be opened: {error}");
         }
     }
 
@@ -272,7 +384,10 @@ pub(super) fn apply_audio_settings(session: &Session, state: &State) {
     session.set_loudness_target(settings.volume_level.lufs());
     session.set_equalizer(crate::equalizer::for_engine(settings));
     session.set_speed(state.speed());
-    session.tap().set_watching(settings.visualizer);
+    session.set_balance(settings.balance);
+    let device = settings.output_device.as_ref();
+    session.set_output_device(device.map(|device| device.id.clone()));
+    session.tap().set_watching(state.watches_sound());
     session.set_settings(spotified_client::session::Settings {
         crossfade_ms: u64::from(settings.crossfade_seconds) * 1000,
         gapless: settings.gapless,

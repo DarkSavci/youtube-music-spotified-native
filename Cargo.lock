@@ -3033,8 +3033,12 @@ dependencies = [
  "eframe",
  "egui_extras",
  "egui_kittest",
+ "flate2",
+ "glutin",
+ "glutin-winit",
  "image",
  "log",
+ "memmap2",
  "raw-window-handle",
  "regex",
  "serde",
@@ -3048,6 +3052,7 @@ dependencies = [
  "tungstenite",
  "ureq",
  "windows 0.62.2",
+ "winit",
  "winresource",
 ]
 

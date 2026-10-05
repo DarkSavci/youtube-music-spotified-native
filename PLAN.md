@@ -477,7 +477,8 @@ Added on 2026-10-04, later the same day:
 - Themes (`crates/app/src/themes.rs`): follow the system, light, dark, or
   a JSON file in `%APPDATA%\SpotifiedNative	hemes`, which is given six
   presets on first run. The mini player wears the same palette. Spotifast's
-  own mini-player theming is Winamp `.wsz` skins; that was not built.
+  own mini-player theming is Winamp `.wsz` skins; that was not built then,
+  and was on 2026-10-05 (below).
 - Opus streams state their length in the container, not the track, and
   were read as having none: no length shown, no seeking, no crossfade.
   The decoder now falls back to the container's.
@@ -550,3 +551,43 @@ Not checked, because each needs something this machine or session lacks:
 | Scope: parity is large | each milestone is usable on its own; non-goals are explicit |
 | Imported credentials go stale | re-import action; browser sign-in in M6 |
 | Two cores on one account double the request rate | documented; the user runs one app at a time |
+
+Added on 2026-10-05:
+
+- Winamp skins for the mini player, which section 1 had left out. The
+  reader (`crates/app/src/skin/`) is Spotifast's: a `.wsz` is unzipped in
+  memory, its sheets become nearest-neighbour textures, and what a skin
+  lacks comes from the built-in one. `crates/app/src/skins.rs` lists the
+  skins folder and installs into it; the view is
+  `views/mini/skinned/`, the main window with its shade mode, the
+  equalizer (the app's own ten bands) and the playlist (the queue), all
+  in the mini player's one window. A skin with a `region.txt` has its
+  window cut to that shape, as Winamp cut it. Skins are installed by
+  dropping a file on either window or from Settings.
+- The rest of the skin, the same day: the balance slider turns one side
+  down in the engine (`Engine::set_balance`, after the tap, so the picture
+  is still the whole sound); the bitrate box shows the stream's size over
+  its length, which the deck knows once it is open; the display has
+  Winamp's oscilloscope as well as its analyser (`Tap::wave`); the playlist
+  rolls up, takes a selection of several rows, and has menus behind its
+  five buttons.
+- Modern skins (`.wal`), as far as they go without their scripts
+  (`crates/app/src/skin/modern.rs`): the XML is read by a parser of our
+  own that forgives what skins get wrong, includes are followed, and the
+  main window's normal layout is flattened into a list of pictures,
+  buttons, sliders, text and an analyser, each where the XML puts it.
+  Buttons and sliders with a standard action are wired to the player; the
+  window is cut to where its pictures are solid. MAKI, the bytecode that
+  moves a skin's parts about, is not run, so a skin is its resting state.
+  Running it would mean a virtual machine and Winamp's object model, which
+  is a project the size of this app's views.
+- MilkDrop (`crates/app/src/milkdrop/`), through libprojectM. Spotifast
+  links it into the program with MSVC and vcpkg; this app is built with
+  MinGW, so here it is a library of its own, built by
+  `scripts/build-projectm.ps1` with CMake and Ninja and loaded by name
+  when the window is opened, as the core and yt-dlp are files beside the
+  app. That also keeps an LGPL library out of an MIT program. The window
+  is the program started again with `--milkdrop-child` (winit allows one
+  event loop to a process), and the engine's tap hands it the sound
+  through a ring in a mapped file, with how far ahead of the ear it is, so
+  the picture keeps time. Presets are fetched on request, not shipped.

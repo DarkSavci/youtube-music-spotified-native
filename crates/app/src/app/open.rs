@@ -49,6 +49,7 @@ pub(super) fn waits(spec: &str) -> bool {
                 | "report"
                 | "accounts-demo"
                 | "account-menu"
+                | "milkdrop"
                 | "switch-account"
                 | "remove-account"
                 | "confirm"
@@ -256,6 +257,31 @@ pub(super) fn opening_action(spec: &str) -> Option<Action> {
             "light" => crate::themes::Choice::Light,
             _ => crate::themes::Choice::Dark,
         }),
+        // The mini player in a Winamp skin: `skin:classic` for the one the
+        // app comes with, `skin:off` for none, or a file of the folder.
+        // `skin-part:` opens or shuts one of the skin's windows.
+        "skin" => Action::Skin(crate::skins::Ask::Wear(match value.as_str() {
+            "off" => None,
+            "classic" => Some(crate::skins::BUILT_IN.to_owned()),
+            _ => Some(value),
+        })),
+        "skin-part" => Action::Skin(match value.as_str() {
+            "equalizer" => crate::skins::Ask::ToggleEqualizer,
+            "playlist" => crate::skins::Ask::TogglePlaylist,
+            "shade" => crate::skins::Ask::ToggleShade,
+            "playlist-shade" => crate::skins::Ask::TogglePlaylistShade,
+            "analyser" => crate::skins::Ask::CycleAnalyser,
+            _ => return None,
+        }),
+        // MilkDrop's window; and its first pack of presets, fetched.
+        "milkdrop" => Action::MilkDrop(crate::milkdrop::Ask::Toggle),
+        "milkdrop-presets" => Action::MilkDrop(crate::milkdrop::Ask::GetPresets(0)),
+        // A skin file from anywhere, installed as one dropped on the window.
+        "skin-add" => {
+            let file = std::path::PathBuf::from(value);
+            Action::Skin(crate::skins::Ask::Install(vec![file]))
+        }
+        "skin-size" => Action::Skin(crate::skins::Ask::Scale(value.parse().ok()?)),
         "account-menu" => Action::OpenAccountMenu,
         // A saved account by its id: used, or signed out once the
         // question that follows is answered with `confirm`.

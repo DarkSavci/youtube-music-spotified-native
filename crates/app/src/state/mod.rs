@@ -223,6 +223,16 @@ pub struct State {
     pub palette: Palette,
     /// The themes found in the themes folder.
     pub themes: Vec<crate::themes::Custom>,
+    /// MilkDrop: whether its window is open, and what it has to show.
+    pub milkdrop: crate::milkdrop::Status,
+    /// The Winamp skins found in the skins folder.
+    pub skins: Vec<crate::skins::Choice>,
+    /// The skin the mini player wears, once it has been read. It is read
+    /// when the mini player first needs it.
+    pub skin: Option<crate::skins::Worn>,
+    /// The sound devices there were to play through when Settings last
+    /// asked.
+    pub output_devices: Vec<crate::settings::OutputDevice>,
     pub nav: Nav,
     pub core: CoreStatus,
     pub settings: Settings,
@@ -360,6 +370,10 @@ impl State {
         Self {
             palette: theme::DARK,
             themes: Vec::new(),
+            milkdrop: crate::milkdrop::Status::default(),
+            skins: Vec::new(),
+            skin: None,
+            output_devices: Vec::new(),
             nav: Nav::default(),
             core: CoreStatus::Starting,
             settings,
@@ -561,6 +575,20 @@ impl State {
         self.playback
             .as_ref()
             .is_none_or(|playback| !playback.following_room && !playback.wants_to_play())
+    }
+
+    /// The skin the mini player is to be drawn in, when one is chosen and
+    /// has been read; otherwise it is the app's own.
+    pub fn worn_skin(&self) -> Option<&crate::skins::Worn> {
+        let wanted = self.settings.mini_skin.as_deref()?;
+        self.skin.as_ref().filter(|worn| worn.file == wanted)
+    }
+
+    /// Whether anything on screen draws the sound, so that the engine
+    /// keeps a copy of it to draw from.
+    pub fn watches_sound(&self) -> bool {
+        let skinned = self.mini_player && self.settings.mini_skin.is_some();
+        self.settings.visualizer || (skinned && self.settings.skin_analyser)
     }
 
     pub fn core_ready(&self) -> bool {

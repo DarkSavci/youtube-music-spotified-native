@@ -48,6 +48,20 @@ pub(super) struct Dials {
     pub speed: AtomicU32,
     /// The equalizer's settings, as the app last set them.
     pub equalizer: Mutex<eq::Settings>,
+    /// The id of the sound device to play through; `None` for the system's.
+    pub device: Mutex<Option<String>>,
+    /// How far the sound is turned to one side, as `f32` bits: -1 is all
+    /// left, 1 all right, 0 both alike.
+    pub balance: AtomicU32,
+}
+
+/// What each channel is multiplied by for a balance from -1 to 1: the side
+/// turned away from is turned down, and the other left as it is, so the
+/// middle is exactly what it would be with no balance at all.
+pub(super) fn balance_gains(balance: f32) -> (f32, f32) {
+    let balance = if balance.is_finite() { balance } else { 0.0 };
+    let balance = balance.clamp(-1.0, 1.0);
+    (1.0 - balance.max(0.0), 1.0 + balance.min(0.0))
 }
 
 pub(super) struct Worker {
@@ -68,6 +82,8 @@ pub(super) struct Worker {
     /// Opened at the first load, so an app that never plays never touches
     /// the sound device.
     output: Option<Output>,
+    /// The device asked for, as last read from the dials.
+    device: Option<String>,
     target: Target,
     current: Option<Playing>,
     /// The track before, while it fades out under the current one.
@@ -110,6 +126,7 @@ impl Worker {
             emit,
             agent: source::agent(),
             output: None,
+            device: None,
             target: Target::default(),
             current: None,
             fading_out: None,
@@ -251,7 +268,8 @@ impl Worker {
 
     fn spawn_deck(&mut self, video_id: &str, start_ms: u64, preload: bool) -> Option<Deck> {
         if self.output.is_none() {
-            match Output::open() {
+            self.device = self.wanted_device();
+            match Output::open(self.device.as_deref()) {
                 Ok(output) => {
                     self.equalizer = Some(Equalizer::new(output.sample_rate()));
                     self.tap.set_sample_rate(output.sample_rate());
@@ -376,6 +394,7 @@ impl Worker {
                     Poll::Ready { duration_ms } => {
                         playing.ready = true;
                         playing.duration_ms = duration_ms.unwrap_or(0);
+                        self.tap.set_bitrate(playing.deck.kbps());
                         if playing.deck.video_id() == self.target.video_id {
                             (self.emit)(Event::Loaded {
                                 epoch: self.target.epoch,
@@ -439,6 +458,16 @@ impl Worker {
             let queued = output.queued_frames() + self.shaped.len() / 2;
             let ahead = Duration::from_secs_f64(queued as f64 / f64::from(output.sample_rate()));
             self.tap.write(&self.shaped, ahead + output.delay());
+            // After the tap: what is drawn is the music, whichever ear it
+            // is sent to.
+            let balance = f32::from_bits(self.dials.balance.load(Ordering::Relaxed));
+            if balance != 0.0 {
+                let (left, right) = balance_gains(balance);
+                for frame in self.shaped.as_chunks_mut::<2>().0 {
+                    frame[0] *= left;
+                    frame[1] *= right;
+                }
+            }
             output.push(&self.shaped);
             self.last_audio = Instant::now();
             self.stall_reported = false;
@@ -548,5 +577,21 @@ impl Worker {
                 epoch: self.target.epoch,
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod balance_tests {
+    use super::balance_gains;
+
+    #[test]
+    fn balance_turns_down_the_side_it_is_turned_from() {
+        assert_eq!(balance_gains(0.0), (1.0, 1.0));
+        assert_eq!(balance_gains(-1.0), (1.0, 0.0));
+        assert_eq!(balance_gains(1.0), (0.0, 1.0));
+        assert_eq!(balance_gains(0.5), (0.5, 1.0));
+        // Out of range, or not a number: held, and the middle.
+        assert_eq!(balance_gains(3.0), (0.0, 1.0));
+        assert_eq!(balance_gains(f32::NAN), (1.0, 1.0));
     }
 }

@@ -6,6 +6,7 @@ pub mod autostart;
 pub mod identity;
 pub mod media_keys;
 pub mod notify;
+pub mod pick;
 pub mod shell;
 pub mod taskbar;
 pub mod tray;

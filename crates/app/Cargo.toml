@@ -16,8 +16,12 @@ workspace = true
 eframe = { version = "0.36", default-features = false, features = ["glow", "default_fonts"] }
 # Rasterises the SVG icons at the size they are drawn.
 egui_extras = { version = "0.36", default-features = false, features = ["svg"] }
-# Decodes artwork and encodes the --screenshot PNG.
-image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
+# Decodes artwork and Winamp skins, and encodes the --screenshot PNG.
+# BMP is what a Winamp skin's sheets are.
+image = { version = "0.25", default-features = false, features = ["bmp", "jpeg", "png", "webp"] }
+# Inflates the entries of a Winamp skin, which is a zip. The PNG decoder
+# already brings it in.
+flate2 = "1"
 # Fetches artwork. TLS is the system's own (schannel on Windows), which
 # needs no C crypto library.
 ureq = { version = "3", default-features = false, features = ["native-tls"] }
@@ -33,6 +37,9 @@ tray-icon = { version = "0.26", default-features = false }
 # the cookies of a sign-in, and a Listen Together relay over the system's
 # TLS.
 tungstenite = { version = "0.30", default-features = false, features = ["handshake", "native-tls"] }
+# Maps the file MilkDrop's process is given the sound through. The font
+# loader already builds it.
+memmap2 = "0.9"
 # Backend-to-UI events. The standard channel has no select, which the worker
 # pools need.
 crossbeam-channel = "0.5"
@@ -51,6 +58,23 @@ sha2 = "0.10"
 # of the log and of a problem report. They are the Electron app's own nine,
 # and matching them by hand would be the place a secret slipped through.
 regex = { version = "1", default-features = false, features = ["std", "perf", "unicode-perl", "unicode-case"] }
+
+# MilkDrop's window is this program started again, with an event loop and
+# an OpenGL context of its own (src/milkdrop/child.rs). These are the
+# versions eframe already builds, so they add nothing to compile.
+[target.'cfg(windows)'.dependencies.winit]
+version = "0.30"
+default-features = false
+
+[target.'cfg(windows)'.dependencies.glutin]
+version = "0.32"
+default-features = false
+features = ["wgl", "egl"]
+
+[target.'cfg(windows)'.dependencies.glutin-winit]
+version = "0.5"
+default-features = false
+features = ["wgl", "egl"]
 
 # What Windows offers only through its own interfaces: the buttons on the
 # taskbar thumbnail, where the taskbar is, the corners of a window with no
@@ -76,6 +100,7 @@ windows = { version = "0.62", features = [
     "Win32_System_SystemInformation",
     "Win32_System_Threading",
     "Win32_UI_Shell",
+    "Win32_UI_Shell_Common",
     "Win32_UI_WindowsAndMessaging",
 ] }
 

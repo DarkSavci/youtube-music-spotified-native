@@ -21,6 +21,7 @@ mod icon;
 mod images;
 mod logging;
 mod migrate;
+mod milkdrop;
 mod paths;
 mod platform;
 mod redact;
@@ -33,6 +34,8 @@ mod share;
 mod sidecar;
 mod signin;
 mod single_instance;
+mod skin;
+mod skins;
 mod state;
 mod theme;
 mod themes;
@@ -59,6 +62,18 @@ const APP_ID: &str = "dev.darksavci.spotified.native";
 
 fn main() -> ExitCode {
     let started = Instant::now();
+    // Started as the MilkDrop window: none of the app is wanted, and the
+    // profile is the app's that started this, not this process's to open.
+    #[cfg(windows)]
+    {
+        let mut args = std::env::args().skip(1);
+        if args.next().as_deref() == Some(milkdrop::child::FLAG) {
+            return match milkdrop::child::Args::parse(args) {
+                Some(args) => ExitCode::from(milkdrop::child::run(&args) as u8),
+                None => ExitCode::from(2),
+            };
+        }
+    }
     let args = match cli::parse(std::env::args().skip(1)) {
         Ok(args) => args,
         Err(error) => {

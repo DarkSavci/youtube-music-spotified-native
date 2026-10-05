@@ -89,16 +89,42 @@ impl App {
     /// From here so that it reads the same state and asks through the same
     /// actions as the main window.
     pub(super) fn show_mini(&mut self, ui: &mut egui::Ui) {
-        let builder = views::mini::builder(&self.state);
+        let builder = views::mini::builder(&self.state, ui.ctx().pixels_per_point());
         let id = views::mini::viewport();
         let open = self.state.mini_player;
         if !window_made(ui.ctx(), &mut self.mini_made, open, id, &builder) {
+            // A window made afresh has no shape yet.
+            self.mini_shape = None;
             return;
         }
         let (state, actions) = (&self.state, &mut self.actions);
         ui.ctx().show_viewport_immediate(id, builder, |ui, _| {
             views::mini::show(state, ui, actions);
         });
+        self.shape_mini(ui.ctx());
+    }
+
+    /// Cuts the mini player's window to the shape its skin gives it, when
+    /// that is not the shape it has. Most skins are rectangles, and the
+    /// app's own mini player always is.
+    fn shape_mini(&mut self, ctx: &egui::Context) {
+        use views::mini::skinned;
+        let settings = &self.state.settings;
+        let scale = ctx.pixels_per_point();
+        let boxes = self
+            .state
+            .worn_skin()
+            .and_then(|worn| skinned::window_shape(worn, settings, scale));
+        let mut hasher = DefaultHasher::new();
+        boxes.hash(&mut hasher);
+        let key = hasher.finish();
+        if self.mini_shape == Some(key) {
+            return;
+        }
+        // Not there yet on the frame it is first asked for: tried again.
+        if shell::shape_window(views::mini::TITLE, boxes.as_deref()) {
+            self.mini_shape = Some(key);
+        }
     }
 
     /// Draws the flyout, in a window of its own, while it is open.
