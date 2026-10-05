@@ -1,7 +1,7 @@
 # Youtube Music Spotified, native
 
 A native YouTube Music client: Rust and egui, no browser engine. A rewrite of
-[Youtube Music Spotified](../youtube-music-spotified) in the manner of
+[Youtube Music Spotified](https://github.com/DarkSavci/youtube-music-spotified) in the manner of
 [Spotifast](https://github.com/crmne/spotifast).
 
 It browses, searches and plays; keeps a library with pins and folders, a
