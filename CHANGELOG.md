@@ -2,6 +2,19 @@
 
 Every release of Youtube Music Spotified Native, newest first.
 
+## 0.4.7 — 2026-10-05
+
+### New
+
+- Winamp skins for the mini player: drop a classic skin (.wsz) on the window, or add one in Settings under Appearance, and the mini player wears it, with Winamp's equalizer and playlist under it, its shade modes, the spectrum analyser and oscilloscope, a balance slider and sizes from 1x to 4x
+- Modern Winamp skins (.wal) are drawn as they rest: the main window with its buttons, sliders and text working, cut to the skin's shape. Their scripts are not run, so nothing slides out or animates
+- MilkDrop: the music drawn by MilkDrop's presets in a window of its own, opened from Settings or a skin's menu. Settings fetches the presets, since none come with the app
+- Choose the sound device the music plays through, in Settings
+
+### Fixed
+
+- In a narrow window the buttons of some Settings rows were drawn over their descriptions
+
 ## 0.4.6 — 2026-10-05
 
 ### New
