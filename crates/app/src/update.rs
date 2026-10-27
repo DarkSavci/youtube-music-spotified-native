@@ -289,6 +289,7 @@ pub(crate) fn expected_hash(sums: &str, name: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scratch::Scratch;
 
     const RELEASE: &str = r#"{
         "tag_name": "v0.3.0",
@@ -344,10 +345,9 @@ mod tests {
 
     #[test]
     fn a_file_hashes_to_its_sha256() -> io::Result<()> {
-        let path = std::env::temp_dir().join(format!("spotified-hash-{}", std::process::id()));
+        let path = Scratch::path(&format!("spotified-hash-{}", std::process::id()));
         std::fs::write(&path, b"abc")?;
         let hash = hash_of(&path)?;
-        std::fs::remove_file(&path)?;
         assert_eq!(
             hash,
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"

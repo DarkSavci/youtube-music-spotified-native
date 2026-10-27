@@ -486,16 +486,15 @@ pub fn save(path: &Path, settings: &Settings) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scratch::Scratch;
 
-    fn scratch(name: &str) -> io::Result<std::path::PathBuf> {
-        let dir = std::env::temp_dir().join(format!("spotified-{name}-{}", std::process::id()));
-        std::fs::create_dir_all(&dir)?;
-        Ok(dir.join("settings.json"))
+    fn scratch(name: &str) -> Scratch {
+        Scratch::folder(&format!("spotified-{name}-{}", std::process::id())).at("settings.json")
     }
 
     #[test]
     fn saved_settings_come_back() -> io::Result<()> {
-        let path = scratch("roundtrip")?;
+        let path = scratch("roundtrip");
         let settings = Settings {
             sidebar_collapsed: true,
             sidebar_width: 320.0,
@@ -579,7 +578,7 @@ mod tests {
 
     #[test]
     fn the_relay_an_older_profile_kept_is_saved_under_its_host() -> io::Result<()> {
-        let path = scratch("relay")?;
+        let path = scratch("relay");
         std::fs::write(&path, "{\"together_server\": \"ws://localhost:8791\"}")?;
         let settings = load(&path);
         assert!(settings.together_server.is_empty());
@@ -591,7 +590,7 @@ mod tests {
 
     #[test]
     fn a_missing_field_takes_its_default() -> io::Result<()> {
-        let path = scratch("partial")?;
+        let path = scratch("partial");
         std::fs::write(
             &path,
             "\u{feff}{\"sidebar_collapsed\": true, \"library_sort\": \"name\", \"later\": 1}",
@@ -608,7 +607,7 @@ mod tests {
     fn a_new_profile_crossfades_and_an_old_one_is_left_as_it_was() -> io::Result<()> {
         assert_eq!(Settings::default().crossfade_seconds, 6);
         // Written before there was a crossfade: it has had none.
-        let path = scratch("crossfade")?;
+        let path = scratch("crossfade");
         std::fs::write(&path, "{\"sidebar_collapsed\": true}")?;
         assert_eq!(load(&path).crossfade_seconds, 0);
         // One that chose a length keeps it.
@@ -671,7 +670,7 @@ mod tests {
 
     #[test]
     fn a_broken_file_is_kept_aside_not_overwritten() -> io::Result<()> {
-        let path = scratch("broken")?;
+        let path = scratch("broken");
         std::fs::write(&path, "{ not json")?;
         assert_eq!(load(&path), Settings::default());
         assert!(path.with_extension("json.bad").exists());

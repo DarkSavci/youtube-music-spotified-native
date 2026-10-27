@@ -127,14 +127,12 @@ fn move_database(from: &Path, to: &Path) -> io::Result<()> {
 mod tests {
     use super::super::{SavedChannel, new_account};
     use super::*;
+    use crate::scratch::Scratch;
 
     const LOCAL: &str = "aaaaaaaa-0000-0000-0000-00000000000c";
 
-    fn scratch(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("spotified-dbs-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("a scratch directory");
-        dir
+    fn scratch(name: &str) -> Scratch {
+        Scratch::folder(&format!("spotified-dbs-{name}-{}", std::process::id()))
     }
 
     /// An account from before channels had databases, acting as `channel`.

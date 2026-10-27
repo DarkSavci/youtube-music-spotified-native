@@ -317,12 +317,10 @@ pub fn held_balance(balance: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scratch::Scratch;
 
-    fn temp_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("spotified-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("a folder");
-        dir
+    fn temp_dir(name: &str) -> Scratch {
+        Scratch::folder(&format!("spotified-{name}-{}", std::process::id()))
     }
 
     fn png(color: [u8; 3]) -> Vec<u8> {
@@ -360,7 +358,6 @@ mod tests {
         std::fs::write(dir.join("Middle/inner/MAIN.BMP"), png([4, 5, 6])).expect("a bitmap");
         std::fs::create_dir_all(dir.join("Empty")).expect("a folder");
         let files: Vec<String> = list(&dir).into_iter().map(|skin| skin.file).collect();
-        std::fs::remove_dir_all(&dir).expect("removed");
         assert_eq!(files, ["Alpha.zip", "Middle", "zeta.wsz"]);
         assert!(list(Path::new("/nonexistent/skins")).is_empty());
     }
@@ -382,7 +379,6 @@ mod tests {
         assert!(refused.starts_with("Words: not a zip archive"), "{refused}");
         assert!(!folder.join("Words.wsz").exists());
         assert!(install(&from.join("gone.wsz"), &folder).is_err());
-        std::fs::remove_dir_all(&dir).expect("removed");
     }
 
     #[test]
@@ -410,6 +406,5 @@ mod tests {
         std::fs::write(&bare, archive).expect("a skin");
         let refused = install(&bare, &folder).expect_err("nothing to draw");
         assert!(refused.contains("modern Winamp skin"), "{refused}");
-        std::fs::remove_dir_all(&dir).expect("removed");
     }
 }

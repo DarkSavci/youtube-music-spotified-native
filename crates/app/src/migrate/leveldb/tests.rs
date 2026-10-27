@@ -1,15 +1,11 @@
 //! The reader against files built here in the same format, since a real
 //! profile's are somebody's preferences.
 
-use std::path::PathBuf;
-
 use super::*;
+use crate::scratch::Scratch;
 
-pub fn scratch(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("spotified-migrate-{name}"));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).expect("a scratch directory");
-    dir
+pub fn scratch(name: &str) -> Scratch {
+    Scratch::folder(&format!("spotified-migrate-{name}"))
 }
 
 fn varint(mut value: u64, out: &mut Vec<u8>) {

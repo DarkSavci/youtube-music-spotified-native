@@ -1,11 +1,8 @@
 use super::*;
+use crate::scratch::Scratch;
 
-fn scratch(name: &str) -> PathBuf {
-    let dir =
-        std::env::temp_dir().join(format!("spotified-accounts-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).expect("a scratch directory");
-    dir
+fn scratch(name: &str) -> Scratch {
+    Scratch::folder(&format!("spotified-accounts-{name}-{}", std::process::id()))
 }
 
 fn channel(id: &str, name: &str) -> Channel {
@@ -73,7 +70,7 @@ fn an_id_edited_into_a_path_does_not_leave_the_profile() {
         id: "..\\..\\elsewhere".into(),
         ..SavedAccount::default()
     };
-    assert_eq!(store.directory(Some(&account)), root);
+    assert_eq!(store.directory(Some(&account)), *root);
 }
 
 #[test]
@@ -204,7 +201,7 @@ fn the_folder_of_the_account_in_use_is_there_before_the_core_needs_it() {
 
 /// A profile from before channels had databases of their own: one account
 /// in a folder of its own, acting as a channel, with one database.
-fn from_before(name: &str) -> (PathBuf, String) {
+fn from_before(name: &str) -> (Scratch, String) {
     const ID: &str = "aaaaaaaa-0000-0000-0000-000000000001";
     let root = scratch(name);
     let list = format!(

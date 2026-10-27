@@ -27,6 +27,8 @@ mod platform;
 mod redact;
 mod report;
 mod resolver;
+#[cfg(test)]
+mod scratch;
 mod screenshot;
 mod services;
 mod session;

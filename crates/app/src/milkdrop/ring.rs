@@ -131,9 +131,10 @@ unsafe impl Sync for Ring {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scratch::Scratch;
 
-    fn scratch(name: &str) -> std::path::PathBuf {
-        std::env::temp_dir().join(format!("spotified-ring-{name}-{}", std::process::id()))
+    fn scratch(name: &str) -> Scratch {
+        Scratch::path(&format!("spotified-ring-{name}-{}", std::process::id()))
     }
 
     #[test]
@@ -151,8 +152,6 @@ mod tests {
         writer.push(&[0.5, -0.5], 0);
         let heard = reader.since(&mut cursor);
         assert_eq!(heard, [[0.3, -0.3], [0.4, -0.4], [0.5, -0.5]]);
-        drop((writer, reader));
-        let _ = std::fs::remove_file(path);
     }
 
     #[test]
@@ -166,8 +165,6 @@ mod tests {
         }
         assert_eq!(ring.since(&mut cursor).len(), FRAMES);
         assert_eq!(cursor, (FRAMES + 5000) as u64);
-        drop(ring);
-        let _ = std::fs::remove_file(path);
     }
 
     #[test]
@@ -175,6 +172,5 @@ mod tests {
         let path = scratch("small");
         std::fs::write(&path, b"too small").expect("a file");
         assert!(Ring::open(&path).is_err());
-        let _ = std::fs::remove_file(path);
     }
 }

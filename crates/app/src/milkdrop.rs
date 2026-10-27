@@ -154,12 +154,10 @@ pub fn unpack_presets(zip: &[u8], folder: &Path) -> Result<usize, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scratch::Scratch;
 
-    fn temp_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("spotified-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("a folder");
-        dir
+    fn temp_dir(name: &str) -> Scratch {
+        Scratch::folder(&format!("spotified-{name}-{}", std::process::id()))
     }
 
     #[test]
@@ -173,7 +171,6 @@ mod tests {
             .iter()
             .filter_map(|path| Some(path.file_name()?.to_string_lossy().into_owned()))
             .collect();
-        std::fs::remove_dir_all(&dir).expect("removed");
         assert_eq!(names, ["Alpha.MILK", "zebra.milk"]);
         assert!(list_presets(Path::new("/nonexistent/milkdrop")).is_empty());
     }
@@ -192,6 +189,5 @@ mod tests {
         assert!(dir.join("two.milk").is_file());
         assert!(!dir.join("README.md").exists());
         assert!(unpack_presets(b"not a zip", &dir).is_err());
-        std::fs::remove_dir_all(&dir).expect("removed");
     }
 }

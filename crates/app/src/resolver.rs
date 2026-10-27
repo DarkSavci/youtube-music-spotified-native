@@ -212,24 +212,25 @@ fn unpack(archive: &Path, into: &Path) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scratch::Scratch;
 
-    fn scratch(name: &str) -> Resolver {
-        let dir =
-            std::env::temp_dir().join(format!("spotified-resolver-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("a scratch directory");
-        Resolver::new(dir)
+    /// A resolver in a folder of its own, and the folder, which goes when
+    /// the test does.
+    fn scratch(name: &str) -> (Scratch, Resolver) {
+        let dir = Scratch::folder(&format!("spotified-resolver-{name}-{}", std::process::id()));
+        let resolver = Resolver::new(dir.to_path_buf());
+        (dir, resolver)
     }
 
     #[test]
     fn a_look_is_due_when_there_has_been_none() {
-        let resolver = scratch("never");
+        let (_dir, resolver) = scratch("never");
         assert!(resolver.due(SystemTime::now()));
     }
 
     #[test]
     fn a_look_is_not_due_again_until_a_day_has_passed() {
-        let resolver = scratch("day");
+        let (_dir, resolver) = scratch("day");
         std::fs::write(resolver.stamp(), b"").expect("write");
         let now = SystemTime::now();
         assert!(!resolver.due(now));
@@ -241,7 +242,7 @@ mod tests {
 
     #[test]
     fn a_look_that_is_not_due_touches_nothing_and_asks_nobody() {
-        let resolver = scratch("skip");
+        let (_dir, resolver) = scratch("skip");
         std::fs::write(resolver.stamp(), b"").expect("write");
         assert_eq!(resolver.update(None, false), Ok(Outcome::NotDue));
         assert!(!resolver.next().exists());
@@ -249,7 +250,7 @@ mod tests {
 
     #[test]
     fn a_staged_update_goes_into_use_at_the_next_launch() {
-        let resolver = scratch("promote");
+        let (_dir, resolver) = scratch("promote");
         let next = resolver.next();
         std::fs::create_dir_all(&next).expect("a folder");
         std::fs::write(next.join(EXE), b"new").expect("write");
@@ -271,7 +272,7 @@ mod tests {
 
     #[test]
     fn an_unpacking_that_never_ended_is_not_put_into_use() {
-        let resolver = scratch("half");
+        let (_dir, resolver) = scratch("half");
         std::fs::create_dir_all(resolver.next()).expect("a folder");
         std::fs::write(resolver.next().join(EXE), b"half").expect("write");
         resolver.promote();
@@ -280,7 +281,7 @@ mod tests {
 
     #[test]
     fn the_hash_in_use_is_the_updates_before_the_bundles() {
-        let resolver = scratch("hash");
+        let (_dir, resolver) = scratch("hash");
         let bundle = resolver.root.join("bundle.sha256");
         std::fs::write(&bundle, "BUNDLED\n").expect("write");
         let files = || [resolver.in_use_hash(), bundle.clone()];
@@ -295,7 +296,7 @@ mod tests {
     #[test]
     #[ignore = "downloads yt-dlp from GitHub; run with --ignored"]
     fn the_newest_release_is_staged_then_put_into_use() {
-        let resolver = scratch("live");
+        let (_dir, resolver) = scratch("live");
         assert_eq!(resolver.update(None, false), Ok(Outcome::Staged));
         assert!(resolver.staged());
         assert_eq!(resolver.updated_exe(), None, "not in use until a launch");

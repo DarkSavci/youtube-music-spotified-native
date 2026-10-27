@@ -1,6 +1,7 @@
 //! The mini player in a Winamp skin, and choosing one in Settings.
 
 use super::*;
+use crate::scratch::Scratch;
 use crate::skins::{self, Ask};
 
 /// The mini player wearing the skin the app comes with, at the skin's own
@@ -355,8 +356,7 @@ fn settings_open_milkdrop_and_fetch_its_presets() {
 
 #[test]
 fn a_modern_skin_is_drawn_and_its_standard_controls_steer_playback() {
-    let dir = std::env::temp_dir().join(format!("spotified-modern-view-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("a folder");
+    let dir = Scratch::folder(&format!("spotified-modern-view-{}", std::process::id()));
     std::fs::write(dir.join("Small.wal"), crate::skin::modern::tests::skin()).expect("a skin");
     let mut state = playing(on_playlist());
     state.mini_player = true;
@@ -366,7 +366,7 @@ fn a_modern_skin_is_drawn_and_its_standard_controls_steer_playback() {
         actions: Vec::new(),
         themed: false,
     };
-    let folder = dir.clone();
+    let folder = dir.to_path_buf();
     let mut harness = Harness::builder()
         // The skin's own two hundred by eighty, and the harness's margin.
         .with_size(vec2(216.0, 96.0))
@@ -391,7 +391,6 @@ fn a_modern_skin_is_drawn_and_its_standard_controls_steer_playback() {
     harness.get_by_label("Play").click();
     harness.get_by_label("Shuffle").click();
     harness.run();
-    std::fs::remove_dir_all(&dir).expect("removed");
     // Play on a song that is playing starts it over, as in a classic skin.
     assert!(asked(&harness, |action| matches!(action, Action::Seek(0))));
     assert!(asked(&harness, |action| matches!(

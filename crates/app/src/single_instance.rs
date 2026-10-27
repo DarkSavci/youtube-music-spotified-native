@@ -98,16 +98,15 @@ mod tests {
     use std::sync::mpsc;
 
     use super::*;
+    use crate::scratch::Scratch;
 
-    fn scratch(name: &str) -> io::Result<PathBuf> {
-        let dir = std::env::temp_dir().join(format!("spotified-{name}-{}", std::process::id()));
-        std::fs::create_dir_all(&dir)?;
-        Ok(dir.join("instance.lock"))
+    fn scratch(name: &str) -> Scratch {
+        Scratch::folder(&format!("spotified-{name}-{}", std::process::id())).at("instance.lock")
     }
 
     #[test]
     fn a_second_copy_is_turned_away_until_the_first_ends() -> io::Result<()> {
-        let lock_file = scratch("lock")?;
+        let lock_file = scratch("lock");
         let first = acquire(&lock_file)?;
         assert!(matches!(first, Acquired::First(_)));
         assert!(matches!(acquire(&lock_file)?, Acquired::AlreadyRunning));
@@ -119,7 +118,7 @@ mod tests {
 
     #[test]
     fn a_second_launch_asks_the_first_to_show_itself() -> io::Result<()> {
-        let lock_file = scratch("show")?;
+        let lock_file = scratch("show");
         let Acquired::First(first) = acquire(&lock_file)? else {
             return Err(io::Error::other("the lock was already held"));
         };

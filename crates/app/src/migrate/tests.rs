@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 use super::leveldb::tests::{log_file, scratch};
 use super::*;
+use crate::scratch::Scratch;
 
 /// The id of the made-up profile's second account.
 pub const SECOND: &str = "0f0f0f0f-1111-2222-3333-444444444444";
@@ -82,8 +83,8 @@ pub fn write_song(folder: &Path, id: &str, bytes: usize, used_at: &str) {
 /// A profile as the Electron app leaves one: Ada, the first account, in
 /// the root and in use; Grace in a folder of her own, signed out; songs,
 /// preferences and the mini player's place.
-pub fn old_profile(name: &str) -> PathBuf {
-    let root = scratch(name).join("Spotifier");
+pub fn old_profile(name: &str) -> Scratch {
+    let root = scratch(name).at("Spotifier");
     let accounts = format!(
         r#"{{"version":1,"active":"aaaaaaaa-0000-0000-0000-000000000001","accounts":[
         {{"id":"aaaaaaaa-0000-0000-0000-000000000001","name":"Ada","legacy":true,"channel":"",

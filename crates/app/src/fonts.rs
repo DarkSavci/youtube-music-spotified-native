@@ -171,6 +171,7 @@ mod map {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scratch::Scratch;
 
     #[test]
     fn a_folder_with_no_fonts_gives_none_and_says_nothing() {
@@ -180,11 +181,9 @@ mod tests {
 
     #[test]
     fn a_file_that_is_empty_or_not_there_is_not_a_font() {
-        let folder = std::env::temp_dir().join(format!("spotified-fonts-{}", std::process::id()));
-        std::fs::create_dir_all(&folder).expect("a folder");
+        let folder = Scratch::folder(&format!("spotified-fonts-{}", std::process::id()));
         std::fs::write(folder.join("segoeui.ttf"), b"").expect("an empty file");
         assert!(load(&folder).is_empty());
-        let _ = std::fs::remove_dir_all(&folder);
     }
 
     #[cfg(windows)]

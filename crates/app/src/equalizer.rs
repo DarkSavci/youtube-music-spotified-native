@@ -258,12 +258,11 @@ mod tests {
     use std::io;
 
     use super::*;
+    use crate::scratch::Scratch;
     use crate::settings;
 
-    fn scratch(name: &str) -> io::Result<std::path::PathBuf> {
-        let dir = std::env::temp_dir().join(format!("spotified-eq-{name}-{}", std::process::id()));
-        std::fs::create_dir_all(&dir)?;
-        Ok(dir.join("settings.json"))
+    fn scratch(name: &str) -> Scratch {
+        Scratch::folder(&format!("spotified-eq-{name}-{}", std::process::id())).at("settings.json")
     }
 
     #[test]
@@ -336,7 +335,7 @@ mod tests {
 
     #[test]
     fn the_equalizer_and_its_saved_curves_come_back() -> io::Result<()> {
-        let path = scratch("roundtrip")?;
+        let path = scratch("roundtrip");
         let settings = Settings {
             equalizer_on: true,
             equalizer: PRESETS[9].1,
@@ -364,7 +363,7 @@ mod tests {
     #[test]
     fn a_profile_from_before_keeps_its_curve_and_sounds_as_it_did() -> io::Result<()> {
         // What 0.4.3 wrote: the switch and the ten bands, nothing else.
-        let path = scratch("before")?;
+        let path = scratch("before");
         let before = "{\"equalizer_on\": true, \
                       \"equalizer\": [6.0, 5.0, 4.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]}";
         std::fs::write(&path, before)?;

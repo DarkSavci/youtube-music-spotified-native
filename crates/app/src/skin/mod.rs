@@ -323,6 +323,7 @@ static BUILTIN: LazyLock<Arc<Skin>> = LazyLock::new(|| {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scratch::Scratch;
 
     /// A one-colour PNG of the given size.
     fn png(width: u32, height: u32, color: [u8; 3]) -> Vec<u8> {
@@ -501,32 +502,29 @@ mod tests {
 
     #[test]
     fn a_folder_of_bitmaps_is_a_skin_too() {
-        let dir = std::env::temp_dir().join(format!("spotified-skin-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = Scratch::folder(&format!("spotified-skin-{}", std::process::id()));
         std::fs::write(dir.join("MAIN.BMP"), png(275, 116, [7, 7, 7])).unwrap();
         std::fs::write(dir.join("readme.txt"), b"a folder skin").unwrap();
         let skin = Skin::load(&dir).unwrap();
-        std::fs::remove_dir_all(&dir).unwrap();
         assert_eq!(skin.name, dir.file_name().unwrap().to_string_lossy());
         assert_eq!(skin.sheet(Sheet::Main).pixel(1, 1), Some([7, 7, 7, 255]));
     }
 
     #[test]
     fn a_folder_skin_is_read_from_the_folder_it_was_unpacked_into() {
-        let dir = std::env::temp_dir().join(format!("spotified-nested-{}", std::process::id()));
+        let dir = Scratch::folder(&format!("spotified-nested-{}", std::process::id()));
         let inner = dir.join("Some Skin");
         std::fs::create_dir_all(&inner).unwrap();
         std::fs::write(inner.join("MAIN.BMP"), png(275, 116, [9, 9, 9])).unwrap();
         std::fs::write(inner.join("pledit.txt"), b"[Text]\nNormal=#010203\n").unwrap();
         let skin = Skin::load(&dir).unwrap();
-        std::fs::remove_dir_all(&dir).unwrap();
         assert_eq!(skin.sheet(Sheet::Main).pixel(1, 1), Some([9, 9, 9, 255]));
         assert_eq!(skin.playlist.normal, [1, 2, 3]);
     }
 
     #[test]
     fn shallower_skin_files_win_across_sibling_subtrees() {
-        let dir = std::env::temp_dir().join(format!("spotified-skin-depth-{}", std::process::id()));
+        let dir = Scratch::folder(&format!("spotified-skin-depth-{}", std::process::id()));
         for folder in ["a/nested", "b", "c"] {
             std::fs::create_dir_all(dir.join(folder)).unwrap();
         }
@@ -538,13 +536,12 @@ mod tests {
         std::fs::write(dir.join("main.bmp"), png(275, 116, [4, 4, 4])).unwrap();
         let skin = Skin::load(&dir).unwrap();
         assert_eq!(skin.sheet(Sheet::Main).pixel(1, 1), Some([4, 4, 4, 255]));
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn unpacked_skin_search_stops_at_its_depth_limit() {
-        let dir = std::env::temp_dir().join(format!("spotified-skin-limit-{}", std::process::id()));
-        let mut inner = dir.clone();
+        let dir = Scratch::folder(&format!("spotified-skin-limit-{}", std::process::id()));
+        let mut inner = dir.to_path_buf();
         for _ in 0..=MAX_SKIN_DEPTH {
             inner = inner.join("nested");
         }
@@ -558,13 +555,12 @@ mod tests {
         .unwrap();
         let skin = Skin::load(&dir).unwrap();
         assert_eq!(skin.sheet(Sheet::Main).pixel(1, 1), Some([4, 5, 6, 255]));
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[cfg(unix)]
     #[test]
     fn unpacked_skin_search_does_not_follow_file_or_directory_links() {
-        let dir = std::env::temp_dir().join(format!("spotified-skin-links-{}", std::process::id()));
+        let dir = Scratch::folder(&format!("spotified-skin-links-{}", std::process::id()));
         let chosen = dir.join("chosen");
         let outside = dir.join("outside");
         std::fs::create_dir_all(&chosen).unwrap();
@@ -573,7 +569,6 @@ mod tests {
         std::os::unix::fs::symlink(&outside, chosen.join("linked-folder")).unwrap();
         std::os::unix::fs::symlink(outside.join("main.bmp"), chosen.join("main.bmp")).unwrap();
         assert!(matches!(Skin::load(&chosen), Err(SkinError::Empty)));
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

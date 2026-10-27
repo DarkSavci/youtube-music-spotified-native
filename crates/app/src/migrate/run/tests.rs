@@ -9,6 +9,7 @@ use crate::migrate::discover::discover;
 use crate::migrate::leveldb::tests::scratch;
 use crate::migrate::tests::{SECOND, old_profile};
 use crate::migrate::{History, Mark, Record};
+use crate::scratch::Scratch;
 
 /// A core that merges five plays from every database, and has room for
 /// two songs.
@@ -68,19 +69,21 @@ fn history(_: &Path) -> Result<History, String> {
 }
 
 /// A job to bring `kinds` from a made-up profile into an empty one of
-/// this app's, in which `accounts` are already signed in.
-fn job(name: &str, kinds: Kinds, accounts: Accounts) -> Job {
+/// this app's, in which `accounts` are already signed in; with the two
+/// profiles' folders, which go when the test does.
+fn job(name: &str, kinds: Kinds, accounts: Accounts) -> (Job, [Scratch; 2]) {
     let old = old_profile(name);
     let root = scratch(&format!("{name}-native"));
     let found = discover(&old, &accounts, &Record::default(), &history).expect("a profile");
-    Job {
+    let job = Job {
         found,
         kinds,
         live_database: root.join(DATABASE),
-        root,
+        root: root.to_path_buf(),
         accounts,
         cache_max_mb: 2048,
-    }
+    };
+    (job, [old, root])
 }
 
 const ALL: Kinds = Kinds {
@@ -99,7 +102,7 @@ fn said(outcome: &Outcome, mark: Mark, part: &str) -> bool {
 
 #[test]
 fn a_first_run_signs_the_account_in_and_gives_it_its_history() {
-    let job = job("run-first", ALL, Accounts::default());
+    let (job, _scratch) = job("run-first", ALL, Accounts::default());
     let core = Noted::default();
     let steps = RefCell::new(Vec::new());
     let outcome = run(&job, &core, &|progress| steps.borrow_mut().push(progress));
@@ -164,7 +167,7 @@ fn an_account_already_here_keeps_its_sign_in_and_takes_the_history_live() {
     ada.legacy = true;
     ada.avatar_url = "https://example.com/ada.png".into();
     accounts.add(ada.clone());
-    let job = job("run-again", ALL, accounts);
+    let (job, _scratch) = job("run-again", ALL, accounts);
     let core = Noted::default();
     let outcome = run(&job, &core, &|_| {});
 
@@ -193,7 +196,7 @@ fn only_what_is_ticked_is_brought() {
         history: true,
         ..Kinds::default()
     };
-    let job = job("run-history-only", kinds, Accounts::default());
+    let (job, _scratch) = job("run-history-only", kinds, Accounts::default());
     let core = Noted::default();
     let outcome = run(&job, &core, &|_| {});
     // No sign-in was asked for, so there is no account to keep it in.
@@ -211,7 +214,7 @@ fn a_database_that_fails_is_said_and_does_not_stop_the_rest() {
     let mut accounts = Accounts::default();
     let grace = new_account("Grace");
     accounts.keep(grace.clone());
-    let mut job = job("run-failed", ALL, accounts);
+    let (mut job, _scratch) = job("run-failed", ALL, accounts);
     job.found.accounts[1].here = Some(grace.id);
     let outcome = run(&job, &Noted::default(), &|_| {});
     assert!(said(
@@ -230,7 +233,7 @@ fn songs_wait_for_a_core_that_is_running() {
         songs: true,
         ..Kinds::default()
     };
-    let job = job("run-stopped", kinds, Accounts::default());
+    let (job, _scratch) = job("run-stopped", kinds, Accounts::default());
     let core = Noted {
         stopped: true,
         ..Noted::default()
@@ -260,7 +263,7 @@ fn signed_out_listening_goes_to_the_root_unless_an_account_lives_there() {
         found: discover(&old, &accounts, &Record::default(), &history).expect("a profile"),
         kinds,
         live_database: root.join(DATABASE),
-        root: root.clone(),
+        root: root.to_path_buf(),
         accounts,
         cache_max_mb: 2048,
     };
@@ -292,7 +295,7 @@ fn signed_out_listening_goes_to_the_root_unless_an_account_lives_there() {
 
 #[test]
 fn a_run_leaves_the_old_profile_as_it_was() {
-    let job = job("run-untouched", ALL, Accounts::default());
+    let (job, _scratch) = job("run-untouched", ALL, Accounts::default());
     let before = sizes(&job.found.root);
     run(&job, &Noted::default(), &|_| {});
     assert_eq!(sizes(&job.found.root), before);
@@ -377,7 +380,7 @@ const BAND: &str = "bbbbbbbb-0000-0000-0000-00000000000b";
 
 /// The made-up profile, with Ada having acted as her band's channel too:
 /// the list names the channel and the folder its database is in.
-fn old_profile_with_a_channel(name: &str) -> PathBuf {
+fn old_profile_with_a_channel(name: &str) -> Scratch {
     let old = old_profile(name);
     let list = format!(
         r#"{{"version":1,"active":"aaaaaaaa-0000-0000-0000-000000000001","accounts":[
@@ -396,21 +399,23 @@ fn old_profile_with_a_channel(name: &str) -> PathBuf {
     old
 }
 
-fn history_job(old: &Path, name: &str, accounts: Accounts) -> Job {
+/// With this app's profile's folder, which goes when the test does.
+fn history_job(old: &Path, name: &str, accounts: Accounts) -> (Job, Scratch) {
     let root = scratch(&format!("{name}-native"));
     let kinds = Kinds {
         sign_in: true,
         history: true,
         ..Kinds::default()
     };
-    Job {
+    let job = Job {
         found: discover(old, &accounts, &Record::default(), &history).expect("a profile"),
         kinds,
         live_database: root.join(DATABASE),
-        root,
+        root: root.to_path_buf(),
         accounts,
         cache_max_mb: 2048,
-    }
+    };
+    (job, root)
 }
 
 /// Where the database at `from` went.
@@ -423,7 +428,7 @@ fn went(core: &Mapped, from: &Path) -> PathBuf {
 #[test]
 fn each_channels_history_goes_to_that_channel_here_and_not_into_one() {
     let old = old_profile_with_a_channel("run-channels");
-    let job = history_job(&old, "run-channels", Accounts::default());
+    let (job, _scratch) = history_job(&old, "run-channels", Accounts::default());
     let core = Mapped::default();
     let outcome = run(&job, &core, &|_| {});
 
@@ -463,7 +468,7 @@ fn an_account_here_keeps_its_own_folder_for_a_channel_it_knows() {
     }];
     let mut accounts = Accounts::default();
     accounts.keep(ada.clone());
-    let mut job = history_job(&old, "run-known-channel", accounts);
+    let (mut job, _scratch) = history_job(&old, "run-known-channel", accounts);
     job.found.accounts[0].here = Some(ada.id.clone());
     let core = Mapped::default();
     let outcome = run(&job, &core, &|_| {});
@@ -484,7 +489,7 @@ fn a_channel_the_account_here_has_no_folder_for_takes_the_old_one_and_the_list_i
     let ada = new_account("Ada");
     let mut accounts = Accounts::default();
     accounts.keep(ada.clone());
-    let mut job = history_job(&old, "run-new-channel", accounts);
+    let (mut job, _scratch) = history_job(&old, "run-new-channel", accounts);
     job.found.accounts[0].here = Some(ada.id.clone());
     let core = Mapped::default();
     let outcome = run(&job, &core, &|_| {});
@@ -518,7 +523,7 @@ fn an_account_here_that_still_keeps_one_database_takes_all_of_it_there() {
     };
     let mut accounts = Accounts::default();
     accounts.keep(ada.clone());
-    let mut job = history_job(&old, "run-one-database", accounts);
+    let (mut job, _scratch) = history_job(&old, "run-one-database", accounts);
     job.found.accounts[0].here = Some(ada.id.clone());
     let core = Mapped::default();
     run(&job, &core, &|_| {});

@@ -297,6 +297,7 @@ fn write_credentials(path: &Path, cookie_header: &str) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scratch::Scratch;
 
     fn cookie(name: &str, value: &str, domain: &str) -> Cookie {
         Cookie {
@@ -346,10 +347,8 @@ mod tests {
     #[ignore = "starts the installed browser; run with --ignored"]
     fn a_fresh_profile_can_be_asked_for_its_cookies() {
         let browser = browser().expect("Chrome or Edge");
-        let profile = std::env::temp_dir().join("spotified-signin-test");
-        let _ = std::fs::remove_dir_all(&profile);
+        let profile = Scratch::path("spotified-signin-test");
         let cookies = read_cookies(&browser, &profile).expect("a reply");
         assert_eq!(cookie_header(&cookies), None);
-        let _ = std::fs::remove_dir_all(&profile);
     }
 }

@@ -50,11 +50,11 @@ fn read(credentials: &Path) -> io::Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scratch::Scratch;
 
-    fn scratch(name: &str, contents: &str) -> io::Result<std::path::PathBuf> {
-        let dir = std::env::temp_dir().join(format!("spotified-{name}-{}", std::process::id()));
-        std::fs::create_dir_all(&dir)?;
-        let path = dir.join("credentials.json");
+    fn scratch(name: &str, contents: &str) -> io::Result<Scratch> {
+        let path = Scratch::folder(&format!("spotified-{name}-{}", std::process::id()))
+            .at("credentials.json");
         std::fs::write(&path, contents)?;
         Ok(path)
     }
