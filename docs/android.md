@@ -645,11 +645,16 @@ Checked on the emulator, signed in:
   player, and the system's media controls with like and shuffle;
 - the native resolver: songs start in about 0.2 s;
 - `connectedDebugAndroidTest`: what Android Auto asks of the app through a
-  media browser (the tree, search, a song chosen in a list).
+  media browser (the tree, search, a song chosen in a list); five of five
+  pass;
+- a release build, shrunk by R8: 49 MB with both ABIs, starts, browses and
+  plays, with the core, Python and yt-dlp intact;
+- the desktop app, rebuilt on the changed core: clippy, 1,001 Rust tests,
+  and a run that signs in and plays at once.
 
 Not yet checked by hand: Android Auto in a car or the Desktop Head Unit
 (it needs the Android Auto app, from the Play Store), a watch, Bluetooth
-buttons, the Assistant's voice, a release build on a phone, Last.fm with a
+buttons, the Assistant's voice, a phone (only the emulator), Last.fm with a
 real key, the importer against each service, and a release published for
 the updater. Word-by-word lyrics wait on the core: its lyrics carry lines,
 not words.
