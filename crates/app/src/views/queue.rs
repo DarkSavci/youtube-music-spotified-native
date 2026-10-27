@@ -20,6 +20,8 @@ const ROW_HEIGHT: f32 = 56.0;
 const COVER: f32 = 40.0;
 /// How much of a played song's colour is left: it is behind, not gone.
 const PLAYED: f32 = 0.6;
+/// How strongly a row is drawn while it is carried elsewhere in the queue.
+const CARRIED: f32 = 0.35;
 /// How often the equalizer on the playing row is redrawn.
 const EQUALIZER_REDRAW: Duration = Duration::from_millis(125);
 
@@ -73,7 +75,8 @@ pub fn show(state: &State, ui: &mut Ui, actions: &mut Vec<Action>, most: f32) {
             }
         });
     // Songs dropped anywhere on the panel join the end of the queue.
-    if let Some(tracks) = drag::target(state, ui, &panel.response) {
+    let hint = || "Add to queue".to_owned();
+    if let Some(tracks) = drag::target(state, ui, &panel.response, hint) {
         actions.push(Action::AddToQueue(tracks));
     }
 }
@@ -194,6 +197,21 @@ fn row(
         response.dnd_set_drag_payload(Carried { from: index });
     }
     drop_target(state, ui, actions, &response, index);
+    // The row being moved stays where it was, faded, while its card goes
+    // with the pointer.
+    let carried = egui::DragAndDrop::payload::<Carried>(ui.ctx())
+        .is_some_and(|carried| carried.from == index);
+    if carried {
+        drag::show(
+            ui.ctx(),
+            drag::Card {
+                art: track.artwork.clone(),
+                title: track.title.clone(),
+                line: track.artist_names(),
+                count: 1,
+            },
+        );
+    }
     if !ui.is_rect_visible(rect) {
         return;
     }
@@ -205,6 +223,7 @@ fn row(
         .rect_filled(rect, theme::RADIUS_ROW, widgets::wash(ui, lift));
     // A played song is dimmed until the pointer brings it back.
     let strength = match place {
+        _ if carried => CARRIED,
         Place::Played => PLAYED + (1.0 - PLAYED) * lift,
         Place::Playing | Place::Upcoming => 1.0,
     };
@@ -378,8 +397,12 @@ fn drop_target(
         } else {
             response.rect.top()
         };
-        let line = response.rect.shrink2(vec2(8.0, 0.0)).x_range();
-        ui.painter().hline(line, y, (2.0, state.palette.accent));
+        // A ring where the line starts, as a pin for the eye.
+        let accent = state.palette.accent;
+        let ring = pos2(response.rect.left() + 12.0, y);
+        let line = egui::Rangef::new(ring.x + 4.0, response.rect.right() - 8.0);
+        ui.painter().circle_stroke(ring, 4.0, (2.0, accent));
+        ui.painter().hline(line, y, (2.0, accent));
     }
     if let Some(carried) = response.dnd_release_payload::<Carried>() {
         let to = landing(carried.from, index, after);

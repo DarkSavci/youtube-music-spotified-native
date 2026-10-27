@@ -250,7 +250,8 @@ pub fn rows<T: Borrow<Track>>(
         };
         let (response, more) = row.show(state, ui, actions);
         // A selected row carries the whole selection; any other, itself.
-        drag::start(&response, || {
+        let selection = row.selected.then_some(list_id);
+        drag::start(&response, selection, || {
             if row.selected {
                 state
                     .selection
@@ -262,6 +263,9 @@ pub fn rows<T: Borrow<Track>>(
                 vec![row.track.clone()]
             }
         });
+        if drag::carries(ui, &response, list_id, row.selected) {
+            drag::left_behind(state, ui, row.rect);
+        }
         // The same menu from the right button and from the row's own.
         let palette = &state.palette;
         menu::context(&response, palette, |menu| {

@@ -301,7 +301,7 @@ fn item_interact(
     let (page, ..) = item_kind(item);
     // Songs dropped on Liked Music are liked; on a playlist, added to it.
     if item.kind == LibraryKind::Playlist
-        && let Some(tracks) = drag::target(state, ui, response)
+        && let Some(tracks) = drag::target(state, ui, response, || format!("Add to {}", item.title))
     {
         actions.push(if item.id == LIKED_PLAYLIST {
             Action::LikeAll(tracks)
