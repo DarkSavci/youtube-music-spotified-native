@@ -108,6 +108,10 @@ func (c *Chain) Resolve(ctx context.Context, videoID string) (domain.Stream, Qua
 	if c.Fallback == nil {
 		return domain.Stream{}, Quality{}, err
 	}
+	// Not a failure: the preferred adapter does not serve this listener.
+	if errors.Is(err, ErrNotApplicable) {
+		return c.Fallback.Resolve(ctx, videoID)
+	}
 
 	c.Log.Warn("preferred resolver failed; falling back",
 		"preferred", name(c.Preferred), "fallback", name(c.Fallback), "err", err)

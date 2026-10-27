@@ -153,3 +153,25 @@ func TestChainTriesThePreferredAdapterAgainLater(t *testing.T) {
 		t.Fatalf("after the window resolved via %q, want yt-dlp again", got.URL)
 	}
 }
+
+// An adapter that does not serve this listener hands over quietly and is
+// asked again next time: it is not broken.
+func TestChainNotApplicableFallsBackWithoutLatching(t *testing.T) {
+	pref := NewFake()
+	pref.FailFor["a"] = ErrNotApplicable
+	pref.FailFor["b"] = ErrNotApplicable
+	fb := NewFake()
+	c := NewChain(pref, fb, nil)
+
+	for _, id := range []string{"a", "b"} {
+		if _, _, err := c.Resolve(context.Background(), id); err != nil {
+			t.Fatalf("%s: %v", id, err)
+		}
+	}
+	if len(pref.Calls) != 2 || len(fb.Calls) != 2 {
+		t.Errorf("want both asked twice, got preferred %v, fallback %v", pref.Calls, fb.Calls)
+	}
+	if c.Name() != pref.Name() {
+		t.Errorf("the chain latched onto the fallback: %s", c.Name())
+	}
+}

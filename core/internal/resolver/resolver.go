@@ -41,6 +41,12 @@ var (
 	// ErrNoAudio means formats came back but none were usable. Usually a sign
 	// the upstream client context has changed.
 	ErrNoAudio = errors.New("resolver: no usable audio format")
+
+	// ErrNotApplicable means the adapter cannot serve this listener at all,
+	// for a reason that is not a fault: the native resolver serves Premium
+	// accounts only. A chain hands the track to its fallback without
+	// counting it against the adapter.
+	ErrNotApplicable = errors.New("resolver: not for this account")
 )
 
 // Quality ranks the audio a Stream carries, for the badge in the transport bar.

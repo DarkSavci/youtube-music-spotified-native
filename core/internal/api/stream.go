@@ -57,6 +57,10 @@ type resolvedEntry struct {
 	stream  domain.Stream
 	quality resolver.Quality
 	at      time.Time
+	// signedIn is whether it was resolved with the account. A URL resolved
+	// signed out is for the standard tiers, and reusing it after a sign-in
+	// kept a Premium listener on them until it expired, hours later.
+	signedIn bool
 }
 
 // storedEntry is resolvedEntry as it is written to disk.
@@ -64,6 +68,10 @@ type storedEntry struct {
 	Stream  domain.Stream    `json:"stream"`
 	Quality resolver.Quality `json:"quality"`
 	At      time.Time        `json:"at"`
+	// Absent from entries written before it existed, which were the
+	// signed-out kind as often as not; read as false, they are never
+	// reused signed in.
+	SignedIn bool `json:"signedIn"`
 }
 
 // URLStore keeps resolutions across restarts. The control store implements
@@ -134,10 +142,11 @@ func (s *Server) resolveSpeculative(ctx context.Context, videoID string) (resolv
 }
 
 func (s *Server) resolve(ctx context.Context, videoID string, speculative bool) (resolvedEntry, error) {
-	if e, ok := s.streams.get(videoID); ok {
+	signedIn := s.signedIn()
+	if e, ok := s.streams.get(videoID); ok && e.signedIn == signedIn {
 		return e, nil
 	}
-	if e, ok := s.storedResolution(ctx, videoID); ok {
+	if e, ok := s.storedResolution(ctx, videoID); ok && e.signedIn == signedIn {
 		s.streams.put(videoID, e)
 		return e, nil
 	}
@@ -234,7 +243,7 @@ func (s *Server) resolve(ctx context.Context, videoID string, speculative bool) 
 		"took", time.Since(started).Round(time.Millisecond), "err", err)
 
 	if err == nil {
-		f.entry = resolvedEntry{stream: stream, quality: quality, at: time.Now()}
+		f.entry = resolvedEntry{stream: stream, quality: quality, at: time.Now(), signedIn: signedIn}
 		s.streams.put(videoID, f.entry)
 		s.storeResolution(videoID, f.entry)
 		s.lastFailure.Delete(videoID)
@@ -253,6 +262,11 @@ func (s *Server) resolve(ctx context.Context, videoID string, speculative bool) 
 	return f.entry, f.err
 }
 
+// signedIn is whether resolutions made now are made with the account.
+func (s *Server) signedIn() bool {
+	return s.deps.Account != nil && s.deps.Account.SignedIn()
+}
+
 // storedResolution reads a resolution saved by an earlier run.
 func (s *Server) storedResolution(ctx context.Context, videoID string) (resolvedEntry, bool) {
 	if s.deps.URLs == nil {
@@ -266,7 +280,7 @@ func (s *Server) storedResolution(ctx context.Context, videoID string) (resolved
 	if json.Unmarshal(raw, &st) != nil {
 		return resolvedEntry{}, false
 	}
-	e := resolvedEntry{stream: st.Stream, quality: st.Quality, at: st.At}
+	e := resolvedEntry{stream: st.Stream, quality: st.Quality, at: st.At, signedIn: st.SignedIn}
 	return e, e.usable(time.Now())
 }
 
@@ -274,7 +288,7 @@ func (s *Server) storeResolution(videoID string, e resolvedEntry) {
 	if s.deps.URLs == nil || e.stream.ExpiresAt.IsZero() {
 		return
 	}
-	raw, err := json.Marshal(storedEntry{Stream: e.stream, Quality: e.quality, At: e.at})
+	raw, err := json.Marshal(storedEntry{Stream: e.stream, Quality: e.quality, At: e.at, SignedIn: e.signedIn})
 	if err != nil {
 		return
 	}

@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"spotifier/internal/account"
 	"spotifier/internal/api"
 	"spotifier/internal/domain"
 	"spotifier/internal/obs"
@@ -287,5 +288,35 @@ func TestStreamReportsRateLimitingDistinctly(t *testing.T) {
 					resp.StatusCode)
 			}
 		})
+	}
+}
+
+// A URL resolved signed out is for the standard tiers. After a sign-in the
+// track is resolved again, with the account, rather than played from it.
+func TestSignInDoesNotReuseASignedOutResolution(t *testing.T) {
+	res := &rotatingResolver{base: "http://upstream.invalid"}
+	acct := account.Static(account.State{})
+	s := serverWith(api.Deps{Resolver: res, Account: acct})
+
+	resolve := func() {
+		t.Helper()
+		if rec := do(t, s, http.MethodGet, "/v1/resolve/abc"); rec.Code != http.StatusOK {
+			t.Fatalf("resolve answered %d: %s", rec.Code, rec.Body)
+		}
+	}
+	resolve()
+	resolve()
+	if n := res.calls.Load(); n != 1 {
+		t.Fatalf("a repeat should reuse the resolution; resolved %d times", n)
+	}
+
+	acct.Set(account.State{Identity: &historyIdentity{}})
+	resolve()
+	if n := res.calls.Load(); n != 2 {
+		t.Errorf("signed in, the signed-out resolution was reused; resolved %d times", n)
+	}
+	resolve()
+	if n := res.calls.Load(); n != 2 {
+		t.Errorf("the signed-in resolution should be reused; resolved %d times", n)
 	}
 }
