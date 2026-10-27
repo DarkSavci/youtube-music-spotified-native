@@ -173,9 +173,11 @@ pub enum Command {
         playing: bool,
     },
     /// Stop following, carrying on with the room's queue or going back to
-    /// the queue from before it.
+    /// the queue from before it. With `then_own_queue`, the song playing
+    /// carries on and the queue from before the room comes after it.
     LeaveRoom {
         keep_queue: bool,
+        then_own_queue: bool,
     },
     /// Add tracks to the queue: at this place, or at the end.
     Enqueue {
@@ -238,8 +240,15 @@ impl Command {
                 "PositionMs": position_ms,
                 "Playing": playing,
             }),
-            Command::LeaveRoom { keep_queue } => {
-                json!({ "Kind": "leave_room", "KeepQueue": keep_queue })
+            Command::LeaveRoom {
+                keep_queue,
+                then_own_queue,
+            } => {
+                json!({
+                    "Kind": "leave_room",
+                    "KeepQueue": keep_queue,
+                    "ThenOwnQueue": then_own_queue,
+                })
             }
             Command::Move { from, to } => json!({ "Kind": "move", "From": from, "To": to }),
             // The core reads a place outside the queue as "at the end".

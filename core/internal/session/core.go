@@ -187,6 +187,9 @@ func (c *Core) Apply(cmd Command) (Reject, []LogEntry) {
 				// Carry on with the room's queue: same song, same position,
 				// still playing if it was. Nothing restarts, so the epoch
 				// stays and the engine keeps its audio.
+				if cmd.ThenOwnQueue {
+					c.ownQueueAfterRoom()
+				}
 				c.beforeRoom = nil
 				c.beforeRoomUnshuffled = nil
 				// The kept queue is in room order. Honour the shuffle
@@ -1140,4 +1143,30 @@ func (c *Core) switchVariant(cmd Command) (Reject, []LogEntry) {
 		c.state.State = domain.StatePaused
 	}
 	return RejectNone, logs
+}
+
+/*
+ownQueueAfterRoom keeps the song the room is playing and puts the listener's
+own queue after it, from the song the room interrupted, in place of the rest
+of the room's queue. Only the song playing is kept: nothing restarts, so the
+epoch stays. With no queue of their own to go back to, the room's stays.
+*/
+func (c *Core) ownQueueAfterRoom() {
+	if c.beforeRoom == nil {
+		return
+	}
+	before := c.beforeRoom.Queue
+	playing := c.state.Queue.Current()
+	if playing == nil || before.Index < 0 || before.Index >= len(before.Items) {
+		return
+	}
+	items := make([]domain.Track, 0, len(before.Items)-before.Index+1)
+	items = append(items, *playing)
+	for _, t := range before.Items[before.Index:] {
+		// The song playing is not lined up to play again straight after.
+		if t.ID != playing.ID || len(items) > 1 {
+			items = append(items, t)
+		}
+	}
+	c.state.Queue = domain.Queue{Items: items, Index: 0, Origin: before.Origin}
 }

@@ -27,6 +27,8 @@ fn heard(state: &mut State, room: Room) -> Vec<Effect> {
 /// In a room led by "me", with a guest called Bob.
 pub(super) fn leading() -> State {
     let mut state = in_room();
+    // The leader made the room.
+    state.together.created = true;
     heard(&mut state, with_guest(room(1)));
     state.toasts.clear();
     state
@@ -36,6 +38,7 @@ pub(super) fn leading() -> State {
 fn as_guest(mode: Mode) -> State {
     let mut state = leading();
     state.together.me = "bob".into();
+    state.together.created = false;
     let mut room = with_guest(room(2));
     room.mode = mode;
     heard(&mut state, room);
@@ -373,7 +376,10 @@ fn leaving_as_the_leader_names_who_leads_next() {
         [
             Effect::TogetherHandOver("bob".into()),
             Effect::TogetherDisconnect,
-            Effect::Command(Command::LeaveRoom { keep_queue: true })
+            Effect::Command(Command::LeaveRoom {
+                keep_queue: true,
+                then_own_queue: false
+            })
         ]
     );
     assert_eq!(state.together.phase, Phase::Idle);
@@ -390,7 +396,10 @@ fn leaving_without_a_choice_lets_the_relay_pick_and_staying_closes_the_panel() {
         ask(&mut state, Ask::Leave),
         [
             Effect::TogetherDisconnect,
-            Effect::Command(Command::LeaveRoom { keep_queue: true })
+            Effect::Command(Command::LeaveRoom {
+                keep_queue: true,
+                then_own_queue: false
+            })
         ]
     );
 }

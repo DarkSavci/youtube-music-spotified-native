@@ -238,3 +238,41 @@ func TestRoomRepeatOneRestartsAnEndedEntry(t *testing.T) {
 		t.Fatalf("repeat one did not restart: %+v", c.State())
 	}
 }
+
+func TestAGuestLeavingKeepsTheSongThenTheirOwnQueue(t *testing.T) {
+	c, _ := newCore(t)
+	own := tracks(4)
+	playN(t, c, 4)
+	// They were on their second song when they joined.
+	c.Apply(Command{Kind: CmdNext})
+	room := tracks(5)
+	for i := range room {
+		room[i].ID = "room-" + room[i].ID
+	}
+	c.Apply(Command{Kind: CmdFollow, Tracks: room, StartIndex: 2, ExpectedID: "entry", Playing: true})
+	epoch := c.State().Epoch
+	roomSong := c.State().Queue.Current().ID
+	c.Apply(Command{Kind: CmdLeaveRoom, KeepQueue: true, ThenOwnQueue: true})
+	s := c.State()
+	if s.Queue.Current().ID != roomSong || s.Epoch != epoch || s.State != domain.StatePlaying {
+		t.Fatalf("the room's song did not play on: %+v", s)
+	}
+	want := []string{roomSong, own[1].ID, own[2].ID, own[3].ID}
+	if len(s.Queue.Items) != len(want) {
+		t.Fatalf("queue after leaving has %d songs, want %d", len(s.Queue.Items), len(want))
+	}
+	for i, id := range want {
+		if s.Queue.Items[i].ID != id {
+			t.Fatalf("song %d is %s, want %s", i, s.Queue.Items[i].ID, id)
+		}
+	}
+}
+
+func TestAGuestWithNoQueueOfTheirOwnKeepsTheRooms(t *testing.T) {
+	c, _ := newCore(t)
+	c.Apply(Command{Kind: CmdFollow, Tracks: tracks(5), StartIndex: 2, ExpectedID: "entry", Playing: true})
+	c.Apply(Command{Kind: CmdLeaveRoom, KeepQueue: true, ThenOwnQueue: true})
+	if s := c.State(); len(s.Queue.Items) != 5 || s.Queue.Index != 2 {
+		t.Fatalf("room queue not kept for a guest with none of their own: %+v", s.Queue)
+	}
+}

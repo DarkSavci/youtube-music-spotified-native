@@ -53,6 +53,11 @@ type Command struct {
 	// KeepQueue makes CmdLeaveRoom carry on with the room's queue instead of
 	// bringing back the queue from before the room.
 	KeepQueue bool
+	// ThenOwnQueue, with KeepQueue, carries on with the song the room was
+	// playing and then the listener's own queue from before the room, rather
+	// than the rest of the room's. A guest's queue is theirs; the room's was
+	// the leader's.
+	ThenOwnQueue bool
 
 	// Play
 	Tracks     []domain.Track

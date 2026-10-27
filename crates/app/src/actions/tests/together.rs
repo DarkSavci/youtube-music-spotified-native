@@ -188,7 +188,7 @@ fn a_room_made_while_music_plays_is_given_that_music_first() {
 }
 
 #[test]
-fn leaving_closes_the_line_and_keeps_the_rooms_queue_playing() {
+fn a_guest_leaving_closes_the_line_and_keeps_the_song_then_their_own_queue() {
     let mut state = in_room();
     hear(
         &mut state,
@@ -201,7 +201,10 @@ fn leaving_closes_the_line_and_keeps_the_rooms_queue_playing() {
         apply(&mut state, Action::TogetherLeave),
         [
             Effect::TogetherDisconnect,
-            Effect::Command(Command::LeaveRoom { keep_queue: true })
+            Effect::Command(Command::LeaveRoom {
+                keep_queue: true,
+                then_own_queue: true
+            })
         ]
     );
     assert_eq!(state.together.phase, Phase::Idle);

@@ -142,6 +142,10 @@ pub struct Together {
     /// When the player was last brought back to the room.
     pub corrected_at: Option<Instant>,
     pub seed: Seed,
+    /// This listener made the room, whose queue began as theirs. Leaving,
+    /// they carry on with it; a guest carries on with the song playing and
+    /// then their own queue.
+    pub created: bool,
     /// When the room was last told this player reached the song's end.
     pub ended_sent: Option<Instant>,
     /// The entry and song whose measured length the room has been told.

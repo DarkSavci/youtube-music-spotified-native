@@ -114,6 +114,7 @@ fn enter_room(state: &mut State, enter: Enter) -> Vec<Effect> {
         _ => Seed::None,
     };
     state.together.phase = Phase::Connecting;
+    state.together.created = matches!(enter, Enter::Create { .. });
     state.together.error = None;
     state.together.manage = None;
     let options = Options {
@@ -125,14 +126,19 @@ fn enter_room(state: &mut State, enter: Enter) -> Vec<Effect> {
     vec![Effect::SaveSettings, Effect::TogetherConnect(options)]
 }
 
-/// Leaves the room, or gives up entering one. The music carries on from
-/// the room's queue, now this player's own.
+/// Leaves the room, or gives up entering one. The song playing carries
+/// on; after it, the room's queue for whoever made the room, whose queue
+/// it began as, and their own queue from before the room for a guest.
 fn leave(state: &mut State, error: Option<String>) -> Vec<Effect> {
     let was_in_room = state.together.in_room();
+    let created = state.together.created;
     state.together.reset(error);
     let mut effects = vec![Effect::TogetherDisconnect];
     if was_in_room {
-        effects.push(Effect::Command(Command::LeaveRoom { keep_queue: true }));
+        effects.push(Effect::Command(Command::LeaveRoom {
+            keep_queue: true,
+            then_own_queue: !created,
+        }));
     }
     effects
 }
