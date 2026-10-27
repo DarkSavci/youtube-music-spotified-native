@@ -43,10 +43,7 @@ fn an_album_not_yet_read_is_read_first_and_then_looked_for() {
         &mut state,
         Action::ShareOn(Service::Deezer, Shared::Album("MPREb_1".into())),
     );
-    assert_eq!(
-        effects,
-        [Effect::Fetch(Request::Album("MPREb_1".into()))]
-    );
+    assert_eq!(effects, [Effect::Fetch(Request::Album("MPREb_1".into()))]);
     let album = Album {
         id: "MPREb_1".into(),
         title: "Discovery".into(),
@@ -70,7 +67,11 @@ fn an_album_not_yet_read_is_read_first_and_then_looked_for() {
     // Read again later, it is not looked for twice.
     let again = Response::Album("MPREb_1".into(), Ok(Album::default()));
     let effects = apply(&mut state, Action::Loaded(Box::new(again)));
-    assert!(!effects.iter().any(|effect| matches!(effect, Effect::FindOn(..))));
+    assert!(
+        !effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::FindOn(..)))
+    );
 }
 
 #[test]
