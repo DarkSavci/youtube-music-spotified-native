@@ -2,6 +2,13 @@
 
 Every release of Youtube Music Spotified Native, newest first.
 
+## 0.4.9 — 2026-10-27
+
+### New
+
+- Songs being dragged are shown on a card with their cover, title and artist, or how many there are. Over a playlist or the queue, it says what letting go there will do
+- The rows a drag was picked up from fade until it is let go, and a song being moved in the queue follows the pointer on the same card
+
 ## 0.4.8 — 2026-10-27
 
 ### New
