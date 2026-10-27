@@ -8,7 +8,7 @@ use spotified_client::models::{
 use super::menus;
 use super::widgets::menu::{self, Entry, Menu};
 use super::widgets::{self, ArtShape};
-use crate::actions::Action;
+use crate::actions::{Action, Shared};
 use crate::blocked::Kind;
 use crate::state::{Page, State};
 use crate::theme::{self, Icon};
@@ -175,9 +175,16 @@ fn collection_menu(
         actions.extend(menus::block(state, menu, kind, id, title));
     }
     menu.separator();
-    if menu.item("Share") {
-        actions.push(Action::CopyLink(link));
-    }
+    let youtube = || Action::CopyLink(link.clone());
+    let elsewhere = match page {
+        Page::Album(id) => Some(Shared::Album(id.clone())),
+        Page::Artist(id) => Some(Shared::Artist {
+            id: id.clone(),
+            name: title.to_owned(),
+        }),
+        _ => None,
+    };
+    actions.extend(menus::share(menu, youtube, elsewhere));
 }
 
 /// A card for something with a page of its own: a click opens the page,

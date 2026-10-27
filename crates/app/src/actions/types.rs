@@ -10,6 +10,7 @@ use crate::accounts::Accounts;
 use crate::backend::{Request, Response};
 use crate::blocked;
 use crate::migrate;
+use crate::services::{self, Service};
 use crate::settings::{LibrarySort, OutputDevice, VolumeLevel};
 use crate::share;
 use crate::sidecar::CoreStatus;
@@ -215,6 +216,20 @@ pub enum Action {
         kind: share::Kind,
         id: String,
     },
+    /// Look for this on another service, and copy the link to it there.
+    ShareOn(Service, Shared),
+    /// What looking for a link on another service came to: the link, or
+    /// `None` if the `noun` ("song", "album") is not there.
+    FoundOn {
+        service: Service,
+        noun: &'static str,
+        found: Result<Option<String>, String>,
+    },
+    /// What a link from another service, pasted into search, is to.
+    LinkRead {
+        link: String,
+        read: Result<services::Found, String>,
+    },
     /// Ask for a name for a new playlist that will hold these songs.
     NewPlaylist {
         /// What the name starts as; empty for nothing.
@@ -419,6 +434,18 @@ pub enum Action {
     Loaded(Box<Response>),
 }
 
+/// What a link on another service can be looked for to.
+#[derive(Debug, Clone)]
+pub enum Shared {
+    Song(Box<Track>),
+    /// By its id: its songs are what it is found by.
+    Album(String),
+    Artist {
+        id: String,
+        name: String,
+    },
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Effect {
     SaveSettings,
@@ -451,6 +478,10 @@ pub enum Effect {
     /// Send this to the core's session.
     Command(Command),
     CopyToClipboard(String),
+    /// Look for something on another service, off the UI thread.
+    FindOn(Service, services::Wanted),
+    /// Read what a link from another service is to, off the UI thread.
+    ReadLink(String),
     /// Add or remove the entry that starts the app with Windows.
     SetStartAtLogin(bool),
     /// Give the window the whole screen, or take it back.

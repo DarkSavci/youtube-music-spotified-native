@@ -17,7 +17,7 @@ use crate::settings::OutputDevice;
 use crate::state::State;
 use crate::together::sync::Routed;
 use crate::update::Then;
-use crate::{settings, skins, themes, together, update, views};
+use crate::{services, settings, skins, themes, together, update, views};
 use spotified_client::session::Command;
 
 impl App {
@@ -224,6 +224,44 @@ impl App {
             Effect::OpenLogs => {
                 if let Err(error) = open_folder(&self.paths.logs) {
                     log::warn!("the logs folder could not be opened: {error}");
+                }
+            }
+            Effect::FindOn(service, wanted) => {
+                let noun = wanted.noun();
+                let done = waking(ctx, &self.events_tx, |(service, noun, found)| {
+                    Event::FoundOn(service, noun, found)
+                });
+                let spawned = std::thread::Builder::new()
+                    .name("find-elsewhere".into())
+                    .spawn(move || {
+                        let found = services::find(&update::agent(), service, &wanted);
+                        done((service, noun, found));
+                    });
+                if let Err(error) = spawned {
+                    self.actions.push(Action::FoundOn {
+                        service,
+                        noun,
+                        found: Err(error.to_string()),
+                    });
+                }
+            }
+            Effect::ReadLink(link) => {
+                let done = waking(ctx, &self.events_tx, |(link, read)| {
+                    Event::LinkRead(link, read)
+                });
+                let asked = link.clone();
+                let spawned =
+                    std::thread::Builder::new()
+                        .name("read-link".into())
+                        .spawn(move || {
+                            let read = services::read(&update::agent(), &link);
+                            done((link, read));
+                        });
+                if let Err(error) = spawned {
+                    self.actions.push(Action::LinkRead {
+                        link: asked,
+                        read: Err(error.to_string()),
+                    });
                 }
             }
             Effect::CheckForUpdate => {

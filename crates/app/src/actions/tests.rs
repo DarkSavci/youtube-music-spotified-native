@@ -3,6 +3,7 @@
 mod account;
 mod accounts;
 mod desktop;
+mod elsewhere;
 mod equalizer;
 mod library;
 mod listening;

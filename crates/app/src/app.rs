@@ -85,6 +85,14 @@ pub enum Event {
     SkinsPicked(Vec<PathBuf>),
     /// Artwork for a URL, or `None` if it could not be had.
     Image(String, Option<ColorImage>),
+    /// What looking for something on another service came to.
+    FoundOn(
+        crate::services::Service,
+        &'static str,
+        Result<Option<String>, String>,
+    ),
+    /// What a link from another service is to.
+    LinkRead(String, Result<crate::services::Found, String>),
 }
 
 pub struct Launch {
@@ -490,6 +498,12 @@ impl App {
             Event::CoreStopped => self.core_stopped(ctx),
             Event::ReportSaved(result) => self.actions.push(Action::ReportSaved(result)),
             Event::StartsAtLogin(on) => self.actions.push(Action::StartAtLoginKnown(on)),
+            Event::FoundOn(service, noun, found) => self.actions.push(Action::FoundOn {
+                service,
+                noun,
+                found,
+            }),
+            Event::LinkRead(link, read) => self.actions.push(Action::LinkRead { link, read }),
             Event::Thumb(action) => self.thumb_asked(action),
             Event::ResolverUpdated(result) => self.actions.push(Action::ResolverUpdated(result)),
             Event::Update(status) => self.actions.push(Action::UpdateChanged(status)),

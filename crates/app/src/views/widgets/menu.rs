@@ -313,22 +313,49 @@ impl<'u> Menu<'u> {
 
     /// An entry that opens a further menu beside it.
     pub fn submenu(&mut self, entry: Entry<'_>, body: impl FnOnce(&mut Menu<'_>)) {
+        self.further(entry, true, body);
+    }
+
+    /// An entry that does something of its own when chosen, and opens a
+    /// further menu of other ways to do it while the pointer is on it, or
+    /// on the right arrow. Returns whether the entry itself was chosen; the
+    /// menu shuts if it was.
+    pub fn entry_with_more(&mut self, entry: Entry<'_>, body: impl FnOnce(&mut Menu<'_>)) -> bool {
+        let chosen = self
+            .further(entry, false, body)
+            .is_some_and(|row| row.chosen);
+        if chosen {
+            self.ui.close();
+        }
+        chosen
+    }
+
+    /// The row of an entry with a further menu, and the menu beside it.
+    /// `None` when the entry cannot be chosen, and opens nothing. With
+    /// `opened_by_choosing`, choosing the row from the keyboard opens the
+    /// further menu, and goes on into it.
+    fn further(
+        &mut self,
+        entry: Entry<'_>,
+        opened_by_choosing: bool,
+        body: impl FnOnce(&mut Menu<'_>),
+    ) -> Option<Row> {
         // The row's id is the next one the menu hands out, which is how the
         // further menu is known before the row is drawn.
         self.rule();
         let sub = SubMenu::id_from_widget_id(self.ui.next_auto_id());
         let row = self.labelled(entry, Some(sub));
         if !entry.enabled {
-            return;
+            return None;
         }
-        if row.chosen && !row.response.clicked() {
-            // Opened with the keyboard, which then goes on into it.
+        if opened_by_choosing && row.chosen && !row.response.clicked() {
             open_beyond(self.ui.ctx(), self.id, sub);
         }
         let (palette, parent) = (self.palette, self.id);
         SubMenu::new().show(self.ui, &row.response, |ui| {
             contents(ui, &palette, sub, Some(parent), body);
         });
+        Some(row)
     }
 
     /// A rule above the next entry, which begins a new group. Nothing is

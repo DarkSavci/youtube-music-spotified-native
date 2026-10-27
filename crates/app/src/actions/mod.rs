@@ -8,6 +8,7 @@
 mod account;
 mod blocking;
 mod desktop;
+mod elsewhere;
 mod equalizer;
 mod library;
 mod listening;
@@ -23,7 +24,7 @@ mod types;
 pub mod video;
 
 pub use account::busy as account_busy;
-pub use types::{Action, Effect, VideoAsk};
+pub use types::{Action, Effect, Shared, VideoAsk};
 
 use spotified_client::session::Command;
 
@@ -140,7 +141,12 @@ pub fn apply(state: &mut State, action: Action) -> Vec<Effect> {
         | Action::ShowWhatsNew => listening(state, action),
         Action::SetSearchQuery(query) => {
             let has_query = !query.trim().is_empty();
+            let pasted_link = crate::services::is_link(&query);
             state.search.query = query;
+            // A link from another service is searched for as what it is to.
+            if pasted_link {
+                return elsewhere::read_link(state);
+            }
             if !has_query {
                 state.search.results = Loadable::NotLoaded;
                 state.search.suggestions.clear();
@@ -354,6 +360,13 @@ pub fn apply(state: &mut State, action: Action) -> Vec<Effect> {
             state.toast(format!("{} link copied to clipboard", kind.noun()));
             vec![Effect::CopyToClipboard(share::url(kind, &id))]
         }
+        Action::ShareOn(service, shared) => elsewhere::share_on(state, service, shared),
+        Action::FoundOn {
+            service,
+            noun,
+            found,
+        } => elsewhere::found_on(state, service, noun, found),
+        Action::LinkRead { link, read } => elsewhere::link_read(state, &link, read),
         Action::ToggleQueue => {
             state.settings.panel = state.settings.panel.toggled(RightPanel::Queue);
             vec![Effect::SaveSettings]

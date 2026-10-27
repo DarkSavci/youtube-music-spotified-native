@@ -198,12 +198,8 @@ fn now_playing(
         tooltip: "Share",
         active: false,
     };
-    if share.show_at(ui, palette, at + vec2(32.0, 0.0)).clicked() {
-        actions.push(Action::Share {
-            kind: crate::share::Kind::Track,
-            id: track.id.clone(),
-        });
-    }
+    let response = share.show_at(ui, palette, at + vec2(32.0, 0.0));
+    super::menus::share_button(state, &response, actions, track);
 }
 
 /// The album a song is on, after its artists on their line: " • " and the

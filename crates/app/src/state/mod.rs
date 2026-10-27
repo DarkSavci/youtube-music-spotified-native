@@ -282,6 +282,8 @@ pub struct State {
     pub about_expanded: bool,
     /// The queue on the account's other devices is being read.
     pub reading_remote_queue: bool,
+    /// An album whose page is being read to look for it on a service.
+    pub share_waiting: Option<(crate::services::Service, String)>,
     /// How far down the page is held, when `--open scroll:` asked for the
     /// lower part of a page to be looked at.
     pub held_scroll: Option<f32>,
@@ -390,6 +392,7 @@ impl State {
             artist_songs: None,
             about_expanded: false,
             reading_remote_queue: false,
+            share_waiting: None,
             held_scroll: None,
             library: Loadable::NotLoaded,
             library_expanded: false,

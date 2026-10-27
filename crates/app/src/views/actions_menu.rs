@@ -5,7 +5,7 @@ use eframe::egui;
 use spotified_client::models::{LibraryKind, Track};
 
 use super::widgets::menu::{self, Entry, Menu};
-use crate::actions::Action;
+use crate::actions::{Action, Shared};
 use crate::blocked;
 use crate::share;
 use crate::state::{Loadable, State, Whole};
@@ -131,11 +131,18 @@ fn entries(state: &State, menu: &mut Menu<'_>, entity: &Entity) -> Option<Action
         chosen = block.or(chosen);
     }
     menu.separator();
-    if menu.item("Share") {
-        chosen = Some(Action::Share {
-            kind: entity.kind,
+    let youtube = || Action::Share {
+        kind: entity.kind,
+        id: entity.id.to_owned(),
+    };
+    let elsewhere = match entity.kind {
+        share::Kind::Album => Some(Shared::Album(entity.id.to_owned())),
+        share::Kind::Artist => Some(Shared::Artist {
             id: entity.id.to_owned(),
-        });
-    }
-    chosen
+            name: entity.title.to_owned(),
+        }),
+        share::Kind::Track | share::Kind::Playlist | share::Kind::Podcast => None,
+    };
+    let shared = super::menus::share(menu, youtube, elsewhere);
+    shared.or(chosen)
 }

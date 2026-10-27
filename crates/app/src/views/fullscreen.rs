@@ -242,15 +242,9 @@ fn foot(
         tooltip: "Share",
         active: false,
     };
-    if let Some(track) = playback.current()
-        && share
-            .show_at(ui, palette, pos2(left + 15.0, controls_y))
-            .clicked()
-    {
-        actions.push(Action::Share {
-            kind: crate::share::Kind::Track,
-            id: track.id.clone(),
-        });
+    if let Some(track) = playback.current() {
+        let response = share.show_at(ui, palette, pos2(left + 15.0, controls_y));
+        super::menus::share_button(state, &response, actions, track);
     }
     transport(
         palette,

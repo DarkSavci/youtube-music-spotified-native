@@ -28,6 +28,7 @@ mod redact;
 mod report;
 mod resolver;
 mod screenshot;
+mod services;
 mod session;
 mod settings;
 mod share;

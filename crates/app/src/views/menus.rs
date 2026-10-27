@@ -8,8 +8,9 @@ use spotified_client::models::{AlbumRef, ArtistRef, LibraryKind, Track};
 
 use super::widgets;
 use super::widgets::menu::{Entry, Menu};
-use crate::actions::Action;
+use crate::actions::{Action, Shared};
 use crate::blocked::Kind;
+use crate::services::Service;
 use crate::state::{Loadable, Page, State};
 use crate::theme::Icon;
 
@@ -104,12 +105,12 @@ pub fn tracks(
     if menu.item(like) {
         actions.push(Action::ToggleLike(track.clone()));
     }
-    if menu.item("Share") {
-        actions.push(Action::Share {
-            kind: crate::share::Kind::Track,
-            id: track.id.clone(),
-        });
-    }
+    let youtube = || Action::Share {
+        kind: crate::share::Kind::Track,
+        id: track.id.clone(),
+    };
+    let elsewhere = Shared::Song(Box::new(track.clone()));
+    actions.extend(share(menu, youtube, Some(elsewhere)));
 }
 
 /// The entry that blocks a song, an artist or an album, or lets one that
@@ -155,12 +156,15 @@ pub fn artist(state: &State, menu: &mut Menu<'_>, actions: &mut Vec<Action>, art
     menu.separator();
     actions.extend(block(state, menu, Kind::Artist, &artist.id, &artist.name));
     menu.separator();
-    if menu.item("Share") {
-        actions.push(Action::Share {
-            kind: crate::share::Kind::Artist,
-            id: artist.id.clone(),
-        });
-    }
+    let youtube = || Action::Share {
+        kind: crate::share::Kind::Artist,
+        id: artist.id.clone(),
+    };
+    let elsewhere = Shared::Artist {
+        id: artist.id.clone(),
+        name: artist.name.clone(),
+    };
+    actions.extend(share(menu, youtube, Some(elsewhere)));
 }
 
 /// What a right click on an album's name offers, where the name is a link
@@ -177,12 +181,72 @@ pub fn album(state: &State, menu: &mut Menu<'_>, actions: &mut Vec<Action>, albu
     menu.separator();
     actions.extend(block(state, menu, Kind::Album, &album.id, &album.name));
     menu.separator();
-    if menu.item("Share") {
-        actions.push(Action::Share {
-            kind: crate::share::Kind::Album,
-            id: album.id.clone(),
-        });
+    let youtube = || Action::Share {
+        kind: crate::share::Kind::Album,
+        id: album.id.clone(),
+    };
+    let elsewhere = Shared::Album(album.id.clone());
+    actions.extend(share(menu, youtube, Some(elsewhere)));
+}
+
+/// "Share": chosen, it copies the YouTube Music link; beside it, a menu
+/// of the links there are to choose from, which are the same one and the
+/// ones on other services. `elsewhere` is what is looked for there, for
+/// what is on them: a playlist here is YouTube Music's alone.
+pub fn share(
+    menu: &mut Menu<'_>,
+    youtube: impl Fn() -> Action,
+    elsewhere: Option<Shared>,
+) -> Option<Action> {
+    let mut chosen = None;
+    let entry = Entry::new("Share").icon(Icon::Share);
+    if menu.entry_with_more(entry, |menu| chosen = links(menu, &youtube, elsewhere)) {
+        chosen = Some(youtube());
     }
+    chosen
+}
+
+/// What a share button does for the song that is playing: a click copies
+/// its YouTube Music link, and a right click offers every link there is.
+pub fn share_button(
+    state: &State,
+    response: &eframe::egui::Response,
+    actions: &mut Vec<Action>,
+    track: &Track,
+) {
+    let youtube = || Action::Share {
+        kind: crate::share::Kind::Track,
+        id: track.id.clone(),
+    };
+    if response.clicked() {
+        actions.push(youtube());
+    }
+    widgets::menu::context(response, &state.palette, |menu| {
+        let elsewhere = Shared::Song(Box::new(track.clone()));
+        actions.extend(links(menu, &youtube, Some(elsewhere)));
+    });
+}
+
+/// One entry for each link there is to copy.
+pub fn links(
+    menu: &mut Menu<'_>,
+    youtube: &dyn Fn() -> Action,
+    elsewhere: Option<Shared>,
+) -> Option<Action> {
+    let mut chosen = None;
+    if menu.entry(Entry::new("YouTube Music link").icon(Icon::Copy)) {
+        chosen = Some(youtube());
+    }
+    let Some(shared) = elsewhere else {
+        return chosen;
+    };
+    for service in Service::EVERY {
+        let label = format!("{} link", service.name());
+        if menu.entry(Entry::new(&label).icon(Icon::Copy)) {
+            chosen = Some(Action::ShareOn(service, shared.clone()));
+        }
+    }
+    chosen
 }
 
 /// The person's playlists, to add `tracks` to one.

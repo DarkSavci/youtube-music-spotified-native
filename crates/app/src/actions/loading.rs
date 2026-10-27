@@ -314,8 +314,9 @@ pub(super) fn store(state: &mut State, response: Response) -> Vec<Effect> {
         }
         Response::Album(id, result) => {
             let learnt = super::blocking::album_read(state, &id, &result);
-            let mut effects = store_rest(state, Response::Album(id, result));
+            let mut effects = store_rest(state, Response::Album(id.clone(), result));
             effects.extend(learnt);
+            effects.extend(super::elsewhere::album_read(state, &id));
             return effects;
         }
         other => return store_rest(state, other),
