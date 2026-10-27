@@ -291,6 +291,17 @@ fn lines(
                     let color = Color32::WHITE.gamma_multiply(strength);
                     widgets::selectable_galley(ui, &response, rect.min, galley, color);
                 }
+                // Words to follow, not a document: the pointer stays a
+                // pointer over them, and a hand where a click jumps there.
+                // Set after the text's own caret, which it overrides.
+                if response.hovered() {
+                    let cursor = if lyrics.synced {
+                        egui::CursorIcon::PointingHand
+                    } else {
+                        egui::CursorIcon::Default
+                    };
+                    ui.ctx().set_cursor_icon(cursor);
+                }
                 if response.clicked() {
                     actions.push(Action::Seek(line.at_ms));
                 }
