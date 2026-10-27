@@ -654,13 +654,26 @@ Checked on the emulator, signed in:
 - the desktop app, rebuilt on the changed core: clippy, 1,001 Rust tests,
   and a run that signs in and plays at once.
 
-Not yet checked by hand: Android Auto in a car or the Desktop Head Unit
-(it needs the Android Auto app, from the Play Store), a watch, Bluetooth
-buttons, the Assistant's voice, a phone (only the emulator), Last.fm with a
-real key, the importer against each service, and a release published for
-the updater. Word-by-word lyrics are tested on both sides (the core's
-parsers, the phone's lighting), but not seen on a real song: LRCLIB had
-none with word timings among the hundreds looked at.
+Checked on the emulator since:
+- the Assistant's "play X", sent as the intent it sends: the song is found
+  and plays;
+- headset and Bluetooth buttons, sent as the media keys they send: play,
+  pause, next, previous and the single play/pause button;
+- the importer, live: Spotify's Today's Top Hits (30 of 30 found), Deezer's
+  Top Worldwide (100 of 100), Apple Music's Today's Hits (50 of 50) and
+  pasted lines, all matched against the real core (a connected test);
+- the updater against the project's real releases: an older app is told
+  the newest (0.4.9, the desktop's only) has no APK for it, a newer one
+  that it is up to date. Downloading and checking an APK needs a release
+  that carries one;
+- signed out, Android Auto's library and recent lists say to sign in.
+
+Not yet checked: Android Auto in a car or the Desktop Head Unit (it needs
+the Android Auto app, from the Play Store, on a phone), a watch, a phone
+(only the emulator), Last.fm with a real key, and an update installed from
+a release with an APK. Word-by-word lyrics are tested on both sides (the
+core's parsers, the phone's lighting), but not seen on a real song: LRCLIB
+had none with word timings among the hundreds looked at.
 
 Also built since the plan was written: SponsorBlock (skipped by the
 engine, from SponsorBlock's public database), Now Playing's three styles,
