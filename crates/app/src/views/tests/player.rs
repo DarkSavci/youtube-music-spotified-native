@@ -203,3 +203,24 @@ fn the_player_bar_leads_to_the_mini_player() {
         Action::ToggleMiniPlayer
     )));
 }
+
+#[test]
+fn lyrics_that_failed_say_so_in_words_and_can_be_tried_again() {
+    let mut state = playing(state());
+    state.settings.panel = crate::settings::RightPanel::Lyrics;
+    state.lyrics.words = Loadable::Failed("lyrics: lrclib: status 503".into());
+    let mut harness = harness(state);
+    harness.get_by_label("Couldn’t load the lyrics");
+    // The status is the log's, not the listener's.
+    assert!(
+        harness
+            .query_by_label("lyrics: lrclib: status 503")
+            .is_none()
+    );
+    harness.get_by_label("Try again").click();
+    harness.run();
+    assert!(asked(&harness, |action| matches!(
+        action,
+        Action::RetryLyrics
+    )));
+}

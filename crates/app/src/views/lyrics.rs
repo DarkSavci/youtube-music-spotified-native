@@ -215,7 +215,22 @@ fn words(state: &State, ui: &mut Ui, actions: &mut Vec<Action>, style: &LineStyl
     };
     match &state.lyrics.words {
         Loadable::NotLoaded | Loadable::Loading => widgets::loading(ui, palette, "Loading…"),
-        Loadable::Failed(message) => widgets::error(ui, palette, message),
+        // What failed is in the log; the listener is told it in words, and
+        // offered the retry that opening the panel again would be.
+        Loadable::Failed(_) => {
+            note(
+                state,
+                ui,
+                "Couldn’t load the lyrics",
+                "The lyrics service isn’t answering right now.",
+            );
+            ui.vertical_centered(|ui| {
+                ui.add_space(12.0);
+                if widgets::outline_button(ui, palette, "Try again").clicked() {
+                    actions.push(Action::RetryLyrics);
+                }
+            });
+        }
         Loadable::Loaded(None) => note(
             state,
             ui,

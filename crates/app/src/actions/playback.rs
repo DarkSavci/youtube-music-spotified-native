@@ -11,8 +11,11 @@ use crate::settings::RightPanel;
 use crate::state::{Loadable, MiniPanel, Notice, Playback, State, TrackLyrics};
 
 /// Asks for the lyrics of what is playing, if the lyrics panel is open and
-/// they are not already here or on their way.
-pub(super) fn want_lyrics(state: &mut State) -> Vec<Effect> {
+/// they are not already here or on their way. Lyrics that could not be had
+/// are asked for again only when `opened` (the panel opened, which is the
+/// retry): not on every change of what the player says, which would ask
+/// a failing source again and again for as long as the panel is open.
+pub(super) fn want_lyrics(state: &mut State, opened: bool) -> Vec<Effect> {
     let in_mini = state.mini_player && state.mini_panel == MiniPanel::Lyrics;
     if state.settings.panel != RightPanel::Lyrics && !state.lyrics_fullscreen && !in_mini {
         return Vec::new();
@@ -20,8 +23,11 @@ pub(super) fn want_lyrics(state: &mut State) -> Vec<Effect> {
     let Some(track) = state.playback.as_ref().and_then(Playback::current) else {
         return Vec::new();
     };
-    if state.lyrics.track_id == track.id && !state.lyrics.words.needs_fetch() {
-        return Vec::new();
+    if state.lyrics.track_id == track.id {
+        let failed = matches!(state.lyrics.words, Loadable::Failed(_));
+        if !state.lyrics.words.needs_fetch() || (failed && !opened) {
+            return Vec::new();
+        }
     }
     state.lyrics = TrackLyrics {
         track_id: track.id.clone(),
@@ -185,7 +191,7 @@ pub(super) fn session_changed(state: &mut State, projection: Projection) -> Vec<
     let offline = playback.offline;
     state.playback = Some(playback);
     note_connection(state, was_offline, offline, paused);
-    want_lyrics(state)
+    want_lyrics(state, false)
 }
 
 /// Says that the connection has gone for as long as it has, unless the

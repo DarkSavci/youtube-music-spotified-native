@@ -360,6 +360,7 @@ pub fn apply(state: &mut State, action: Action) -> Vec<Effect> {
             state.toast(format!("{} link copied to clipboard", kind.noun()));
             vec![Effect::CopyToClipboard(share::url(kind, &id))]
         }
+        Action::RetryLyrics => want_lyrics(state, true),
         Action::ShareOn(service, shared) => elsewhere::share_on(state, service, shared),
         Action::FoundOn {
             service,
@@ -437,7 +438,7 @@ pub fn apply(state: &mut State, action: Action) -> Vec<Effect> {
             }
             // The queue and the lyrics need a tall window to show in.
             let mut effects = vec![Effect::GrowMini(crate::views::mini::PANEL_SIZE)];
-            effects.extend(want_lyrics(state));
+            effects.extend(want_lyrics(state, true));
             effects
         }
         Action::SetMiniOnTop(on) => {
@@ -461,7 +462,7 @@ pub fn apply(state: &mut State, action: Action) -> Vec<Effect> {
         Action::SetLyricsFullscreen(on) => {
             // They take the whole window, not the whole screen.
             state.lyrics_fullscreen = on;
-            want_lyrics(state)
+            want_lyrics(state, true)
         }
         Action::SetFullscreenPlayer(_) | Action::ToggleFullscreenPlayer => {
             playback::fullscreen_player(state, action)
@@ -500,7 +501,7 @@ pub fn apply(state: &mut State, action: Action) -> Vec<Effect> {
         Action::ToggleLyrics => {
             state.settings.panel = state.settings.panel.toggled(RightPanel::Lyrics);
             let mut effects = vec![Effect::SaveSettings];
-            effects.extend(want_lyrics(state));
+            effects.extend(want_lyrics(state, true));
             effects
         }
         Action::TogglePlay

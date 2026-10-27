@@ -106,6 +106,37 @@ fn opening_the_lyrics_fetches_them_once_for_the_track() {
 }
 
 #[test]
+fn lyrics_that_failed_are_asked_for_again_on_opening_not_on_every_update() {
+    let mut state = playing();
+    apply(&mut state, Action::ToggleLyrics);
+    let failed = Response::Lyrics {
+        track_id: "a".into(),
+        result: Err(spotified_client::ApiError::Status {
+            code: 502,
+            message: "lyrics: lrclib: status 503".into(),
+        }),
+    };
+    apply(&mut state, Action::Loaded(Box::new(failed)));
+    assert!(matches!(state.lyrics.words, Loadable::Failed(_)));
+    // The player says where it is many times a second: none of that asks.
+    let mut projection = Projection::default();
+    projection.state.queue.items = vec![Track {
+        id: "a".into(),
+        ..Track::default()
+    }];
+    let effects = apply(&mut state, Action::SessionChanged(Box::new(projection)));
+    assert!(effects.is_empty());
+    assert!(matches!(state.lyrics.words, Loadable::Failed(_)));
+    // Closing the panel and opening it again is the retry.
+    apply(&mut state, Action::ToggleLyrics);
+    let effects = apply(&mut state, Action::ToggleLyrics);
+    assert!(effects.iter().any(|effect| matches!(
+        effect,
+        Effect::Fetch(Request::Lyrics(track)) if track.id == "a"
+    )));
+}
+
+#[test]
 fn lyrics_for_a_track_no_longer_playing_are_dropped() {
     let mut state = playing();
     apply(&mut state, Action::ToggleLyrics);

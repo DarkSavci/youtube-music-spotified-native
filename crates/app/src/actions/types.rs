@@ -216,6 +216,8 @@ pub enum Action {
         kind: share::Kind,
         id: String,
     },
+    /// Ask again for lyrics that could not be had.
+    RetryLyrics,
     /// Look for this on another service, and copy the link to it there.
     ShareOn(Service, Shared),
     /// What looking for a link on another service came to: the link, or
