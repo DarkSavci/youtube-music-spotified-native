@@ -58,6 +58,30 @@ pub(super) struct Dials {
 /// What each channel is multiplied by for a balance from -1 to 1: the side
 /// turned away from is turned down, and the other left as it is, so the
 /// middle is exactly what it would be with no balance at all.
+/// How often the sound device is tried before a track is given up for it,
+/// and the wait between tries.
+const OPEN_TRIES: u32 = 3;
+const OPEN_WAIT: Duration = Duration::from_millis(300);
+
+/// Opens the sound device, trying again a moment later if it will not open.
+/// Just after the system's device changes, Windows can refuse the new one
+/// for a moment ("Cannot change thread mode after it is set" was seen once):
+/// a song given up then is a song skipped for nothing.
+fn open_output(wanted: Option<&str>) -> Result<Output, String> {
+    let mut tried = 1;
+    loop {
+        match Output::open(wanted) {
+            Ok(output) => return Ok(output),
+            Err(error) if tried < OPEN_TRIES => {
+                log::warn!("{error}; trying again ({tried} of {OPEN_TRIES})");
+                std::thread::sleep(OPEN_WAIT);
+                tried += 1;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
 pub(super) fn balance_gains(balance: f32) -> (f32, f32) {
     let balance = if balance.is_finite() { balance } else { 0.0 };
     let balance = balance.clamp(-1.0, 1.0);
@@ -269,7 +293,7 @@ impl Worker {
     fn spawn_deck(&mut self, video_id: &str, start_ms: u64, preload: bool) -> Option<Deck> {
         if self.output.is_none() {
             self.device = self.wanted_device();
-            match Output::open(self.device.as_deref()) {
+            match open_output(self.device.as_deref()) {
                 Ok(output) => {
                     self.equalizer = Some(Equalizer::new(output.sample_rate()));
                     self.tap.set_sample_rate(output.sample_rate());
