@@ -4,7 +4,9 @@
 //! What it shows depends only on its size. A strip is a bar: cover, title
 //! and three buttons. Roughly square, it is the cover, with the controls
 //! over it while the pointer is there. Wide, the cover sits beside the
-//! controls. Tall, there is room for the queue or the lyrics as well.
+//! controls. Tall, there is room for the queue or the lyrics as well. With
+//! the lyrics asked for, they take the cover's place in every shape but
+//! the strip.
 
 use eframe::egui::{
     self, Align2, Color32, Frame, Rect, Ui, ViewportBuilder, ViewportId, pos2, vec2,
@@ -135,7 +137,7 @@ pub fn show(state: &State, ui: &mut Ui, actions: &mut Vec<Action>) {
                 .and_then(|track| widgets::artwork_tint(ui, state, &track.artwork, COVER));
             match layout_for(area.width(), area.height()) {
                 Layout::Bar => bar(&mini, ui, actions, area, art),
-                Layout::Square => square(&mini, ui, actions, area),
+                Layout::Square => square(&mini, ui, actions, area, art),
                 Layout::Wide => wide(&mini, ui, actions, area, art),
                 Layout::Tall => tall(&mini, ui, actions, area, art),
             }
@@ -193,9 +195,19 @@ fn bar(mini: &Mini<'_>, ui: &mut Ui, actions: &mut Vec<Action>, area: Rect, art:
 
 /// The cover, edge to edge. The controls lie over it while the pointer is
 /// in the window, on a shade that lets them be read on any cover.
-fn square(mini: &Mini<'_>, ui: &mut Ui, actions: &mut Vec<Action>, area: Rect) {
+fn square(
+    mini: &Mini<'_>,
+    ui: &mut Ui,
+    actions: &mut Vec<Action>,
+    area: Rect,
+    art: Option<Color32>,
+) {
     drag(ui, area);
-    cover(mini, ui, actions, area, 0);
+    // Clear of the window's buttons, which come with the pointer.
+    let words = area.with_min_y(area.top() + HEAD).shrink2(vec2(4.0, 0.0));
+    if !lyrics_instead(mini, ui, actions, area, words, art) {
+        cover(mini, ui, actions, area, 0);
+    }
     let inside = ui.rect_contains_pointer(area);
     let lift = widgets::hover_of(ui, ui.id().with("mini-overlay"), inside);
     if lift <= 0.0 {
@@ -253,7 +265,10 @@ fn wide(mini: &Mini<'_>, ui: &mut Ui, actions: &mut Vec<Action>, area: Rect, art
     let side = area.with_min_x(picture.right());
     let head = side.with_max_y(side.top() + HEAD + 8.0);
     drag(ui, head);
-    cover(mini, ui, actions, picture, 0);
+    let words = picture.shrink2(vec2(4.0, PADDING));
+    if !lyrics_instead(mini, ui, actions, picture, words, art) {
+        cover(mini, ui, actions, picture, 0);
+    }
     let buttons_at = pos2(side.right() - 6.0, side.top() + HEAD / 2.0 + 2.0);
     let mut buttons = window_buttons(mini, ui, actions, buttons_at, true);
     let speed_at = pos2(buttons_at.x - buttons, buttons_at.y);
@@ -280,6 +295,34 @@ fn wide(mini: &Mini<'_>, ui: &mut Ui, actions: &mut Vec<Action>, area: Rect, art
     progress(mini, ui, actions, row(0.0, 20.0), true);
     transport(mini, ui, actions, row(1.0, 44.0).center(), true);
     extras(mini, ui, actions, row(2.0, 32.0), area.width() > 520.0);
+}
+
+/// The colour lyrics are drawn on: the cover's, or the panel's until it
+/// is known.
+fn words_on(mini: &Mini<'_>, art: Option<Color32>) -> Color32 {
+    art.unwrap_or(mini.state.palette.panel)
+}
+
+/// The lyrics in the cover's place, on its colour across `area`, when they
+/// are what was asked for and something is playing. Returns whether they
+/// were drawn; if not, the cover is.
+fn lyrics_instead(
+    mini: &Mini<'_>,
+    ui: &mut Ui,
+    actions: &mut Vec<Action>,
+    area: Rect,
+    words: Rect,
+    art: Option<Color32>,
+) -> bool {
+    if mini.state.mini_panel != MiniPanel::Lyrics || mini.track.is_none() {
+        return false;
+    }
+    let on = words_on(mini, art);
+    ui.painter().rect_filled(area, 0.0, on);
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(words));
+    child.set_clip_rect(words);
+    lyrics::compact(mini.state, &mut child, actions, on);
+    true
 }
 
 /// Room for more: the cover, the queue or the lyrics above the controls.
@@ -327,7 +370,7 @@ fn tall(mini: &Mini<'_>, ui: &mut Ui, actions: &mut Vec<Action>, area: Rect, art
                     queue::contents(mini.state, &mut child, actions, playback);
                 }
                 (MiniPanel::Queue, None) => {}
-                _ => lyrics::compact(mini.state, &mut child, actions),
+                _ => lyrics::compact(mini.state, &mut child, actions, words_on(mini, art)),
             }
         }
     }

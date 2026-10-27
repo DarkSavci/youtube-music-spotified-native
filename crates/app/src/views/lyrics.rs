@@ -86,14 +86,16 @@ pub fn show(state: &State, ui: &mut Ui, actions: &mut Vec<Action>, most: f32) {
         });
 }
 
-/// The words alone, smaller, for the mini player.
-pub(super) fn compact(state: &State, ui: &mut Ui, actions: &mut Vec<Action>) {
+/// The words alone, smaller, for the mini player. `on` is the colour they
+/// are drawn on: the scroll's edges fade into it, and into nothing else.
+pub(super) fn compact(state: &State, ui: &mut Ui, actions: &mut Vec<Action>, on: Color32) {
     let style = LineStyle {
         size: 16.0,
         gap: 12.0,
         margin: 0.25,
     };
     Frame::new()
+        .fill(on)
         .inner_margin(Margin::symmetric(8, 0))
         .show(ui, |ui| words(state, ui, actions, &style));
 }

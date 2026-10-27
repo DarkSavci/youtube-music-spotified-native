@@ -35,6 +35,8 @@ pub(super) fn waits(spec: &str) -> bool {
                 | "scroll"
                 | "radio"
                 | "library-demo"
+                | "lyrics-demo"
+                | "mini-panel"
                 | "stat"
                 | "stats-lookup"
                 | "songs-order"
@@ -82,10 +84,46 @@ pub(super) fn step(spec: &str, state: &State) -> Step {
         "shot" => Step::Shot(PathBuf::from(value)),
         "flyout" => Step::Flyout,
         "accounts-demo" => Step::Do(demo_accounts()),
+        "lyrics-demo" => Step::Do(demo_lyrics(state).into_iter().collect()),
         _ if input::knows(kind) => Step::Input(input::events(kind, value)),
         _ if room::knows(kind) => Step::Do(room::actions(kind, value, state)),
         _ => Step::Do(opening_action(spec).into_iter().collect()),
     }
+}
+
+/// Timed words for what is playing, which a demo has none of: a line every
+/// few seconds, long and short, to see how they are laid out.
+fn demo_lyrics(state: &State) -> Option<Action> {
+    let track = state.playback.as_ref()?.current()?;
+    let words = [
+        "The streetlights hum a tune I almost know",
+        "♪",
+        "And every window holds a different song",
+        "We drove until the radio ran out of night",
+        "Short line",
+        "Turning the dial past the static and the light",
+        "Somewhere a chorus that we used to sing along to, all of us, too loud",
+        "Hold on",
+        "Hold on to the sound",
+    ];
+    let lines = words
+        .iter()
+        .enumerate()
+        .map(|(index, text)| spotified_client::models::LyricLine {
+            at_ms: index as u64 * 4_000,
+            text: (*text).to_owned(),
+        })
+        .collect();
+    let lyrics = spotified_client::models::Lyrics {
+        lines,
+        synced: true,
+        plain: String::new(),
+        source: "Demo".to_owned(),
+    };
+    Some(Action::Loaded(Box::new(Response::Lyrics {
+        track_id: track.id.clone(),
+        result: Ok(Some(lyrics)),
+    })))
 }
 
 /// A library to look at where there is no account to have one: a demo is
@@ -251,6 +289,13 @@ pub(super) fn opening_action(spec: &str) -> Option<Action> {
         "library-wide" => Action::ToggleLibraryExpanded,
         "library-demo" => Action::Loaded(Box::new(Response::Library(Ok(demo_library())))),
         "lyrics" => Action::ToggleLyrics,
+        // What the mini player shows above its controls: `art`, `queue` or
+        // `lyrics`.
+        "mini-panel" => Action::SetMiniPanel(match value.as_str() {
+            "queue" => crate::state::MiniPanel::Queue,
+            "lyrics" => crate::state::MiniPanel::Lyrics,
+            _ => crate::state::MiniPanel::Art,
+        }),
         "queue" => Action::ToggleQueue,
         // The built-in theme to look at it in.
         "theme" => Action::SetTheme(match value.as_str() {
