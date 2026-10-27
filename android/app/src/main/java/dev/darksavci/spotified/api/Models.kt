@@ -271,8 +271,13 @@ data class LibraryItem(
 @Serializable
 data class Folder(val id: String = "", val name: String = "")
 
+/** One word of a timed line and when it is sung; its text keeps the space after it. */
 @Serializable
-data class LyricLine(val atMs: Long = 0, val text: String = "")
+data class LyricWord(val atMs: Long = 0, val text: String = "")
+
+/** One line of lyrics; [words] time it word by word, when the source does. */
+@Serializable
+data class LyricLine(val atMs: Long = 0, val text: String = "", val words: List<LyricWord> = emptyList())
 
 @Serializable
 data class Lyrics(

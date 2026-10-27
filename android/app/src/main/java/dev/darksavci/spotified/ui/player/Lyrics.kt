@@ -36,11 +36,16 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.darksavci.spotified.R
+import dev.darksavci.spotified.api.LyricLine
 import dev.darksavci.spotified.api.Lyrics
 import dev.darksavci.spotified.api.Track
 import dev.darksavci.spotified.data.LyricsExtras
@@ -51,6 +56,21 @@ import dev.darksavci.spotified.ui.components.Pill
 import dev.darksavci.spotified.ui.components.darkened
 import dev.darksavci.spotified.ui.theme.Type
 import kotlinx.coroutines.launch
+
+/**
+ * A line's text with the words sung by [positionMs] lit and the rest [dim],
+ * for lines the source times word by word; the plain text otherwise.
+ */
+internal fun sung(line: LyricLine, positionMs: Long, dim: Color): AnnotatedString = buildAnnotatedString {
+    if (line.words.isEmpty()) {
+        append(line.text.ifEmpty { "♪" })
+        return@buildAnnotatedString
+    }
+    for (word in line.words) {
+        if (word.atMs <= positionMs) append(word.text)
+        else withStyle(SpanStyle(color = dim)) { append(word.text) }
+    }
+}
 
 /** A song's lyrics, loaded once per song; null while loading, empty when there are none. */
 @Composable
@@ -69,10 +89,11 @@ private fun rememberLyrics(track: Track): Result<Lyrics?>? {
 @Composable
 fun LyricsPanel(track: Track, size: Dp, tint: Color, onExpand: () -> Unit) {
     val lyrics = rememberLyrics(track)?.getOrNull()
-    val (position, _) = rememberPosition()
+    val (position, _) = rememberPosition(if (lyrics.hasWords()) 50 else 250)
     val graph = LocalContext.current.graph
     val offsets by graph.settings.lyricsOffsets.collectAsStateWithLifecycle(emptyMap())
-    val current = lyrics?.lineAt(position + (offsets[track.id] ?: 0L)) ?: 0
+    val at = position + (offsets[track.id] ?: 0L)
+    val current = lyrics?.lineAt(at) ?: 0
     Column(
         Modifier.size(size).clip(RoundedCornerShape(8.dp)).background(tint.darkened(0.2f)).clickable(onClick = onExpand).padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -82,9 +103,11 @@ fun LyricsPanel(track: Track, size: Dp, tint: Color, onExpand: () -> Unit) {
             Text(if (lyrics == null) "No lyrics for this song." else "", style = Type.title, color = Color.White.copy(alpha = 0.7f))
         }
         lines.drop(current).take(7).forEachIndexed { i, line ->
+            val now = i == 0 && lyrics?.synced == true
             Text(
-                line.text.ifEmpty { "♪" }, style = Type.title, maxLines = 2, overflow = TextOverflow.Ellipsis,
-                color = if (i == 0 && lyrics?.synced == true) Color.White else Color.White.copy(alpha = 0.5f),
+                if (now) sung(line, at, Color.White.copy(alpha = 0.5f)) else AnnotatedString(line.text.ifEmpty { "♪" }),
+                style = Type.title, maxLines = 2, overflow = TextOverflow.Ellipsis,
+                color = if (now) Color.White else Color.White.copy(alpha = 0.5f),
             )
         }
     }
@@ -131,7 +154,7 @@ fun LyricsScreen(track: Track, tint: Color, onClose: () -> Unit) {
     val offset = offsets[track.id] ?: 0L
     val loaded = rememberLyrics(track)
     val lyrics = loaded?.getOrNull()
-    val (position, _) = rememberPosition()
+    val (position, _) = rememberPosition(if (lyrics.hasWords()) 50 else 250)
     val list = rememberLazyListState()
     val scope = rememberCoroutineScope()
     var choosing by remember { mutableStateOf(false) }
@@ -185,8 +208,11 @@ fun LyricsScreen(track: Track, tint: Color, onClose: () -> Unit) {
                                     }
                                 },
                         ) {
+                            // The line being sung lights word by word when it can.
                             Text(
-                                line.text.ifEmpty { "♪" }, style = Type.title,
+                                if (i == current) sung(line, position + offset, Color.White.copy(alpha = 0.45f))
+                                else AnnotatedString(line.text.ifEmpty { "♪" }),
+                                style = Type.title,
                                 color = if (!lyrics.synced || past) Color.White else Color.White.copy(alpha = 0.45f),
                             )
                             extra?.getOrNull(i)?.takeIf { it.isNotBlank() && it != line.text }?.let {
@@ -216,3 +242,6 @@ fun LyricsScreen(track: Track, tint: Color, onClose: () -> Unit) {
         }
     }
 }
+
+/** Whether any line is timed word by word, so the position is followed more closely. */
+private fun Lyrics?.hasWords(): Boolean = this?.lines?.any { it.words.isNotEmpty() } == true

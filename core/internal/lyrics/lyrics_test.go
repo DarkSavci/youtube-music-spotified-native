@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 
 	"spotifier/internal/domain"
@@ -230,6 +231,58 @@ func TestParseLRC(t *testing.T) {
 	}
 }
 
+func TestParseLRCReadsWordTimings(t *testing.T) {
+	const lrc = "[00:12.00]<00:12.00>Hello <00:12.50>there <00:13.10>world<00:14.00>\n" +
+		"[00:20.00][00:40.00]<00:20.00>Sing <00:20.40>again\n" +
+		"[00:30.00]<00:30.00>Broken <bad>tag\n"
+
+	lines := lyrics.ParseLRC(lrc)
+	if len(lines) != 4 {
+		t.Fatalf("parsed %d lines, want 4: %+v", len(lines), lines)
+	}
+	first := lines[0]
+	if first.Text != "Hello there world" {
+		t.Fatalf("text = %q, want the words without their tags", first.Text)
+	}
+	want := []domain.LyricWord{{AtMs: 12_000, Text: "Hello "}, {AtMs: 12_500, Text: "there "}, {AtMs: 13_100, Text: "world"}}
+	if !reflect.DeepEqual(first.Words, want) {
+		t.Fatalf("words = %+v, want %+v", first.Words, want)
+	}
+	// A repeated line is sung the same, later.
+	if got := lines[3].Words; lines[3].AtMs != 40_000 || len(got) != 2 || got[0].AtMs != 40_000 || got[1].AtMs != 40_400 {
+		t.Fatalf("repeat = %+v", lines[3])
+	}
+	// One bad tag leaves the line plain rather than wrongly timed.
+	if broken := lines[2]; broken.Words != nil || broken.Text != "Broken <bad>tag" {
+		t.Fatalf("half-timed line kept words: %+v", broken)
+	}
+	// Plain lyrics carry no words at all.
+	if plain := lyrics.ParseLRC("[00:01.00]just a line"); plain[0].Words != nil {
+		t.Fatalf("plain line has words: %+v", plain[0])
+	}
+}
+
+func TestParseLyricsfileReadsWords(t *testing.T) {
+	const file = "version: '1.0'\n" +
+		"metadata:\n  title: Song\n  artist: Someone\n" +
+		"lines:\n" +
+		"- text: Later line\n  start_ms: 9000\n" +
+		"- text: Hello world\n  start_ms: 1000\n  end_ms: 3000\n  words:\n" +
+		"  - text: 'Hello '\n    start_ms: 1000\n  - text: world\n    start_ms: 1600\n"
+
+	lines := lyrics.ParseLyricsfile(file)
+	if len(lines) != 2 || lines[0].Text != "Hello world" || lines[1].AtMs != 9000 {
+		t.Fatalf("lines = %+v", lines)
+	}
+	want := []domain.LyricWord{{AtMs: 1000, Text: "Hello "}, {AtMs: 1600, Text: "world"}}
+	if !reflect.DeepEqual(lines[0].Words, want) {
+		t.Fatalf("words = %+v, want %+v", lines[0].Words, want)
+	}
+	if lyrics.ParseLyricsfile("lines: [unclosed") != nil {
+		t.Fatal("a broken file gave lines")
+	}
+}
+
 func TestParseLRCIgnoresJunk(t *testing.T) {
 	for _, in := range []string{"", "   ", "no timestamps here", "[not a stamp]words", "[99:99.99]bad"} {
 		if got := lyrics.ParseLRC(in); len(got) != 0 {
@@ -299,5 +352,23 @@ func TestLRCLibSkipsWhenTheTrackIsUnidentified(t *testing.T) {
 	}
 	if called {
 		t.Fatal("sent a request for a track it could not identify")
+	}
+}
+
+func TestLRCLibReadsWordSync(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"plainLyrics":"Hi you","syncedLyrics":"[00:01.00]Hi you","hasWordSync":true,` +
+			`"lyricsfile":"lines:\n- text: Hi you\n  start_ms: 1000\n  words:\n  - text: 'Hi '\n    start_ms: 1000\n  - text: you\n    start_ms: 1400\n"}`))
+	}))
+	defer srv.Close()
+
+	l := lyrics.NewLRCLib()
+	l.BaseURL = srv.URL
+	got, err := l.Lyrics(context.Background(), track)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Lines) != 1 || len(got.Lines[0].Words) != 2 || got.Lines[0].Words[1].AtMs != 1400 {
+		t.Fatalf("lines = %+v", got.Lines)
 	}
 }

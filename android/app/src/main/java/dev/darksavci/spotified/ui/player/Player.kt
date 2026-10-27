@@ -75,7 +75,7 @@ const val STYLE_LYRICS_FIRST = 2
 
 /** Where the song is, kept moving between the core's reports. */
 @Composable
-fun rememberPosition(): Pair<Long, Long> {
+fun rememberPosition(periodMs: Long = 250): Pair<Long, Long> {
     val graph = LocalContext.current.graph
     val projection by graph.playback.projection.collectAsStateWithLifecycle()
     var position by remember { mutableLongStateOf(0L) }
@@ -91,7 +91,7 @@ fun rememberPosition(): Pair<Long, Long> {
                 position = projection.state.positionMs
                 duration = current?.durationMs ?: 0
             }
-            delay(250)
+            delay(periodMs)
         }
     }
     return position to duration

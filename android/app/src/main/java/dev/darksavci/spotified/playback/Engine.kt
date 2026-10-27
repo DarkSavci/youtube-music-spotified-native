@@ -23,8 +23,10 @@ import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import dev.darksavci.spotified.api.EngineEvent
 import dev.darksavci.spotified.api.EngineEventKind
 import dev.darksavci.spotified.api.Target
+import kotlin.math.cos
 import kotlin.math.min
 import kotlin.math.pow
+import kotlin.math.sin
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -367,8 +369,8 @@ class Engine(
         }
         // Equal power: the two together sound as loud as one.
         val p = ((now() - fadeStartedAt).toFloat() / fadeMs).coerceIn(0f, 1f)
-        current.player.volume = base * current.gain * kotlin.math.cos(p * Math.PI / 2).toFloat()
-        idle.player.volume = base * idle.gain * kotlin.math.sin(p * Math.PI / 2).toFloat()
+        current.player.volume = base * current.gain * cos(p * Math.PI / 2).toFloat()
+        idle.player.volume = base * idle.gain * sin(p * Math.PI / 2).toFloat()
     }
 
     fun release() {

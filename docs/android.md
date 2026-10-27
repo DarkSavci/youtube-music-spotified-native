@@ -321,8 +321,10 @@ to.
   Korean, Chinese, Cyrillic and other scripts, each a toggle on the lyrics
   screen. Romanisation is done on the phone (ICU's transliterators);
   translation through an online service, to be chosen when A8 starts.
-- Word-by-word timing where the source has it (LRCLIB's enhanced LRC,
-  YouTube's own word timings), with the sung part of the line filled in.
+- Word-by-word timing where the source has it, with the sung words of the
+  line lit as they come. The core reads it from LRCLIB, in its YAML lyrics
+  file or as enhanced LRC; YouTube times lines only. LRCLIB has few
+  word-timed songs yet, so most songs light by the line.
 - A timing offset, in tenths of a second, kept per song, for lyrics that
   run early or late.
 - Lyric cards: select one to five lines and share them as an image over
@@ -656,8 +658,9 @@ Not yet checked by hand: Android Auto in a car or the Desktop Head Unit
 (it needs the Android Auto app, from the Play Store), a watch, Bluetooth
 buttons, the Assistant's voice, a phone (only the emulator), Last.fm with a
 real key, the importer against each service, and a release published for
-the updater. Word-by-word lyrics wait on the core: its lyrics carry lines,
-not words.
+the updater. Word-by-word lyrics are tested on both sides (the core's
+parsers, the phone's lighting), but not seen on a real song: LRCLIB had
+none with word timings among the hundreds looked at.
 
 Also built since the plan was written: SponsorBlock (skipped by the
 engine, from SponsorBlock's public database), Now Playing's three styles,

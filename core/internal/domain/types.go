@@ -543,6 +543,16 @@ type Lyrics struct {
 type LyricLine struct {
 	AtMs int64  `json:"atMs"`
 	Text string `json:"text"`
+	// Words time the line word by word, when the source does. Empty for
+	// most lyrics: only enhanced LRC carries them. Joined, they are Text.
+	Words []LyricWord `json:"words,omitempty"`
+}
+
+// LyricWord is one word of a line and the moment it is sung. Text keeps the
+// space that follows it, so the words join back into the line.
+type LyricWord struct {
+	AtMs int64  `json:"atMs"`
+	Text string `json:"text"`
 }
 
 // ---------- podcasts ----------
