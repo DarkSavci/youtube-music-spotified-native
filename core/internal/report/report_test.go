@@ -7,6 +7,9 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
+
+	"spotifier/internal/ratelimit"
 )
 
 type fakeCaller struct {
@@ -164,5 +167,39 @@ func TestDisablingStopsReporting(t *testing.T) {
 
 	if len(f.urls()) != sent {
 		t.Fatal("kept reporting after being turned off")
+	}
+}
+
+// refusingCaller refuses every player call, as a cooling-down governor does,
+// and counts them.
+type refusingCaller struct {
+	fakeCaller
+	calls int
+}
+
+func (f *refusingCaller) Call(context.Context, string, map[string]any) (json.RawMessage, error) {
+	f.calls++
+	return nil, &ratelimit.Error{RetryAfter: 30 * time.Second}
+}
+
+func TestARefusedTrackIsNotAskedAgainUntilUpstreamSaysItMayBe(t *testing.T) {
+	caller := &refusingCaller{}
+	now := time.Date(2026, 10, 14, 16, 46, 25, 0, time.UTC)
+	r := &Reporter{Client: caller, Now: func() time.Time { return now }}
+	r.SetEnabled(true)
+	// The session changes several times a second while a track plays.
+	for range 130 {
+		_ = r.Track(context.Background(), "abc")
+		now = now.Add(250 * time.Millisecond)
+	}
+	// Over thirty seconds of updates: the first call, and one more once the
+	// thirty seconds upstream asked for had passed.
+	if caller.calls != 2 {
+		t.Fatalf("player called %d times in 30s of refusal, want 2", caller.calls)
+	}
+	// Another track is not held up by the one refused.
+	_ = r.Track(context.Background(), "def")
+	if caller.calls != 3 {
+		t.Fatalf("another track was not asked for")
 	}
 }

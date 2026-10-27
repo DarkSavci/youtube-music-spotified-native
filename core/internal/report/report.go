@@ -28,7 +28,13 @@ import (
 	"strconv"
 	"sync"
 	"time"
+
+	"spotifier/internal/ratelimit"
 )
+
+// retryWait is how long a track whose tracking could not be fetched is left
+// before it is asked for again, where upstream named no time of its own.
+const retryWait = 30 * time.Second
 
 // Caller is the InnerTube surface this needs: one player call, and a way to
 // fetch a signed URL as the signed-in user.
@@ -69,6 +75,21 @@ type Reporter struct {
 	// again, which is what happens while paused.
 	lastSentMs int64
 	started    bool
+	// A track whose tracking could not be fetched, and when to try it
+	// again. Track is called on every change the session makes, several a
+	// second while it plays: without this, a refused call is made again on
+	// each of them for as long as the refusal lasts.
+	failedID  string
+	failedTil time.Time
+	// Now is the clock; nil is the wall clock. Tests set it.
+	Now func() time.Time
+}
+
+func (r *Reporter) now() time.Time {
+	if r.Now != nil {
+		return r.Now()
+	}
+	return time.Now()
 }
 
 // SetEnabled turns reporting on or off. Off is the default: writing to
@@ -104,13 +125,22 @@ func (r *Reporter) Track(ctx context.Context, videoID string) error {
 	}
 	r.mu.Lock()
 	same := r.videoID == videoID
+	waiting := r.failedID == videoID && r.now().Before(r.failedTil)
 	r.mu.Unlock()
-	if same {
+	if same || waiting {
 		return nil
 	}
 
 	raw, err := r.Client.Call(ctx, "player", map[string]any{"videoId": videoID})
 	if err != nil {
+		// Asked again when upstream said it may be, or after a while.
+		wait := ratelimit.RetryAfterOf(err)
+		if wait <= 0 {
+			wait = retryWait
+		}
+		r.mu.Lock()
+		r.failedID, r.failedTil = videoID, r.now().Add(wait)
+		r.mu.Unlock()
 		return fmt.Errorf("report: player: %w", err)
 	}
 	var t tracking
