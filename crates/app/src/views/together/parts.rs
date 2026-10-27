@@ -11,8 +11,9 @@ pub use super::super::widgets::select;
 use crate::state::State;
 use crate::theme::{self, Icon, Palette};
 
-pub const PANEL_RADIUS: u8 = 16;
-pub const PANEL_PADDING: i8 = 24;
+/// The page's cards are Settings' cards.
+pub const PANEL_RADIUS: u8 = theme::RADIUS + 2;
+pub const PANEL_PADDING: i8 = 20;
 pub const AVATAR: f32 = 38.0;
 pub const AVATAR_SMALL: f32 = 24.0;
 
@@ -33,16 +34,6 @@ pub fn small(state: &State, ui: &mut Ui, text: &str) {
     );
 }
 
-/// The line above a heading: small, bold, widely spaced, in the accent.
-pub fn eyebrow(state: &State, ui: &mut Ui, text: &str) {
-    let color = state.palette.accent;
-    let width = ui.available_width();
-    let galley = widgets::tracked(ui, text, theme::bold(10.5), color, 1.8, (width, 1));
-    let (rect, response) = ui.allocate_exact_size(galley.size(), Sense::hover());
-    read_out(&response, text);
-    ui.painter().galley(rect.min, galley, color);
-}
-
 /// Gives words that were painted by hand to screen readers, and to the
 /// tests that read the page the same way.
 pub fn read_out(response: &Response, text: &str) {
@@ -53,9 +44,14 @@ pub fn heading(ui: &mut Ui, text: &str, size: f32) {
     ui.add(egui::Label::new(egui::RichText::new(text).font(theme::bold(size))).wrap());
 }
 
-/// An outlined panel, as wide as there is room for.
+/// A card, as Settings groups its rows on, as wide as there is room for.
 pub fn panel(state: &State, ui: &mut Ui, contents: impl FnOnce(&mut Ui)) -> Rect {
-    panel_filled(state, ui, widgets::wash(ui, 0.12), contents)
+    panel_filled(
+        state,
+        ui,
+        state.palette.surface.gamma_multiply(0.7),
+        contents,
+    )
 }
 
 pub fn panel_filled(
@@ -68,22 +64,13 @@ pub fn panel_filled(
         .fill(fill)
         .stroke((1.0, state.palette.outline))
         .corner_radius(PANEL_RADIUS)
-        .inner_margin(Margin::same(PANEL_PADDING))
+        .inner_margin(Margin::symmetric(PANEL_PADDING, PANEL_PADDING - 2))
         .show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             contents(ui);
         })
         .response
         .rect
-}
-
-/// The square with rounded corners that starts a panel: its subject.
-pub fn feature_icon(state: &State, ui: &mut Ui, icon: Icon) {
-    let (rect, _) = ui.allocate_exact_size(Vec2::splat(48.0), Sense::hover());
-    let accent = state.palette.accent;
-    ui.painter()
-        .rect_filled(rect, 14, accent.gamma_multiply(0.12));
-    widgets::paint_icon(ui, icon, rect, 24.0, accent);
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -130,7 +117,8 @@ pub fn button_named(
         .painter()
         .layout_no_wrap(label.to_owned(), theme::semibold(13.0), ink);
     let icon_room = if icon.is_some() { 24.0 } else { 0.0 };
-    let size = vec2(galley.size().x + icon_room + 40.0, 40.0);
+    // As tall as the app's other pills.
+    let size = vec2(galley.size().x + icon_room + 36.0, 34.0);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
     widgets::name(ui, &response, named);
     if !ui.is_rect_visible(rect) {
@@ -150,7 +138,7 @@ pub fn button_named(
         }
         Kind::Secondary | Kind::Danger => {
             ui.painter()
-                .rect_filled(rect, round, widgets::wash(ui, 0.3 + lift * 0.5));
+                .rect_filled(rect, round, widgets::wash(ui, lift * 0.6));
             let outline = match kind {
                 Kind::Danger => palette.danger.gamma_multiply(0.35),
                 _ => crate::tint::blend(palette.dim, palette.text, lift),
@@ -160,7 +148,7 @@ pub fn button_named(
                 .rect_stroke(rect, round, stroke, egui::StrokeKind::Inside);
         }
     }
-    let mut left = rect.left() + 20.0;
+    let mut left = rect.left() + 18.0;
     if let Some(icon) = icon {
         let at = Rect::from_center_size(pos2(left + 8.0, rect.center().y), Vec2::splat(16.0));
         widgets::paint_icon(ui, icon, at, 16.0, ink);
@@ -214,12 +202,14 @@ fn words(
     response
 }
 
-/// A tick box with its label. Returns whether it was clicked.
+/// A switch with its label after it, the whole of it one thing to click,
+/// as Settings' switches are. Returns whether it was clicked.
 pub fn check(ui: &mut Ui, palette: &Palette, on: bool, label: &str) -> bool {
-    let galley =
-        ui.painter()
-            .layout_no_wrap(label.to_owned(), theme::regular(12.0), palette.secondary);
-    let size = vec2(14.0 + 9.0 + galley.size().x, 24.0);
+    const SWITCH: Vec2 = vec2(34.0, 20.0);
+    let galley = ui
+        .painter()
+        .layout_no_wrap(label.to_owned(), theme::regular(12.5), palette.text);
+    let size = vec2(SWITCH.x + 10.0 + galley.size().x, 28.0);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
     widgets::hand(ui, &response);
     response.widget_info(|| {
@@ -227,26 +217,19 @@ pub fn check(ui: &mut Ui, palette: &Palette, on: bool, label: &str) -> bool {
     });
     if ui.is_rect_visible(rect) {
         let lift = widgets::hover(ui, &response);
-        let square =
-            Rect::from_center_size(pos2(rect.left() + 7.0, rect.center().y), Vec2::splat(14.0));
-        if on {
-            ui.painter().rect_filled(square, 3, palette.accent);
-            let tick = [
-                square.left_top() + vec2(3.2, 7.4),
-                square.left_top() + vec2(5.9, 10.0),
-                square.left_top() + vec2(10.8, 4.4),
-            ];
-            let stroke = Stroke::new(1.6, palette.on_accent);
-            ui.painter().add(egui::Shape::line(tick.to_vec(), stroke));
-        } else {
-            let outline = crate::tint::blend(palette.dim, palette.text, lift);
-            let stroke = Stroke::new(1.0, outline);
-            ui.painter()
-                .rect_stroke(square, 3, stroke, egui::StrokeKind::Inside);
-        }
-        let ink = crate::tint::blend(palette.secondary, palette.text, lift);
-        let at = pos2(rect.left() + 23.0, rect.center().y - galley.size().y / 2.0);
-        ui.painter().galley(at, galley, ink);
+        let pill = Rect::from_min_size(pos2(rect.left(), rect.center().y - SWITCH.y / 2.0), SWITCH);
+        // The knob slides rather than jumps.
+        let travel = ui.ctx().animate_bool(response.id, on);
+        let off = crate::tint::blend(palette.surface_active, palette.dim, lift * 0.5);
+        let fill = crate::tint::blend(off, palette.accent, travel);
+        ui.painter()
+            .rect_filled(pill, CornerRadius::same(u8::MAX), fill);
+        let ends = (pill.left() + SWITCH.y / 2.0)..=(pill.right() - SWITCH.y / 2.0);
+        let knob = pos2(egui::lerp(ends, travel), pill.center().y);
+        ui.painter()
+            .circle_filled(knob, SWITCH.y / 2.0 - 3.0, egui::Color32::WHITE);
+        let at = pos2(pill.right() + 10.0, rect.center().y - galley.size().y / 2.0);
+        ui.painter().galley(at, galley, palette.text);
     }
     response.clicked()
 }

@@ -1,6 +1,6 @@
 //! Before a room: who you join as, and the two ways in.
 
-use eframe::egui::{self, Align, Frame, Layout, Margin, Sense, Ui, Vec2, pos2, vec2};
+use eframe::egui::{self, Frame, Margin, Sense, Ui, Vec2, pos2, vec2};
 
 use super::super::widgets::{self, TextField};
 use super::parts::{self, Kind};
@@ -11,13 +11,17 @@ use crate::together::protocol::picture_of;
 use crate::together::{Ask, Field, Mode, Phase};
 
 pub fn show(state: &State, ui: &mut Ui, actions: &mut Vec<Action>) {
-    ui.add_space(14.0);
-    identity(state, ui, actions);
-    ui.add_space(14.0);
+    ui.add_space(22.0);
     // The two panels are as tall as the taller was on the frame before, as
     // the cells of a grid row are.
     let id = ui.id().with("lobby-height");
-    let tall = ui.data(|data| data.get_temp::<f32>(id)).unwrap_or(0.0);
+    // One above the other, each is as tall as it is.
+    let side_by_side = ui.available_width() >= super::TWO_COLUMNS_FROM;
+    let tall = if side_by_side {
+        ui.data(|data| data.get_temp::<f32>(id)).unwrap_or(0.0)
+    } else {
+        0.0
+    };
     let (mut made, mut joined) = (0.0, 0.0);
     super::columns(
         ui,
@@ -33,8 +37,9 @@ pub fn show(state: &State, ui: &mut Ui, actions: &mut Vec<Action>) {
     }
 }
 
-/// The picture and name this listener is seen by.
-fn identity(state: &State, ui: &mut Ui, actions: &mut Vec<Action>) {
+/// The picture and name this listener is seen by, as rows of the
+/// Connection card.
+pub(super) fn identity(state: &State, ui: &mut Ui, actions: &mut Vec<Action>) {
     let palette = &state.palette;
     let account = state.account.as_ref();
     let account_name = account.map_or("Listener", |account| &account.name);
@@ -46,41 +51,37 @@ fn identity(state: &State, ui: &mut Ui, actions: &mut Vec<Action>) {
     };
     let has_picture = account.is_some_and(|account| !account.avatar_url.is_empty());
     let shares = has_picture && state.settings.together_share_picture;
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 12.0;
-        let (disc, _) = ui.allocate_exact_size(Vec2::splat(parts::AVATAR), Sense::hover());
+    let about = "What the people in a room see you as.";
+    super::servers::row(state, ui, ("Your name", about), |ui| {
+        ui.spacing_mut().item_spacing.x = 10.0;
+        let field = TextField {
+            text: &state.settings.together_name,
+            hint: account_name,
+            label: "Joining as",
+            icon: None,
+            width: 200.0,
+            compact: true,
+        };
+        if let Some(typed) = field.show(ui, palette) {
+            actions.push(Action::TogetherField(Field::Name, typed));
+        }
+        let (disc, _) =
+            ui.allocate_exact_size(Vec2::splat(parts::AVATAR_SMALL + 6.0), Sense::hover());
         let picture = match account {
             Some(account) if shares => picture_of(&account.avatar_url),
             _ => Vec::new(),
         };
         parts::avatar(state, ui, disc, name, &picture);
-        ui.vertical(|ui| {
-            ui.spacing_mut().item_spacing.y = 2.0;
-            ui.label(
-                egui::RichText::new("Joining as")
-                    .font(theme::regular(10.5))
-                    .color(palette.secondary),
-            );
-            let field = TextField {
-                text: &state.settings.together_name,
-                hint: account_name,
-                label: "Joining as",
-                icon: None,
-                width: 230.0,
-                compact: true,
-            };
-            if let Some(typed) = field.show(ui, palette) {
-                actions.push(Action::TogetherField(Field::Name, typed));
+    });
+    if has_picture {
+        ui.add_space(6.0);
+        let about = "Shown beside your name. Otherwise your initial is.";
+        super::servers::row(state, ui, ("Profile picture", about), |ui| {
+            if parts::check(ui, palette, shares, "Share my profile picture") {
+                actions.push(Action::Room(Ask::SharePicture(!shares)));
             }
         });
-        if has_picture {
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if parts::check(ui, palette, shares, "Share my profile picture") {
-                    actions.push(Action::Room(Ask::SharePicture(!shares)));
-                }
-            });
-        }
-    });
+    }
 }
 
 /// A panel of the lobby, at least `tall`. Returns how tall it came out
@@ -104,15 +105,13 @@ fn create(state: &State, ui: &mut Ui, actions: &mut Vec<Action>, tall: f32) -> f
     let palette = &state.palette;
     let settings = &state.settings;
     lobby_panel(state, ui, tall, |ui| {
-        parts::feature_icon(state, ui, Icon::ListMusic);
-        ui.add_space(10.0);
-        parts::heading(ui, "Start something good.", 23.0);
+        parts::heading(ui, "Start a room", 18.0);
         parts::quiet(
             state,
             ui,
-            "Pick the mood. Invite your people. Build the soundtrack together.",
+            "Make a room and invite friends with its PIN. You lead it.",
         );
-        ui.add_space(14.0);
+        ui.add_space(12.0);
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 5.0;
             ui.label(egui::RichText::new("Room name").font(theme::regular(13.0)));
@@ -134,14 +133,14 @@ fn create(state: &State, ui: &mut Ui, actions: &mut Vec<Action>, tall: f32) -> f
             ui,
             "Remembered on this device for your next room. Visible to listeners.",
         );
-        ui.add_space(14.0);
+        ui.add_space(12.0);
+        ui.label(egui::RichText::new("Who controls the music").font(theme::regular(13.0)));
         for mode in Mode::EVERY {
             if mode_choice(state, ui, mode, settings.together_mode == mode) {
                 actions.push(Action::TogetherMode(mode));
             }
-            ui.add_space(2.0);
         }
-        ui.add_space(14.0);
+        ui.add_space(12.0);
         let connecting = state.together.phase == Phase::Connecting;
         ui.add_enabled_ui(state.together.phase == Phase::Idle, |ui| {
             let label = if connecting {
@@ -160,7 +159,7 @@ fn create(state: &State, ui: &mut Ui, actions: &mut Vec<Action>, tall: f32) -> f
 /// means, and a mark on the one chosen.
 fn mode_choice(state: &State, ui: &mut Ui, mode: Mode, chosen: bool) -> bool {
     let palette = &state.palette;
-    let size = vec2(ui.available_width(), 58.0);
+    let size = vec2(ui.available_width(), 52.0);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
     widgets::hand(ui, &response);
     response.widget_info(|| {
@@ -168,26 +167,23 @@ fn mode_choice(state: &State, ui: &mut Ui, mode: Mode, chosen: bool) -> bool {
         egui::WidgetInfo::selected(egui::WidgetType::RadioButton, enabled, chosen, mode.title())
     });
     let lift = widgets::hover(ui, &response);
-    let outline = if chosen {
-        palette.accent.gamma_multiply(0.6)
-    } else {
-        crate::tint::blend(palette.outline, palette.dim, lift)
-    };
+    // A row as the app's lists have them: lit under the pointer, and the
+    // chosen one held lit.
     let fill = if chosen {
-        palette.accent.gamma_multiply(0.08)
+        palette.surface_active
     } else {
-        widgets::wash(ui, lift * 0.5)
+        widgets::wash(ui, lift)
     };
-    ui.painter()
-        .rect(rect, 10, fill, (1.0, outline), egui::StrokeKind::Inside);
-    let dot = pos2(rect.left() + 21.0, rect.center().y);
+    ui.painter().rect_filled(rect, theme::RADIUS_ROW, fill);
+    let dot = pos2(rect.left() + 20.0, rect.center().y);
     if chosen {
         ui.painter().circle_filled(dot, 8.0, palette.accent);
-        ui.painter().circle_filled(dot, 3.0, palette.panel);
+        ui.painter().circle_filled(dot, 3.0, palette.on_accent);
     } else {
-        ui.painter().circle_stroke(dot, 7.5, (1.0, palette.dim));
+        let ring = crate::tint::blend(palette.dim, palette.secondary, lift);
+        ui.painter().circle_stroke(dot, 7.5, (1.5, ring));
     }
-    let left = rect.left() + 41.0;
+    let left = rect.left() + 40.0;
     let width = rect.right() - left - 12.0;
     let font = theme::semibold(13.0);
     let title = widgets::elided(ui, mode.title(), font, palette.text, width, 1);
@@ -204,16 +200,14 @@ fn join(state: &State, ui: &mut Ui, actions: &mut Vec<Action>, tall: f32) -> f32
     let palette = &state.palette;
     let pin = &state.together.form.pin;
     lobby_panel(state, ui, tall, |ui| {
-        parts::feature_icon(state, ui, Icon::User);
-        ui.add_space(10.0);
-        parts::heading(ui, "Your friends are waiting.", 23.0);
+        parts::heading(ui, "Join a room", 18.0);
         parts::quiet(
             state,
             ui,
-            "Enter their 8-digit PIN. Make sure you’re both on the same server.",
+            "Enter the 8-digit PIN a friend gave you. You both need the same server.",
         );
-        ui.add_space(26.0);
-        parts::small(state, ui, "Room PIN");
+        ui.add_space(12.0);
+        ui.label(egui::RichText::new("Room PIN").font(theme::regular(13.0)));
         let idle = state.together.phase == Phase::Idle;
         let whole = pin.len() == 8;
         if pin_field(state, ui, actions, pin) && idle && whole {
@@ -221,18 +215,16 @@ fn join(state: &State, ui: &mut Ui, actions: &mut Vec<Action>, tall: f32) -> f32
         }
         ui.add_space(12.0);
         ui.add_enabled_ui(idle && whole, |ui| {
-            if parts::button(ui, palette, Kind::Secondary, None, "Join room").clicked() {
+            if parts::button(ui, palette, Kind::Primary, None, "Join room").clicked() {
                 actions.push(Action::TogetherJoin);
             }
         });
-        ui.add_space(22.0);
-        ui.label(
-            egui::RichText::new(
-                "Joining pauses your personal queue. When you leave, the music keeps \
-                 playing from the room’s queue.",
-            )
-            .font(theme::regular(12.0))
-            .color(palette.secondary),
+        ui.add_space(14.0);
+        parts::small(
+            state,
+            ui,
+            "Your own queue waits while you are in a room. When you leave, the music \
+             goes on from the room’s queue.",
         );
     })
 }
@@ -253,10 +245,10 @@ fn pin_field(state: &State, ui: &mut Ui, actions: &mut Vec<Action>, pin: &str) -
         .fill(palette.surface)
         .stroke((1.0, outline))
         .corner_radius(theme::RADIUS)
-        .inner_margin(Margin::symmetric(18, 10))
+        .inner_margin(Margin::symmetric(16, 8))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
-            let font = theme::semibold(28.0);
+            let font = theme::semibold(24.0);
             // The figures stand apart, as they are read: one at a time.
             let spaced = font.clone();
             let ink = palette.text;

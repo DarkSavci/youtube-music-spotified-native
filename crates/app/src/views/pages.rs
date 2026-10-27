@@ -19,7 +19,7 @@ pub fn show(state: &State, ui: &mut Ui, actions: &mut Vec<Action>) {
     let hero = matches!(
         page,
         Page::Album(_) | Page::Playlist(_) | Page::Artist(_) | Page::Podcast(_) | Page::Mix(_)
-    );
+    ) || (*page == Page::Together && state.together.in_room());
     let shelves = matches!(
         page,
         Page::Home

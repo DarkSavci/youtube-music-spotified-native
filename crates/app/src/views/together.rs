@@ -8,7 +8,7 @@ mod queue;
 mod room;
 mod servers;
 
-use eframe::egui::{self, Align, Frame, Layout, Margin, Sense, Ui, vec2};
+use eframe::egui::{self, Align, Frame, Layout, Margin, Ui, vec2};
 
 use super::widgets;
 use crate::actions::Action;
@@ -26,84 +26,63 @@ pub fn show(state: &State, ui: &mut Ui, actions: &mut Vec<Action>) {
     // No wider than reads well, and never wider than there is room for.
     ui.set_max_width(MAX_WIDTH.min(ui.available_width()));
     ui.spacing_mut().item_spacing.y = 6.0;
-    ui.add_space(14.0);
-    heading(state, ui);
-    ui.add_space(18.0);
-    servers::bar(state, ui, actions);
-    if let Some(form) = &state.together.manage {
-        ui.add_space(GAP);
-        servers::form(state, ui, actions, form);
+    if let (Phase::Joined | Phase::Reconnecting, Some(found)) =
+        (state.together.phase, &state.together.room)
+    {
+        room::show(state, ui, actions, found);
+        ui.add_space(12.0);
+        return;
     }
+    heading(state, ui);
     if let Some(error) = &state.together.error {
-        ui.add_space(GAP - 2.0);
+        ui.add_space(GAP - 6.0);
         alert(state, ui, actions, error);
     }
-    match (state.together.phase, &state.together.room) {
-        (Phase::Joined | Phase::Reconnecting, Some(found)) => room::show(state, ui, actions, found),
-        (phase, _) => {
-            lobby::show(state, ui, actions);
-            waiting(state, ui, actions, phase);
-        }
-    }
-    ui.add_space(26.0);
-    ui.scope(|ui| {
-        ui.set_max_width(650.0_f32.min(ui.available_width()));
-        parts::small(
-            state,
-            ui,
-            "Music plays through each person’s own account. Volume stays personal. \
-             Only your chosen name, picture and room activity are shared.",
-        );
-    });
+    lobby::show(state, ui, actions);
+    waiting(state, ui, actions, state.together.phase);
+    connection(state, ui, actions);
     ui.add_space(12.0);
 }
 
-/// The page's name with what it is for, and that it is a preview.
+/// The page's name, as Settings and Stats name theirs, and what it is for.
 fn heading(state: &State, ui: &mut Ui) {
-    let palette = &state.palette;
-    ui.horizontal(|ui| {
-        ui.vertical(|ui| {
-            ui.spacing_mut().item_spacing.y = 4.0;
-            parts::eyebrow(state, ui, "YOUR MUSIC, TOGETHER");
-            let width = ui.available_width() - 110.0;
-            let title = widgets::tracked(
-                ui,
-                "Listen Together",
-                theme::bold(40.0),
-                palette.text,
-                -1.4,
-                (width, 1),
-            );
-            let (rect, response) = ui.allocate_exact_size(title.size(), Sense::hover());
-            parts::read_out(&response, "Listen Together");
-            ui.painter().galley(rect.min, title, palette.text);
-            ui.add_space(2.0);
-            ui.label(
-                egui::RichText::new("A shared queue. Your own sound.")
-                    .font(theme::regular(14.0))
-                    .color(palette.secondary),
-            );
-        });
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            let font = theme::regular(11.0);
-            let said =
-                ui.painter()
-                    .layout_no_wrap("Preview · v2".to_owned(), font, palette.secondary);
-            let size = said.size() + vec2(22.0, 13.0);
-            let (badge, response) = ui.allocate_exact_size(size, Sense::hover());
-            parts::read_out(&response, "Preview · v2");
-            let stroke = egui::Stroke::new(1.0, palette.outline);
-            ui.painter()
-                .rect_stroke(badge, 20, stroke, egui::StrokeKind::Inside);
-            let at = badge.center() - said.size() / 2.0;
-            ui.painter().galley(at, said, palette.secondary);
-        });
+    ui.label(egui::RichText::new("Listen Together").font(theme::bold(28.0)));
+    ui.label(
+        egui::RichText::new(
+            "Play the same music at the same moment as your friends, each on your own \
+             account and at your own volume.",
+        )
+        .font(theme::regular(14.0))
+        .color(state.palette.secondary),
+    );
+}
+
+/// Where rooms are made and joined, and who you are in them: chosen once
+/// and kept, so below the ways in.
+fn connection(state: &State, ui: &mut Ui, actions: &mut Vec<Action>) {
+    super::cards::section_title(ui, "Connection");
+    parts::panel(state, ui, |ui| {
+        ui.spacing_mut().item_spacing.y = 6.0;
+        servers::bar(state, ui, actions);
+        if let Some(form) = &state.together.manage {
+            ui.add_space(10.0);
+            servers::form(state, ui, actions, form);
+        }
+        ui.add_space(10.0);
+        lobby::identity(state, ui, actions);
+        ui.add_space(6.0);
+        parts::small(
+            state,
+            ui,
+            "Only your name, your picture if you share it, and what you do in a room \
+             are shared with the people in it.",
+        );
     });
 }
 
 /// Something that went wrong, on a tint of the colour that says so, until
 /// it is dismissed.
-fn alert(state: &State, ui: &mut Ui, actions: &mut Vec<Action>, text: &str) {
+pub(super) fn alert(state: &State, ui: &mut Ui, actions: &mut Vec<Action>, text: &str) {
     let palette = &state.palette;
     Frame::new()
         .fill(palette.danger.gamma_multiply(0.12))
@@ -136,7 +115,7 @@ fn waiting(state: &State, ui: &mut Ui, actions: &mut Vec<Action>, phase: Phase) 
         Phase::Waiting => {
             ui.add_space(GAP);
             parts::panel(state, ui, |ui| {
-                parts::heading(ui, "Waiting for the leader…", 23.0);
+                parts::heading(ui, "Waiting for the leader…", 18.0);
                 parts::quiet(
                     state,
                     ui,

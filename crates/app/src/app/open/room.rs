@@ -58,6 +58,9 @@ fn found(state: &State, place: &str) -> Option<Box<Track>> {
 /// The actions a step of this file's comes to; none if it names nothing
 /// that is there.
 pub(super) fn actions(kind: &str, value: &str, state: &State) -> Vec<Action> {
+    if kind == "room-demo" {
+        return demo_room(value);
+    }
     let asks = asks(kind, value, state).unwrap_or_default();
     let mut actions: Vec<Action> = asks.into_iter().map(Action::Room).collect();
     if kind == "confirm" {
@@ -154,4 +157,123 @@ fn asks(kind: &str, value: &str, state: &State) -> Option<Vec<Ask>> {
         _ => return None,
     };
     Some(vec![ask])
+}
+
+/// A room to look at with no relay to make one: led by the listener this
+/// is, or with `room-demo:guest` by someone else, with three others in it,
+/// a song playing, and more waiting.
+fn demo_room(value: &str) -> Vec<Action> {
+    use crate::together::Event;
+    use crate::together::protocol::{Entry, Happening, Member, Person, RoomArtist, RoomTrack};
+    use spotified_client::models::Artwork;
+
+    let person = |id: &str, name: &str| Person {
+        id: id.into(),
+        name: name.into(),
+        avatar: Vec::new(),
+    };
+    let member = |id: &str, name: &str, status: &str, role: &str| Member {
+        id: id.into(),
+        name: name.into(),
+        connected: true,
+        status: status.into(),
+        role: role.into(),
+        ..Member::default()
+    };
+    // Songs with covers YouTube serves to anyone.
+    let songs = [
+        ("FGBhQbmPwH8", "One More Time", "Daft Punk", 320_000.0, "me"),
+        (
+            "fJ9rUzIMcZQ",
+            "Bohemian Rhapsody",
+            "Queen",
+            355_000.0,
+            "bob",
+        ),
+        (
+            "kJQP7kiw5Fk",
+            "Despacito",
+            "Luis Fonsi, Daddy Yankee",
+            282_000.0,
+            "cem",
+        ),
+        ("3JZ_D3ELwOQ", "Faded", "Alan Walker", 212_000.0, "me"),
+        (
+            "dQw4w9WgXcQ",
+            "Never Gonna Give You Up",
+            "Rick Astley",
+            213_000.0,
+            "dana",
+        ),
+    ];
+    let names = |id: &str| match id {
+        "me" => "You",
+        "bob" => "Bob",
+        "cem" => "Cem",
+        _ => "Dana",
+    };
+    let queue: Vec<Entry> = songs
+        .iter()
+        .map(|(id, title, artist, duration, by)| Entry {
+            id: format!("e-{id}"),
+            track: RoomTrack {
+                id: (*id).into(),
+                title: (*title).into(),
+                artists: vec![RoomArtist {
+                    name: (*artist).into(),
+                }],
+                duration_ms: *duration,
+                artwork: vec![Artwork {
+                    url: format!("https://i.ytimg.com/vi/{id}/hqdefault.jpg"),
+                    width: 480,
+                    height: 360,
+                }],
+            },
+            added_by: person(by, names(by)),
+            ..Entry::default()
+        })
+        .collect();
+    let guest = value == "guest";
+    let room = Room {
+        name: "Friday night".into(),
+        id: "demo".into(),
+        pin: "48213907".into(),
+        owner: if guest { "bob".into() } else { "me".into() },
+        members: vec![
+            member("me", "You", "listening", "listener"),
+            member("bob", "Bob", "listening", "dj"),
+            member("cem", "Cem", "paused", "listener"),
+            member("dana", "Dana", "buffering", "listener"),
+        ],
+        current: queue.first().map(|entry| entry.id.clone()),
+        queue,
+        playing: true,
+        duplicates: true,
+        limit: 10,
+        revision: 1,
+        activity: vec![
+            Happening {
+                id: "a1".into(),
+                text: "Bob joined".into(),
+                at: 0.0,
+            },
+            Happening {
+                id: "a2".into(),
+                text: "Cem added Despacito".into(),
+                at: 0.0,
+            },
+        ],
+        ..Room::default()
+    };
+    let events = [
+        Event::Joined("me".into()),
+        Event::Room {
+            room: Box::new(room),
+            offset_ms: 0.0,
+        },
+    ];
+    events
+        .into_iter()
+        .map(|event| Action::TogetherEvent(Box::new(event)))
+        .collect()
 }

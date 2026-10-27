@@ -14,14 +14,14 @@ use crate::theme::{self, Icon};
 use crate::together::protocol::{Entry, Person, SongRequest};
 use crate::together::{Ask, Room, Tab};
 
-const ROW: f32 = 60.0;
+const ROW: f32 = 56.0;
 const ART: f32 = 40.0;
 
 pub fn show(state: &State, ui: &mut Ui, actions: &mut Vec<Action>, room: &Room) {
     let me = state.together.me.as_str();
-    ui.add_space(18.0);
+    ui.add_space(4.0);
     tabs(state, ui, actions, room);
-    ui.add_space(10.0);
+    ui.add_space(12.0);
     match state.together.tab {
         Tab::Queue => {
             if room.may_add(me) {
@@ -40,7 +40,8 @@ pub fn show(state: &State, ui: &mut Ui, actions: &mut Vec<Action>, room: &Room) 
     }
 }
 
-/// Queue, History and Activity, with the offer to take back an edit.
+/// Queue, History and Activity, as the app's chips that narrow a list,
+/// with the offer to take back an edit.
 fn tabs(state: &State, ui: &mut Ui, actions: &mut Vec<Action>, room: &Room) {
     let palette = &state.palette;
     let me = state.together.me.as_str();
@@ -49,76 +50,54 @@ fn tabs(state: &State, ui: &mut Ui, actions: &mut Vec<Action>, room: &Room) {
     } else {
         0
     };
-    let row = ui
-        .horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 24.0;
-            for tab in Tab::EVERY {
-                let chosen = state.together.tab == tab;
-                let badge = if tab == Tab::Queue { waiting } else { 0 };
-                if tab_button(state, ui, &tab.label(room), chosen, badge) {
-                    actions.push(Action::Room(Ask::ShowTab(tab)));
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 8.0;
+        for tab in Tab::EVERY {
+            let chosen = state.together.tab == tab;
+            if widgets::chip(ui, palette, &tab.label(room), chosen).clicked() && !chosen {
+                actions.push(Action::Room(Ask::ShowTab(tab)));
+            }
+            // Requests waiting for an answer, beside the queue's chip.
+            if tab == Tab::Queue && waiting > 0 {
+                badge(state, ui, waiting);
+            }
+        }
+        let server_now = state.together.server_now();
+        if room.may_undo(me, server_now) {
+            // The offer goes when the relay would refuse it.
+            let left = room
+                .undo
+                .as_ref()
+                .map_or(0.0, |undo| undo.expires - server_now);
+            let left = Duration::from_millis(left.clamp(0.0, 60_000.0) as u64 + 50);
+            ui.ctx().request_repaint_after(left);
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if parts::text_button(ui, palette, None, "Undo edit").clicked() {
+                    actions.push(Action::Room(Ask::Undo));
                 }
-            }
-            let server_now = state.together.server_now();
-            if room.may_undo(me, server_now) {
-                // The offer goes when the relay would refuse it.
-                let left = room
-                    .undo
-                    .as_ref()
-                    .map_or(0.0, |undo| undo.expires - server_now);
-                let left = Duration::from_millis(left.clamp(0.0, 60_000.0) as u64 + 50);
-                ui.ctx().request_repaint_after(left);
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if parts::text_button(ui, palette, None, "Undo edit").clicked() {
-                        actions.push(Action::Room(Ask::Undo));
-                    }
-                });
-            }
-        })
-        .response
-        .rect;
-    let across = ui.max_rect().x_range();
-    ui.painter()
-        .hline(across, row.bottom(), (1.0, palette.outline));
+            });
+        }
+    });
 }
 
-/// One tab: its words, a line under the one chosen, and how many requests
-/// wait, on the queue's.
-fn tab_button(state: &State, ui: &mut Ui, label: &str, chosen: bool, badge: usize) -> bool {
+/// How many requests wait, in a disc of the accent.
+fn badge(state: &State, ui: &mut Ui, count: usize) {
     let palette = &state.palette;
-    let galley = ui
-        .painter()
-        .layout_no_wrap(label.to_owned(), theme::medium(13.0), palette.text);
-    let badge_room = if badge > 0 { 26.0 } else { 0.0 };
-    let size = vec2(galley.size().x + badge_room, 40.0);
-    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
-    widgets::hand(ui, &response);
-    response.widget_info(|| {
-        egui::WidgetInfo::selected(egui::WidgetType::Button, ui.is_enabled(), chosen, label)
-    });
-    let lift = widgets::hover(ui, &response);
-    let ink = if chosen {
-        palette.text
-    } else {
-        crate::tint::blend(palette.secondary, palette.text, lift)
-    };
-    let at = pos2(rect.left(), rect.center().y - galley.size().y / 2.0 - 2.0);
-    let end = at.x + galley.size().x;
-    ui.painter().galley(at, galley, ink);
-    if badge > 0 {
-        let pill =
-            Rect::from_center_size(pos2(end + 15.0, rect.center().y - 2.0), vec2(18.0, 18.0));
-        ui.painter().rect_filled(pill, 9, palette.accent);
-        let font = theme::bold(10.0);
-        let align = egui::Align2::CENTER_CENTER;
-        let count = badge.to_string();
-        widgets::text_at(ui, pill.center(), align, &count, font, palette.on_accent);
-    }
-    if chosen {
-        let line = Rect::from_min_max(pos2(rect.left(), rect.bottom() - 2.0), rect.right_bottom());
-        ui.painter().rect_filled(line, 0, palette.accent);
-    }
-    response.clicked()
+    let (rect, response) = ui.allocate_exact_size(Vec2::splat(20.0), Sense::hover());
+    let said = format!("{count} waiting");
+    parts::read_out(&response, &said);
+    ui.painter()
+        .circle_filled(rect.center(), 10.0, palette.accent);
+    let font = theme::bold(10.5);
+    let align = egui::Align2::CENTER_CENTER;
+    widgets::text_at(
+        ui,
+        rect.center(),
+        align,
+        &count.to_string(),
+        font,
+        palette.on_accent,
+    );
 }
 
 /// The field that finds a song to add, or to ask for.
@@ -137,14 +116,14 @@ fn search_field(state: &State, ui: &mut Ui, actions: &mut Vec<Action>, room: &Ro
     let id = ui.id().with("room-search");
     let focused = ui.memory(|memory| memory.has_focus(id));
     let outline = if focused {
-        palette.accent
+        palette.secondary
     } else {
-        palette.outline
+        palette.surface
     };
     Frame::new()
-        .fill(widgets::wash(ui, 0.15))
+        .fill(palette.surface)
         .stroke((1.0, outline))
-        .corner_radius(9)
+        .corner_radius(theme::RADIUS)
         .inner_margin(Margin::symmetric(12, 0))
         .show(ui, |ui| {
             ui.set_height(40.0);
@@ -156,8 +135,8 @@ fn search_field(state: &State, ui: &mut Ui, actions: &mut Vec<Action>, room: &Ro
                 let clear_room = if query.is_empty() { 0.0 } else { 34.0 };
                 let edit = egui::TextEdit::singleline(&mut edited)
                     .id(id)
-                    .hint_text(egui::RichText::new(hint).font(theme::regular(12.5)))
-                    .font(theme::regular(12.5))
+                    .hint_text(egui::RichText::new(hint).font(theme::regular(13.0)))
+                    .font(theme::regular(13.0))
                     .frame(Frame::NONE)
                     .desired_width(ui.available_width() - clear_room);
                 let response = ui.add(edit);
@@ -200,18 +179,19 @@ fn song_row(state: &State, ui: &mut Ui, song: &Song<'_>, controls: impl FnOnce(&
     if !ui.is_rect_visible(rect) {
         return;
     }
-    if song.current {
-        let fill = palette.accent.gamma_multiply(0.07);
-        ui.painter().rect_filled(rect, theme::RADIUS, fill);
-    }
     widgets::row_hover(ui, &response, rect);
     let mut left = rect.left() + 8.0;
     if let Some(number) = song.number {
         let at = pos2(left + 9.0, rect.center().y);
         let align = egui::Align2::CENTER_CENTER;
-        let font = theme::regular(11.0);
-        widgets::text_at(ui, at, align, &number.to_string(), font, palette.secondary);
-        left += 28.0;
+        let font = theme::regular(13.0);
+        let ink = if song.current {
+            palette.accent
+        } else {
+            palette.secondary
+        };
+        widgets::text_at(ui, at, align, &number.to_string(), font, ink);
+        left += 30.0;
     }
     let cover = Rect::from_min_size(pos2(left, rect.center().y - ART / 2.0), Vec2::splat(ART));
     let shape = widgets::ArtShape::Rounded(5);
@@ -231,7 +211,7 @@ fn song_row(state: &State, ui: &mut Ui, song: &Song<'_>, controls: impl FnOnce(&
         let length = format::duration(duration_ms);
         right.label(
             egui::RichText::new(length)
-                .font(theme::regular(11.0))
+                .font(theme::regular(12.5))
                 .color(palette.secondary),
         );
     }
@@ -240,17 +220,22 @@ fn song_row(state: &State, ui: &mut Ui, song: &Song<'_>, controls: impl FnOnce(&
         parts::avatar(state, &right, disc, &person.name, &person.avatar);
     }
     let width = (right.min_rect().left() - left - 10.0).max(20.0);
-    let font = theme::medium(12.5);
-    let title = widgets::elided(ui, song.title, font, palette.text, width, 1);
+    let font = theme::regular(14.0);
+    let ink = if song.current {
+        palette.accent
+    } else {
+        palette.text
+    };
+    let title = widgets::elided(ui, song.title, font, ink, width, 1);
     // A song known only by its name has the row's middle to itself.
     let rise = if song.detail.is_empty() {
         title.size().y / 2.0
     } else {
-        17.0
+        19.0
     };
     ui.painter()
-        .galley(pos2(left, rect.center().y - rise), title, palette.text);
-    let font = theme::regular(11.5);
+        .galley(pos2(left, rect.center().y - rise), title, ink);
+    let font = theme::regular(12.5);
     let detail = widgets::elided(ui, &song.detail, font, palette.secondary, width, 1);
     ui.painter()
         .galley(pos2(left, rect.center().y + 2.0), detail, palette.secondary);

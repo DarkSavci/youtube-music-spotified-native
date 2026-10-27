@@ -105,13 +105,19 @@ pub(super) fn asked_room(harness: &Harness<'_, Fixture>, wanted: impl Fn(&Ask) -
     )
 }
 
+/// The page held scrolled to the bottom, where the server and who you
+/// are in a room are chosen.
+fn at_connection(mut state: State) -> State {
+    state.held_scroll = Some(450.0);
+    state
+}
+
 #[test]
-fn the_start_page_names_itself_and_says_it_is_a_preview() {
+fn the_start_page_names_itself_and_its_two_ways_in() {
     let harness = harness(on_page());
-    harness.get_by_label("YOUR MUSIC, TOGETHER");
-    harness.get_by_label("Preview · v2");
-    harness.get_by_label("Start something good.");
-    harness.get_by_label("Your friends are waiting.");
+    harness.get_by_label("Start a room");
+    harness.get_by_label("Join a room");
+    assert!(harness.query_by_label("Preview · v2").is_none());
 }
 
 #[test]
@@ -122,7 +128,7 @@ fn the_server_is_chosen_from_those_saved() {
         name: "Theirs".into(),
         url: "wss://other.example.com".into(),
     });
-    let mut harness = harness(state);
+    let mut harness = harness(at_connection(state));
     harness.get_by_label("Room server").click();
     harness.run();
     harness.get_by_label("Theirs").click();
@@ -135,14 +141,14 @@ fn the_server_is_chosen_from_those_saved() {
 
 #[test]
 fn manage_opens_the_form_and_with_no_server_it_offers_to_add_one() {
-    let mut harness = harness(on_page());
+    let mut harness = harness(at_connection(on_page()));
     harness.get_by_label("Manage").click();
     harness.run();
     assert!(asked_room(&harness, |ask| *ask == Ask::ToggleManage));
 
     let mut state = on_page();
     state.settings.together_selected.clear();
-    let mut harness = super::harness(state);
+    let mut harness = super::harness(at_connection(state));
     assert!(harness.query_by_label("Manage").is_none());
     harness.get_by_label("Add server").click();
     harness.run();
@@ -158,7 +164,7 @@ fn the_servers_form_saves_tests_adds_another_and_removes() {
         url: "wss://listen.example.com".into(),
         check: "Ready for v2 rooms".into(),
     });
-    let mut harness = harness(state);
+    let mut harness = harness(at_connection(state));
     harness.get_by_label("Edit server");
     harness.get_by_label("Ready for v2 rooms");
     for (label, wanted) in [
@@ -236,7 +242,7 @@ fn the_picture_is_offered_only_to_an_account_that_has_one() {
         avatar_url: "https://yt3.ggpht.com/ada=s88".into(),
         ..Default::default()
     });
-    let mut harness = super::harness(state);
+    let mut harness = super::harness(at_connection(state));
     harness.get_by_label("Share my profile picture").click();
     harness.run();
     assert!(asked_room(&harness, |ask| *ask == Ask::SharePicture(true)));

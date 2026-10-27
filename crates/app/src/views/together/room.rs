@@ -1,10 +1,13 @@
-//! The room you are in: its name and PIN, leaving it, the leader's
-//! settings, the ready check, and what is playing.
+//! The room you are in, as an album's page is laid out: the song playing
+//! and the room's name over the cover's colour, the room's buttons under
+//! them, then what waits beside who is there. The leader's settings, the
+//! way out and a shared start open as cards between.
 
 use std::time::Duration;
 
-use eframe::egui::{self, Align, Frame, Layout, Margin, Rect, Sense, Ui, Vec2, pos2, vec2};
+use eframe::egui::{self, Align, Layout, Rect, Sense, Ui, Vec2, pos2, vec2};
 
+use super::super::collection::hero::{self, Hero, Part};
 use super::super::widgets::menu::{self, Entry};
 use super::super::widgets::{self, ArtShape, TextField};
 use super::parts::{self, Kind};
@@ -13,17 +16,21 @@ use crate::actions::Action;
 use crate::state::State;
 use crate::theme::{self, Icon};
 use crate::together::protocol::{Mode, Policy};
-use crate::together::{Ask, Room, Setting, Transport};
+use crate::together::{Ask, Phase, Room, Setting, Transport};
 
 /// The listeners' column, where it stands beside the room.
-const LISTENERS_WIDTH: f32 = 270.0;
+const LISTENERS_WIDTH: f32 = 320.0;
+const PLAY_BUTTON: f32 = 56.0;
 
 pub fn show(state: &State, ui: &mut Ui, actions: &mut Vec<Action>, room: &Room) {
     let me = state.together.me.as_str();
     let leads = room.leads(me);
-    ui.add_space(22.0);
     head(state, ui, actions, room);
-    ui.add_space(22.0);
+    buttons(state, ui, actions, room);
+    if let Some(error) = &state.together.error {
+        super::alert(state, ui, actions, error);
+        ui.add_space(GAP);
+    }
     if let Some(next) = &state.together.leaving {
         leave(state, ui, actions, room, next);
         ui.add_space(GAP);
@@ -38,7 +45,6 @@ pub fn show(state: &State, ui: &mut Ui, actions: &mut Vec<Action>, room: &Room) 
     }
     let width = ui.available_width();
     if width < super::TWO_COLUMNS_FROM {
-        now_playing(state, ui, actions, room);
         queue::show(state, ui, actions, room);
         ui.add_space(GAP);
         listeners::show(state, ui, actions, room);
@@ -49,10 +55,7 @@ pub fn show(state: &State, ui: &mut Ui, actions: &mut Vec<Action>, room: &Room) 
         ui,
         share,
         actions,
-        |ui, actions| {
-            now_playing(state, ui, actions, room);
-            queue::show(state, ui, actions, room);
-        },
+        |ui, actions| queue::show(state, ui, actions, room),
         |ui, actions| listeners::show(state, ui, actions, room),
     );
 }
@@ -65,75 +68,189 @@ fn spaced(pin: &str) -> String {
     }
 }
 
-/// What the room is called, the PIN that invites to it, and the way out.
+/// The song playing, large, over its cover's colour, under the room's
+/// name: what an album's page says of the album, the room says of itself.
 fn head(state: &State, ui: &mut Ui, actions: &mut Vec<Action>, room: &Room) {
-    let palette = &state.palette;
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 16.0;
-        ui.vertical(|ui| {
-            ui.set_max_width((ui.available_width() - 330.0).max(160.0));
-            parts::eyebrow(state, ui, room.mode.title());
-            parts::heading(ui, &room.title(), 22.0);
-        });
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if room.leads(&state.together.me) {
-                let gear = widgets::IconButton {
-                    icon: Icon::Settings,
-                    size: 20.0,
-                    tooltip: "Room settings",
-                    active: state.together.settings_open,
-                };
-                let (rect, _) = ui.allocate_exact_size(Vec2::splat(32.0), Sense::hover());
-                if gear.show_at(ui, palette, rect.center()).clicked() {
-                    actions.push(Action::Room(Ask::ToggleSettings));
-                }
+    let me = state.together.me.as_str();
+    let current = room.current().map(|(_, entry)| entry);
+    let art = current.map_or(&[][..], |entry| &entry.track.artwork[..]);
+    let title = room.title();
+    let mut byline = Vec::new();
+    match current {
+        Some(entry) => {
+            byline.push(Part::plain("Playing"));
+            byline.push(Part::strong(entry.track.title.clone(), None).joined());
+            byline.push(Part::plain(entry.track.artist_names()));
+        }
+        None if !room.may_add(me) => byline.push(Part::plain("The leader picks the first song")),
+        None => byline.push(Part::plain("Nothing playing yet")),
+    }
+    let listening = room
+        .members
+        .iter()
+        .filter(|member| member.connected)
+        .count();
+    byline.push(Part::plain(match listening {
+        1 => "1 listener".to_owned(),
+        count => format!("{count} listeners"),
+    }));
+    byline.push(Part::plain(room.mode.title()));
+    // Whether this player is with the room, or on its way back to it.
+    byline.push(Part::plain(
+        if state.together.phase == Phase::Reconnecting {
+            "Reconnecting…"
+        } else {
+            state.together.standing.label()
+        },
+    ));
+    let tint = widgets::artwork_tint(ui, state, art, hero::COVER);
+    let spec = Hero {
+        art,
+        shape: ArtShape::Rounded(4),
+        placeholder: Icon::Headphones,
+        kind: "Listen Together",
+        title: &title,
+        avatar: &[],
+        byline,
+        tint,
+    };
+    hero::show(state, ui, actions, spec);
+    // The name is painted, not laid out: it is told to screen readers.
+    let (_, named) = ui.allocate_exact_size(Vec2::ZERO, Sense::hover());
+    parts::read_out(&named, &title);
+}
+
+/// Under the room's head: play or pause, the songs either side and the
+/// vote to skip, for those who steer it; at the right, the PIN that
+/// invites, the way out, and for the leader the room's settings.
+fn buttons(state: &State, ui: &mut Ui, actions: &mut Vec<Action>, room: &Room) {
+    let me = state.together.me.as_str();
+    let steers = room.may_control(me);
+    let ask = |actions: &mut Vec<Action>, transport| {
+        actions.push(Action::Room(Ask::Transport(transport)));
+    };
+    let size = vec2(ui.available_width(), hero::ACTIONS_HEIGHT);
+    let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
+    let mut row = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(rect)
+            .layout(Layout::left_to_right(Align::Center)),
+    );
+    row.spacing_mut().item_spacing.x = 12.0;
+    row.add_enabled_ui(steers && room.current.is_some(), |ui| {
+        play_button(state, ui, room, || ask(actions, Transport::Toggle));
+    });
+    row.add_enabled_ui(steers, |ui| {
+        let back = (Icon::SkipBackFilled, 36.0, 18.0);
+        if hero::round_button(state, ui, back, ("Previous song", "Previous")).clicked() {
+            ask(actions, Transport::Previous);
+        }
+        let next = (Icon::SkipForwardFilled, 36.0, 18.0);
+        if hero::round_button(state, ui, next, ("Next song", "Next")).clicked() {
+            ask(actions, Transport::Next);
+        }
+    });
+    if room.vote_skip {
+        let label = format!("Vote to skip · {}", room.votes.len());
+        if parts::text_button(&mut row, &state.palette, None, &label).clicked() {
+            actions.push(Action::Room(Ask::VoteSkip));
+        }
+    }
+    if let Some(person) = &room.last_controlled_by {
+        parts::small(
+            state,
+            &mut row,
+            &format!("Last controlled by {}", person.name),
+        );
+    }
+    row.with_layout(Layout::right_to_left(Align::Center), |ui| {
+        ui.spacing_mut().item_spacing.x = 10.0;
+        if room.leads(me) {
+            let gear = (Icon::Settings, 36.0, 20.0);
+            let settings = hero::round_button(state, ui, gear, ("Room settings", "Room settings"));
+            if settings.clicked() {
+                actions.push(Action::Room(Ask::ToggleSettings));
             }
-            if parts::button(ui, palette, Kind::Secondary, None, "Leave room").clicked() {
-                actions.push(Action::Room(Ask::OpenLeave));
-            }
-            pin_share(state, ui, actions, room);
-        });
+        }
+        if widgets::outline_button(ui, &state.palette, "Leave room").clicked() {
+            actions.push(Action::Room(Ask::OpenLeave));
+        }
+        pin_share(state, ui, actions, room);
     });
 }
 
-/// The PIN, large, as a button that copies it.
+/// The big round button that plays or pauses the room for everyone.
+fn play_button(state: &State, ui: &mut Ui, room: &Room, toggled: impl FnOnce()) {
+    let palette = &state.palette;
+    let (icon, label) = if room.playing {
+        (Icon::PauseFilled, "Pause room")
+    } else {
+        (Icon::PlayFilled, "Play room")
+    };
+    let (rect, response) = ui.allocate_exact_size(Vec2::splat(PLAY_BUTTON), Sense::click());
+    widgets::name(ui, &response, label);
+    let lift = widgets::hover(ui, &response);
+    let fill = if ui.is_enabled() {
+        crate::tint::blend(palette.accent, palette.accent_hover, lift)
+    } else {
+        palette.surface_active
+    };
+    // It swells a little under the pointer and gives when pressed, as an
+    // album's does.
+    let pressed = if response.is_pointer_button_down_on() {
+        0.96
+    } else {
+        1.0 + 0.06 * lift
+    };
+    let radius = PLAY_BUTTON / 2.0 * pressed;
+    let centre = rect.center();
+    ui.painter().circle_filled(
+        centre + vec2(0.0, 4.0),
+        radius,
+        palette.shadow.gamma_multiply(0.5),
+    );
+    ui.painter().circle_filled(centre, radius, fill);
+    widgets::paint_icon(ui, icon, rect, 22.0, palette.on_accent);
+    if response.on_hover_text(label).clicked() {
+        toggled();
+    }
+}
+
+/// The PIN, as a pill that copies it.
 fn pin_share(state: &State, ui: &mut Ui, actions: &mut Vec<Action>, room: &Room) {
     let palette = &state.palette;
     let shown = spaced(&room.pin);
     let figures = widgets::tracked(
         ui,
         &shown,
-        theme::semibold(22.0),
+        theme::semibold(15.0),
         palette.text,
-        2.0,
+        1.5,
         (f32::INFINITY, 1),
     );
-    let size = vec2(figures.size().x + 28.0, 46.0);
-    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+    let caption =
+        ui.painter()
+            .layout_no_wrap("PIN".to_owned(), theme::semibold(11.0), palette.secondary);
+    let width = 16.0 + caption.size().x + 8.0 + figures.size().x + 8.0 + 16.0 + 14.0;
+    let (rect, response) = ui.allocate_exact_size(vec2(width, 34.0), Sense::click());
     widgets::name(ui, &response, "Copy room PIN");
-    let lift = widgets::hover(ui, &response);
-    let caption = pos2(rect.left(), rect.top() + 6.0);
-    let font = theme::regular(10.5);
-    let align = egui::Align2::LEFT_CENTER;
-    widgets::text_at(
-        ui,
-        caption,
-        align,
-        "Invite with PIN",
-        font,
-        palette.secondary,
-    );
-    let at = pos2(rect.left(), rect.bottom() - figures.size().y - 2.0);
-    let copy = Rect::from_center_size(
-        pos2(
-            at.x + figures.size().x + 16.0,
-            at.y + figures.size().y / 2.0,
-        ),
-        Vec2::splat(18.0),
-    );
-    ui.painter().galley(at, figures, palette.text);
-    let ink = crate::tint::blend(palette.secondary, palette.text, lift);
-    widgets::paint_icon(ui, Icon::Copy, copy, 18.0, ink);
+    if ui.is_rect_visible(rect) {
+        let lift = widgets::hover(ui, &response);
+        let round = egui::CornerRadius::same(u8::MAX);
+        ui.painter()
+            .rect_filled(rect, round, widgets::wash(ui, 0.4 + lift * 0.6));
+        let middle = rect.center().y;
+        let mut x = rect.left() + 16.0;
+        let at = pos2(x, middle - caption.size().y / 2.0);
+        x += caption.size().x + 8.0;
+        ui.painter().galley(at, caption, palette.secondary);
+        let at = pos2(x, middle - figures.size().y / 2.0);
+        x += figures.size().x + 8.0;
+        ui.painter().galley(at, figures, palette.text);
+        let copy = Rect::from_center_size(pos2(x + 8.0, middle), Vec2::splat(16.0));
+        let ink = crate::tint::blend(palette.secondary, palette.text, lift);
+        widgets::paint_icon(ui, Icon::Copy, copy, 16.0, ink);
+    }
     if response.on_hover_text("Copy room PIN").clicked() {
         actions.push(Action::CopyText {
             text: room.pin.clone(),
@@ -161,7 +278,7 @@ fn leave(state: &State, ui: &mut Ui, actions: &mut Vec<Action>, room: &Room, nex
                 "The music keeps playing from the room’s queue.",
             )
         };
-        parts::heading(ui, title, 23.0);
+        parts::heading(ui, title, 18.0);
         parts::quiet(state, ui, about);
         if leads {
             ui.add_space(10.0);
@@ -209,7 +326,7 @@ fn settings(state: &State, ui: &mut Ui, actions: &mut Vec<Action>, room: &Room) 
     let palette = &state.palette;
     let set = |actions: &mut Vec<Action>, setting| actions.push(Action::Room(Ask::Set(setting)));
     parts::panel(state, ui, |ui| {
-        parts::heading(ui, "Room settings", 23.0);
+        parts::heading(ui, "Room settings", 18.0);
         ui.add_space(8.0);
         ui.columns(3, |columns| {
             let ui = &mut columns[0];
@@ -331,124 +448,6 @@ fn ready_check(state: &State, ui: &mut Ui, actions: &mut Vec<Action>, room: &Roo
                 actions.push(Action::Room(Ask::StartSoon));
             }
         });
-    });
-}
-
-/// What the room is playing, who added it, and the room's own transport.
-fn now_playing(state: &State, ui: &mut Ui, actions: &mut Vec<Action>, room: &Room) {
-    let palette = &state.palette;
-    let me = state.together.me.as_str();
-    let steers = room.may_control(me);
-    let current = room.current().map(|(_, entry)| entry);
-    let narrow = ui.available_width() < 430.0;
-    let art = if narrow { 80.0 } else { 140.0 };
-    let fill = crate::tint::blend(palette.surface, palette.accent, 0.07);
-    Frame::new()
-        .fill(fill)
-        .corner_radius(parts::PANEL_RADIUS)
-        .inner_margin(Margin::same(22))
-        .show(ui, |ui| {
-            ui.set_min_width(ui.available_width());
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 22.0;
-                let (cover, _) = ui.allocate_exact_size(Vec2::splat(art), Sense::hover());
-                let pictures = current.map_or(&[][..], |entry| &entry.track.artwork);
-                let shape = ArtShape::Rounded(9);
-                widgets::artwork(ui, state, pictures, cover, shape, Icon::Music);
-                ui.vertical(|ui| {
-                    ui.spacing_mut().item_spacing.y = 5.0;
-                    let eyebrow = if room.playing {
-                        "NOW PLAYING, TOGETHER"
-                    } else {
-                        "READY WHEN YOU ARE"
-                    };
-                    parts::eyebrow(state, ui, eyebrow);
-                    match current {
-                        Some(entry) => {
-                            parts::heading(ui, &entry.track.title, 23.0);
-                            parts::quiet(state, ui, &entry.track.artist_names());
-                            added_by(state, ui, &entry.added_by);
-                        }
-                        None => {
-                            parts::heading(ui, "Make the first pick.", 23.0);
-                            let hint = if !room.may_add(me) {
-                                "The leader will pick the first song."
-                            } else if room.requesting(me) {
-                                "Request a song below. The leader picks what plays."
-                            } else {
-                                "Add a song below, or use search anywhere in the app."
-                            };
-                            parts::quiet(state, ui, hint);
-                        }
-                    }
-                    ui.add_space(4.0);
-                    transport(state, ui, actions, room, steers);
-                    if let Some(person) = &room.last_controlled_by {
-                        parts::small(state, ui, &format!("Last controlled by {}", person.name));
-                    }
-                });
-            });
-        });
-}
-
-/// A small picture and "Added by".
-fn added_by(state: &State, ui: &mut Ui, person: &crate::together::protocol::Person) {
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 7.0;
-        let (disc, _) = ui.allocate_exact_size(Vec2::splat(parts::AVATAR_SMALL), Sense::hover());
-        parts::avatar(state, ui, disc, &person.name, &person.avatar);
-        parts::small(state, ui, &format!("Added by {}", person.name));
-    });
-}
-
-/// Previous, play or pause, next, and the vote to skip where the room has
-/// one. The three are the room's, for those who steer it.
-fn transport(state: &State, ui: &mut Ui, actions: &mut Vec<Action>, room: &Room, steers: bool) {
-    let palette = &state.palette;
-    let ask = |actions: &mut Vec<Action>, transport| {
-        actions.push(Action::Room(Ask::Transport(transport)));
-    };
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 10.0;
-        ui.add_enabled_ui(steers, |ui| {
-            let back = Icon::SkipBackFilled;
-            if widgets::icon_button(ui, palette, back, 18.0, "Previous song").clicked() {
-                ask(actions, Transport::Previous);
-            }
-        });
-        ui.add_enabled_ui(steers && room.current.is_some(), |ui| {
-            let (icon, label) = if room.playing {
-                (Icon::PauseFilled, "Pause room")
-            } else {
-                (Icon::PlayFilled, "Play room")
-            };
-            let (rect, response) = ui.allocate_exact_size(Vec2::splat(44.0), Sense::click());
-            widgets::name(ui, &response, label);
-            let lift = widgets::hover(ui, &response);
-            let fill = crate::tint::blend(palette.accent, palette.accent_hover, lift);
-            let fill = if ui.is_enabled() {
-                fill
-            } else {
-                fill.gamma_multiply(0.4)
-            };
-            ui.painter().circle_filled(rect.center(), 22.0, fill);
-            widgets::paint_icon(ui, icon, rect, 20.0, palette.on_accent);
-            if response.on_hover_text(label).clicked() {
-                ask(actions, Transport::Toggle);
-            }
-        });
-        ui.add_enabled_ui(steers, |ui| {
-            let on = Icon::SkipForwardFilled;
-            if widgets::icon_button(ui, palette, on, 18.0, "Next song").clicked() {
-                ask(actions, Transport::Next);
-            }
-        });
-        if room.vote_skip {
-            let label = format!("Vote to skip · {}", room.votes.len());
-            if parts::text_button(ui, palette, None, &label).clicked() {
-                actions.push(Action::Room(Ask::VoteSkip));
-            }
-        }
     });
 }
 

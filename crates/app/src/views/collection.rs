@@ -3,7 +3,7 @@
 
 mod about;
 mod artist;
-mod hero;
+pub(super) mod hero;
 pub mod songs;
 
 use eframe::egui::{self, Rect, Sense, Ui, vec2};
