@@ -930,6 +930,9 @@ func (s *Server) handlePrefetch(w http.ResponseWriter, r *http.Request) {
 
 // handleDownloads lists the listener's downloads and how far each has come.
 func (s *Server) handleDownloads(w http.ResponseWriter, r *http.Request) {
+	if !s.allowVideoRequest(w, r) {
+		return
+	}
 	if s.deps.Audio == nil {
 		s.write(w, http.StatusServiceUnavailable, apiError{Error: "cache unavailable"})
 		return
@@ -943,6 +946,10 @@ of it in the background, or lets it go back to being an ordinary cached track
 (DELETE). A download is never evicted or cleared.
 */
 func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
+	// A web page in the browser must not fill the disk with downloads.
+	if !s.allowVideoRequest(w, r) {
+		return
+	}
 	if s.deps.Audio == nil {
 		s.write(w, http.StatusServiceUnavailable, apiError{Error: "cache unavailable"})
 		return

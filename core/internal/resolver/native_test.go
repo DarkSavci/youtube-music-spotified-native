@@ -182,3 +182,17 @@ func TestNativeRemovedVideoIsUnavailable(t *testing.T) {
 		t.Errorf("want ErrUnavailable, got %v", err)
 	}
 }
+
+// On mobile data the listener may ask for less: the best under the ceiling.
+func TestNativeHonoursTheQualityCeiling(t *testing.T) {
+	resolver.SetQuality("standard")
+	defer resolver.SetQuality("high")
+	p := &fakePlayer{signedIn: true, answer: premiumAnswer}
+	_, q, err := newNative(t, p, &fakeSolver{}).Resolve(context.Background(), "abcdefghijk")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if q.Premium || q.Bitrate > 170_000 {
+		t.Errorf("want the standard format under the ceiling, got %+v", q)
+	}
+}

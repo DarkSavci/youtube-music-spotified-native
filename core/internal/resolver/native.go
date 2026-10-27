@@ -454,7 +454,8 @@ func (r *playerResponse) offersPremium() bool {
 // bestAdaptiveAudio is the highest-bitrate audio-only format the relay can serve:
 // progressive, not the segmented kind.
 func bestAdaptiveAudio(formats []adaptiveFormat) *adaptiveFormat {
-	var best *adaptiveFormat
+	var best, lightest *adaptiveFormat
+	limit := ceiling()
 	for i := range formats {
 		f := &formats[i]
 		if !strings.HasPrefix(f.MimeType, "audio/") || f.Type == "FORMAT_STREAM_TYPE_OTF" {
@@ -463,9 +464,19 @@ func bestAdaptiveAudio(formats []adaptiveFormat) *adaptiveFormat {
 		if f.URL == "" && f.SignatureCipher == "" {
 			continue
 		}
+		if lightest == nil || f.Bitrate < lightest.Bitrate {
+			lightest = f
+		}
+		if limit > 0 && int64(f.Bitrate) > limit {
+			continue
+		}
 		if best == nil || f.Bitrate > best.Bitrate {
 			best = f
 		}
+	}
+	// Nothing under the ceiling: the lightest there is.
+	if best == nil {
+		return lightest
 	}
 	return best
 }

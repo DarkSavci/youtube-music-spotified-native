@@ -260,7 +260,8 @@ func (y *Ytdlp) resolveMedia(ctx context.Context, videoID string, extra []string
 
 // bestYtdlpAudio picks the highest-bitrate progressive audio-only format.
 func bestYtdlpAudio(formats []ytdlpFormat) *ytdlpFormat {
-	var best *ytdlpFormat
+	var best, lightest *ytdlpFormat
+	limit := float64(ceiling()) / 1000
 	for i := range formats {
 		f := &formats[i]
 		if f.URL == "" || f.ACodec == "" || f.ACodec == "none" {
@@ -272,9 +273,19 @@ func bestYtdlpAudio(formats []ytdlpFormat) *ytdlpFormat {
 		if !strings.HasPrefix(f.Protocol, "http") {
 			continue // a manifest the relay cannot serve
 		}
+		if lightest == nil || rate(f) < rate(lightest) {
+			lightest = f
+		}
+		if limit > 0 && rate(f) > limit {
+			continue
+		}
 		if best == nil || rate(f) > rate(best) {
 			best = f
 		}
+	}
+	// Nothing under the ceiling: the lightest there is.
+	if best == nil {
+		return lightest
 	}
 	return best
 }

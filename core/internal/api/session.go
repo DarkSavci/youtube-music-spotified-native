@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"spotifier/internal/domain"
+	"spotifier/internal/resolver"
 	"spotifier/internal/session"
 )
 
@@ -310,6 +311,9 @@ func (s *Server) handleSessionSettings(w http.ResponseWriter, r *http.Request) {
 		// The songs, artists and albums never to be played; absent leaves
 		// them as they are.
 		Blocked *session.Blocked `json:"blocked"`
+		// The stream quality to resolve at: "high", "standard" or "low".
+		// A phone sends the one for the network it is on; absent leaves it.
+		AudioQuality *string `json:"audioQuality"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		s.write(w, http.StatusBadRequest, apiError{Error: "invalid body"})
@@ -330,6 +334,9 @@ func (s *Server) handleSessionSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	if body.Blocked != nil {
 		s.deps.Session.SetBlocked(r.Context(), *body.Blocked)
+	}
+	if body.AudioQuality != nil {
+		resolver.SetQuality(*body.AudioQuality)
 	}
 	if body.CacheMaxMB != nil && *body.CacheMaxMB > 0 && s.deps.Audio != nil {
 		s.deps.Audio.SetMax(*body.CacheMaxMB << 20)
