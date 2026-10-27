@@ -19,6 +19,10 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 /// A forward seek shorter than this reads and discards rather than opening
 /// a new request.
 const SKIP_LIMIT: u64 = 128 * 1024;
+/// How often a connection that broke off mid-track is asked for again, and
+/// how long the first wait before it is; each wait after is longer.
+const RECONNECTS: u32 = 3;
+const RECONNECT_WAIT: Duration = Duration::from_millis(500);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StreamError {
@@ -150,6 +154,26 @@ impl HttpSource {
     fn at_end(&self) -> bool {
         self.length.is_some_and(|length| self.position >= length)
     }
+
+    /// Counts a connection that broke off, and waits a little longer each
+    /// time before it is asked for again. Past the last try, the error is
+    /// the network's, so the engine does not take the track for broken.
+    fn broke_off(&self, broken: &mut u32, error: &str) -> io::Result<()> {
+        *broken += 1;
+        if *broken > RECONNECTS {
+            log::warn!(
+                "the stream broke off at byte {} and could not be had again: {error}",
+                self.position
+            );
+            return Err(io::Error::other(StreamError::Network(error.to_owned())));
+        }
+        log::info!(
+            "the stream broke off at byte {} ({error}); asking again from there",
+            self.position
+        );
+        std::thread::sleep(RECONNECT_WAIT * *broken);
+        Ok(())
+    }
 }
 
 /// The total in a `Content-Range: bytes 0-99/1234` header.
@@ -163,24 +187,36 @@ impl Read for HttpSource {
             return Ok(0);
         }
         self.align()?;
-        // Two attempts: the first may find a window that has just run out,
-        // and the second asks for the next. Nothing twice is the end.
-        for _ in 0..2 {
+        // A window that has just run out is asked for again once; nothing
+        // twice is the end. A connection that breaks off is asked for again
+        // from where it got to, a few times, before the track is given up:
+        // the core relays YouTube, and either side may drop a long read.
+        let (mut emptied, mut broken) = (false, 0);
+        loop {
             let Some((body, reached)) = &mut self.body else {
                 return Ok(0);
             };
-            let read = body.read(buffer)?;
-            if read > 0 {
+            let outcome = body.read(buffer);
+            if let Ok(read) = outcome {
                 *reached += read as u64;
-                self.position += read as u64;
-                return Ok(read);
             }
-            if self.at_end() {
-                return Ok(0);
+            match outcome {
+                Ok(0) if self.at_end() || emptied => return Ok(0),
+                Ok(0) => emptied = true,
+                Ok(read) => {
+                    self.position += read as u64;
+                    return Ok(read);
+                }
+                Err(error) => self.broke_off(&mut broken, &error.to_string())?,
             }
-            self.request(self.position).map_err(io::Error::other)?;
+            loop {
+                match self.request(self.position) {
+                    Ok(()) => break,
+                    Err(StreamError::Network(error)) => self.broke_off(&mut broken, &error)?,
+                    Err(other) => return Err(io::Error::other(other)),
+                }
+            }
         }
-        Ok(0)
     }
 }
 
@@ -215,6 +251,52 @@ impl MediaSource for HttpSource {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A server of `whole` that breaks off its first answer after `cut`
+    /// bytes, as a dropped connection does, and answers properly after.
+    fn breaking_server(whole: Vec<u8>, cut: usize) -> String {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a port");
+        let address = listener.local_addr().expect("an address");
+        std::thread::spawn(move || {
+            for (served, stream) in listener.incoming().enumerate() {
+                let Ok(mut stream) = stream else { return };
+                let mut from = 0;
+                let mut reader = BufReader::new(stream.try_clone().expect("a clone"));
+                let mut line = String::new();
+                while reader.read_line(&mut line).is_ok_and(|read| read > 2) {
+                    if let Some(range) = line.to_ascii_lowercase().strip_prefix("range: bytes=") {
+                        from = range.trim().trim_end_matches('-').parse().unwrap_or(0);
+                    }
+                    line.clear();
+                }
+                let rest = &whole[from..];
+                let head = format!(
+                    "HTTP/1.1 206 Partial Content\r\nContent-Length: {}\r\n\
+                     Content-Range: bytes {from}-{}/{}\r\nConnection: close\r\n\r\n",
+                    rest.len(),
+                    whole.len() - 1,
+                    whole.len()
+                );
+                let _ = stream.write_all(head.as_bytes());
+                let sent = if served == 0 { &rest[..cut] } else { rest };
+                let _ = stream.write_all(sent);
+                // Dropped here: the first answer ends short of its length.
+            }
+        });
+        format!("http://{address}/v1/stream/x")
+    }
+
+    #[test]
+    fn a_connection_that_breaks_off_is_asked_for_again_from_where_it_got_to() {
+        let whole: Vec<u8> = (0..200_000u32).map(|n| (n % 251) as u8).collect();
+        let url = breaking_server(whole.clone(), 70_000);
+        let mut source = HttpSource::open(agent(), url).expect("opened");
+        let mut read = Vec::new();
+        source.read_to_end(&mut read).expect("read whole");
+        assert_eq!(read.len(), whole.len());
+        assert!(read == whole, "the bytes after the break follow on");
+    }
 
     #[test]
     fn the_total_is_read_from_a_content_range() {
