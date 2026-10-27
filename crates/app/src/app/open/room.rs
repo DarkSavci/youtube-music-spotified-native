@@ -161,7 +161,8 @@ fn asks(kind: &str, value: &str, state: &State) -> Option<Vec<Ask>> {
 
 /// A room to look at with no relay to make one: led by the listener this
 /// is, or with `room-demo:guest` by someone else, with three others in it,
-/// a song playing, and more waiting.
+/// a song playing, and more waiting. `room-demo:guest-listen` is a guest's
+/// view of a room only its leader plays.
 fn demo_room(value: &str) -> Vec<Action> {
     use crate::together::Event;
     use crate::together::protocol::{Entry, Happening, Member, Person, RoomArtist, RoomTrack};
@@ -233,12 +234,17 @@ fn demo_room(value: &str) -> Vec<Action> {
             ..Entry::default()
         })
         .collect();
-    let guest = value == "guest";
+    let guest = value.starts_with("guest");
     let room = Room {
         name: "Friday night".into(),
         id: "demo".into(),
         pin: "48213907".into(),
         owner: if guest { "bob".into() } else { "me".into() },
+        mode: if value == "guest-listen" {
+            crate::together::Mode::Listen
+        } else {
+            crate::together::Mode::Collaborative
+        },
         members: vec![
             member("me", "You", "listening", "listener"),
             member("bob", "Bob", "listening", "dj"),

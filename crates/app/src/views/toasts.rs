@@ -8,6 +8,9 @@ use crate::actions::Action;
 use crate::state::State;
 use crate::theme::{self, Icon};
 
+/// The widest a toast's words run before they wrap.
+const TEXT_WIDTH: f32 = 280.0;
+
 pub fn show(state: &State, ui: &mut Ui, actions: &mut Vec<Action>) {
     if state.toasts.is_empty() {
         return;
@@ -35,20 +38,26 @@ pub fn show(state: &State, ui: &mut Ui, actions: &mut Vec<Action>) {
                     .corner_radius(theme::RADIUS)
                     .inner_margin(Margin::symmetric(14, 10))
                     .show(ui, |ui| {
-                        ui.horizontal(|ui| {
+                        ui.horizontal_top(|ui| {
+                            ui.spacing_mut().item_spacing.x = 10.0;
                             if toast.error {
                                 ui.add(Icon::CircleAlert.image(palette.danger, 16.0));
                             }
-                            ui.set_max_width(280.0);
-                            // What went wrong can be selected and copied
-                            // while it is up; a confirmation is only read.
-                            let text = egui::RichText::new(&toast.text).font(theme::medium(13.5));
-                            ui.add(egui::Label::new(text).selectable(toast.error));
-                            if let Some(link) = &toast.link {
-                                ui.add_space(4.0);
-                                if widgets::chip(ui, palette, link.label, false).clicked() {
-                                    actions.push(Action::Open(link.page.clone()));
-                                }
+                            // The words have a column of their own beside
+                            // the icon: a line that wraps goes back to the
+                            // column's edge, not under the icon.
+                            ui.vertical(|ui| {
+                                ui.set_max_width(TEXT_WIDTH);
+                                // What went wrong can be selected and copied
+                                // while it is up; a confirmation is only read.
+                                let text =
+                                    egui::RichText::new(&toast.text).font(theme::medium(13.5));
+                                ui.add(egui::Label::new(text).selectable(toast.error).wrap());
+                            });
+                            if let Some(link) = &toast.link
+                                && widgets::chip(ui, palette, link.label, false).clicked()
+                            {
+                                actions.push(Action::Open(link.page.clone()));
                             }
                         });
                     });
