@@ -177,10 +177,11 @@ fn row(
     let palette = &state.palette;
     let queue = &playback.session.queue;
     let track = &queue.items[index];
-    // Only what is still to come can be carried to another place.
+    // Any row but what is playing can be carried to another place: a
+    // played song carried below it is played again when its turn comes.
     let sense = match place {
-        Place::Upcoming => Sense::click_and_drag(),
-        Place::Played | Place::Playing => Sense::click(),
+        Place::Played | Place::Upcoming => Sense::click_and_drag(),
+        Place::Playing => Sense::click(),
     };
     let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_HEIGHT), sense);
     widgets::name(ui, &response, &track.title);
@@ -192,9 +193,7 @@ fn row(
     if response.drag_started() {
         response.dnd_set_drag_payload(Carried { from: index });
     }
-    if place == Place::Upcoming {
-        drop_target(state, ui, actions, &response, index);
-    }
+    drop_target(state, ui, actions, &response, index);
     if !ui.is_rect_visible(rect) {
         return;
     }
