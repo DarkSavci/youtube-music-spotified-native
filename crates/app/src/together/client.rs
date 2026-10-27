@@ -17,6 +17,14 @@ use super::protocol::{Incoming, Mode, Room, VERSION};
 const POLL: Duration = Duration::from_millis(120);
 /// The relay must have said hello and ready within this.
 const HANDSHAKE: Duration = Duration::from_secs(10);
+/// And must have made or found the room within this of being asked, unless
+/// it said the leader is to let this listener in, which takes as long as
+/// the leader takes.
+const ENTER_WITHIN: Duration = if cfg!(test) {
+    Duration::from_secs(1)
+} else {
+    Duration::from_secs(15)
+};
 const PING_EVERY: Duration = Duration::from_secs(10);
 /// How often a dropped line is tried again before giving up.
 const MOST_ATTEMPTS: u32 = 5;
@@ -229,6 +237,9 @@ fn spell(
     let opened = Instant::now();
     let mut ready = false;
     let mut joined = false;
+    // When the room was asked for, and whether the leader is to be waited on.
+    let mut asked_at = None::<Instant>;
+    let mut waiting = false;
     let mut last_ping = Instant::now();
     let mut offset_ms = 0.0;
     // What a command is made against: the room as last heard.
@@ -237,8 +248,12 @@ fn spell(
     loop {
         match socket.read() {
             Ok(Message::Text(text)) => {
-                let Ok(message) = serde_json::from_str::<Incoming>(&text) else {
-                    continue;
+                let message = match serde_json::from_str::<Incoming>(&text) {
+                    Ok(message) => message,
+                    Err(error) => {
+                        log::warn!("listen together: a message could not be read: {error}");
+                        continue;
+                    }
                 };
                 match message {
                     Incoming::Hello { version } if version == VERSION => {
@@ -254,6 +269,7 @@ fn spell(
                         ready = true;
                         send(&mut socket, &json!({ "type": "ping", "sent": now_ms() }));
                         send(&mut socket, &entrance(options, seat));
+                        asked_at = Some(Instant::now());
                     }
                     Incoming::Pong { sent, at } => offset_ms = at - (sent + now_ms()) / 2.0,
                     Incoming::Joined {
@@ -266,7 +282,10 @@ fn spell(
                         joined = true;
                         deliver(Event::Joined(member));
                     }
-                    Incoming::Waiting => deliver(Event::Waiting),
+                    Incoming::Waiting => {
+                        waiting = true;
+                        deliver(Event::Waiting);
+                    }
                     Incoming::State { room } => {
                         revision = room.revision;
                         current.clone_from(&room.current);
@@ -282,7 +301,10 @@ fn spell(
                         deliver(Event::Ended(reason));
                         return Over::Done;
                     }
-                    Incoming::Ack | Incoming::Unknown => {}
+                    Incoming::Ack => {}
+                    Incoming::Unknown => {
+                        log::debug!("listen together: a message of a kind not known: {text}");
+                    }
                 }
             }
             Ok(Message::Close(_)) => return Over::Dropped("the server closed the line".into()),
@@ -300,6 +322,15 @@ fn spell(
                 "No v2 handshake received. Check the server address and upgrade the relay \
                  to v2."
                     .into(),
+            ));
+            return Over::Done;
+        }
+        // A relay that took the hello but never answers the request for a
+        // room would leave the app "connecting" for ever.
+        if !joined && !waiting && asked_at.is_some_and(|asked| asked.elapsed() > ENTER_WITHIN) {
+            log::warn!("listen together: the server did not answer the request for a room");
+            deliver(Event::Failed(
+                "The server did not answer. Try again, or check that it is up to date.".into(),
             ));
             return Over::Done;
         }
@@ -452,6 +483,49 @@ mod tests {
             avatar: "https://yt3.ggpht.com/ada=s88".into(),
             enter,
         }
+    }
+
+    /// A relay that says hello and ready, and then nothing more, whatever
+    /// it is asked. Its address.
+    fn silent_relay() -> String {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a port");
+        let address = listener.local_addr().expect("an address");
+        std::thread::spawn(move || {
+            let Ok((stream, _)) = listener.accept() else {
+                return;
+            };
+            let Ok(mut socket) = tungstenite::accept(stream) else {
+                return;
+            };
+            let hello = format!(r#"{{"type":"hello","version":{VERSION}}}"#);
+            let _ = socket.send(Message::text(hello));
+            let _ = socket.read();
+            let _ = socket.send(Message::text(r#"{"type":"ready"}"#));
+            // Read and never answered, until the app hangs up.
+            while socket.read().is_ok() {}
+        });
+        format!("ws://{address}")
+    }
+
+    #[test]
+    fn a_server_that_never_answers_the_request_for_a_room_is_given_up() {
+        let (heard, events) = crossbeam_channel::unbounded();
+        let mut wanted = options(Enter::Create {
+            mode: Mode::Collaborative,
+            room_name: String::new(),
+        });
+        wanted.url = silent_relay();
+        let _line = Connection::start(wanted, move |event| {
+            let _ = heard.send(event);
+        })
+        .expect("a line");
+        let event = events
+            .recv_timeout(Duration::from_secs(10))
+            .expect("an answer, not a wait for ever");
+        assert!(
+            matches!(&event, Event::Failed(why) if why.contains("did not answer")),
+            "{event:?}"
+        );
     }
 
     #[test]
