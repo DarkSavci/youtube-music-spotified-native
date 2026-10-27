@@ -22,10 +22,12 @@ import androidx.media3.session.MediaLibraryService
 import androidx.media3.session.MediaSession
 import androidx.media3.session.SessionCommand
 import androidx.media3.session.SessionCommands
+import androidx.media3.session.SessionError
 import androidx.media3.session.SessionResult
 import com.google.common.collect.ImmutableList
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
+import dev.darksavci.spotified.api.ApiError
 import dev.darksavci.spotified.api.Track
 import dev.darksavci.spotified.data.LocalMusic
 import dev.darksavci.spotified.data.Settings
@@ -234,7 +236,14 @@ class PlaybackService : MediaLibraryService() {
                     val from = (page * pageSize).coerceAtMost(all.size)
                     LibraryResult.ofItemList(all.subList(from, (from + pageSize).coerceAtMost(all.size)), params)
                 },
-                { LibraryResult.ofError(LibraryResult.RESULT_ERROR_IO) },
+                { e ->
+                    // Signed out, the car says so and how to fix it, rather than that something failed.
+                    if (e is ApiError.SignedOut) {
+                        LibraryResult.ofError(SessionError(SessionError.ERROR_SESSION_AUTHENTICATION_EXPIRED, "Sign in on your phone to see this."))
+                    } else {
+                        LibraryResult.ofError(LibraryResult.RESULT_ERROR_IO)
+                    }
+                },
             )
         }
 

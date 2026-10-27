@@ -5,6 +5,7 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.session.LibraryResult
 import androidx.media3.session.MediaBrowser
+import androidx.media3.session.SessionError
 import androidx.media3.session.SessionToken
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -18,6 +19,7 @@ import kotlinx.coroutines.withTimeout
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Assume.assumeFalse
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -40,6 +42,17 @@ class BrowseTreeTest {
 
     @After
     fun release() = runBlocking { withContext(Dispatchers.Main) { browser.release() } }
+
+    /**
+     * Whether the library is out of reach because no one is signed in. If so,
+     * the car must be told to sign in, and the test of what is inside stops.
+     */
+    private suspend fun signedOut(id: String): Boolean = withContext(Dispatchers.Main) {
+        val result = browser.getChildren(id, 0, 200, null).await()
+        val out = result.resultCode == SessionError.ERROR_SESSION_AUTHENTICATION_EXPIRED
+        if (out) assertEquals("Sign in on your phone to see this.", result.sessionError?.message)
+        out
+    }
 
     private suspend fun children(id: String): List<MediaItem> = withContext(Dispatchers.Main) {
         val result = browser.getChildren(id, 0, 200, null).await()
@@ -67,6 +80,7 @@ class BrowseTreeTest {
 
     @Test
     fun theLibraryOpensToSongs() = runBlocking {
+        assumeFalse("signed out", signedOut(BrowseTree.LIBRARY))
         val library = children(BrowseTree.LIBRARY)
         assertTrue("the library has items", library.isNotEmpty())
         val songs = children(library.first().mediaId)
@@ -76,6 +90,7 @@ class BrowseTreeTest {
 
     @Test
     fun aSongChosenInAListPlaysTheListFromIt() = runBlocking {
+        assumeFalse("signed out", signedOut(BrowseTree.RECENT))
         val recent = children(BrowseTree.RECENT)
         assertTrue("there is something recent", recent.size >= 3)
         val chosen = recent[2]

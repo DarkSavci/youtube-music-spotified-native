@@ -25,7 +25,9 @@ import java.security.MessageDigest
 object Updater {
     private const val RELEASES = "https://api.github.com/repos/DarkSavci/youtube-music-spotified-native/releases/latest"
 
-    suspend fun check(context: Context, http: OkHttpClient, say: (String) -> Unit) = withContext(Dispatchers.IO) {
+    suspend fun check(
+        context: Context, http: OkHttpClient, say: (String) -> Unit, current: String = BuildConfig.VERSION_NAME,
+    ) = withContext(Dispatchers.IO) {
         val release = http.newCall(Request.Builder().url(RELEASES).header("Accept", "application/vnd.github+json").build())
             .execute().use { r ->
                 if (r.code == 404) return@withContext say("There are no releases yet.")
@@ -33,7 +35,7 @@ object Updater {
                 Json.parseToJsonElement(r.body.string()) as JsonObject
             }
         val tag = (release["tag_name"] as? JsonPrimitive)?.content.orEmpty().removePrefix("v")
-        if (!newer(tag, BuildConfig.VERSION_NAME)) return@withContext say("This is the newest version (${BuildConfig.VERSION_NAME}).")
+        if (!newer(tag, current)) return@withContext say("This is the newest version ($current).")
         val assets = (release["assets"] as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }
         fun asset(name: (String) -> Boolean) = assets.firstOrNull { name((it["name"] as? JsonPrimitive)?.content.orEmpty()) }
         val abi = Build.SUPPORTED_ABIS.firstOrNull().orEmpty()
