@@ -7,7 +7,7 @@
 //! exactly: Ctrl+Right is the next song and plain Right a seek, and neither
 //! answers to the other.
 
-use eframe::egui::{Context, Event, Key, Modifiers};
+use eframe::egui::{Context, Event, Key, Modifiers, PointerButton};
 
 use crate::actions::Action;
 use crate::state::Page;
@@ -196,7 +196,34 @@ fn matching(modifiers: Modifiers, key: Key) -> Option<&'static Shortcut> {
         .find(|shortcut| shortcut.key == key && modifiers.matches_exact(shortcut.modifiers))
 }
 
+/// The mouse's back and forward buttons, the thumb buttons at its side,
+/// go back and forward through the pages, as they do in a browser. A
+/// mouse button is not typing, so a field with the caret does not take
+/// them.
+fn mouse_navigation(ctx: &Context, actions: &mut Vec<Action>) {
+    ctx.input_mut(|input| {
+        input.events.retain(|event| {
+            let Event::PointerButton {
+                button,
+                pressed: true,
+                ..
+            } = event
+            else {
+                return true;
+            };
+            let action = match button {
+                PointerButton::Extra1 => Action::Back,
+                PointerButton::Extra2 => Action::Forward,
+                _ => return true,
+            };
+            actions.push(action);
+            false
+        });
+    });
+}
+
 pub fn handle(ctx: &Context, actions: &mut Vec<Action>) {
+    mouse_navigation(ctx, actions);
     // The caret is in a field: every key is the field's.
     if ctx.egui_wants_keyboard_input() {
         return;

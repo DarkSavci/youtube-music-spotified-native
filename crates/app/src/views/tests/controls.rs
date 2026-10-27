@@ -1,6 +1,6 @@
 //! The speed, the volume, the keys, the full-screen player and the notice.
 
-use eframe::egui::{Event, Key, Modifiers, MouseWheelUnit, TouchPhase};
+use eframe::egui::{Event, Key, Modifiers, MouseWheelUnit, PointerButton, TouchPhase, pos2};
 use egui_kittest::kittest::NodeT;
 
 use super::*;
@@ -301,4 +301,20 @@ fn the_new_settings_are_switches_on_the_page() {
             .map(|action| format!("{action:?}"));
         assert_eq!(last.as_deref(), Some(wanted));
     }
+}
+
+#[test]
+fn the_mouses_thumb_buttons_go_back_and_forward() {
+    let mut harness = harness(state());
+    for button in [PointerButton::Extra1, PointerButton::Extra2] {
+        harness.event(Event::PointerButton {
+            pos: pos2(600.0, 400.0),
+            button,
+            pressed: true,
+            modifiers: Modifiers::NONE,
+        });
+        harness.run();
+    }
+    let actions = &harness.state().actions;
+    assert!(matches!(&actions[..], [.., Action::Back, Action::Forward]));
 }
