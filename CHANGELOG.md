@@ -2,6 +2,31 @@
 
 Every release of Youtube Music Spotified Native, newest first.
 
+## 0.4.8 — 2026-10-27
+
+### New
+
+- Share opens a menu of links: the YouTube Music link, which a click on Share still copies, and the same song, album or artist on Spotify, Apple Music and Deezer. A right click on the share button of the player bar or the full screen player offers the same
+- Paste a Spotify, Apple Music, Deezer or SoundCloud link into search to find it on YouTube Music
+- Listen Together is redesigned to look like the rest of the app: a room opens as an album's page does, with the song playing, the room's name, its PIN and its queue
+- Songs that have already played can be dragged to another place in the queue
+- The lyrics' expand button gives them the whole window instead of the whole screen
+- The square and wide mini players show the lyrics in place of the cover when the lyrics are on
+- The mouse's back and forward buttons go back and forward
+- Lyrics that could not be loaded say so in words, with a Try again button
+
+### Fixed
+
+- A song whose connection dropped partway through was skipped; it now carries on from where it got to
+- A song could be skipped just after the sound device changed
+- The mini player's lyrics had dark bands above and below them
+- Hovering the lyrics showed a text cursor
+- An error toast's icon covered the start of its message
+- A Listen Together server that never answered left the page on "Connecting…"
+- When a Listen Together room ended, or a guest left it, the guest's own queue was replaced by the room's; a guest now keeps the song that is playing and then their own queue
+- Lyrics that failed, and the report to YouTube of what is playing, were asked for again several times a second
+- The log missed crashes of the playback service and requests that never reached it, and was crowded with the decoder's "skipped 4 bytes of junk"
+
 ## 0.4.7 — 2026-10-05
 
 ### New
