@@ -14,6 +14,7 @@ import android.os.Bundle
 import androidx.annotation.OptIn
 import androidx.core.content.ContextCompat
 import androidx.media3.common.MediaItem
+import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.CommandButton
 import androidx.media3.session.LibraryResult
@@ -139,7 +140,7 @@ class PlaybackService : MediaLibraryService() {
             .build(),
         CommandButton.Builder(CommandButton.ICON_SHUFFLE_ON)
             .setDisplayName("Shuffle")
-            .setPlayerCommand(androidx.media3.common.Player.COMMAND_SET_SHUFFLE_MODE)
+            .setPlayerCommand(Player.COMMAND_SET_SHUFFLE_MODE)
             .setSlots(CommandButton.SLOT_OVERFLOW)
             .build(),
     )
@@ -199,6 +200,7 @@ class PlaybackService : MediaLibraryService() {
             if (!controller.isTrusted && controller.packageName !in KNOWN_HOSTS) {
                 return MediaSession.ConnectionResult.AcceptedResultBuilder(session)
                     .setAvailableSessionCommands(SessionCommands.EMPTY)
+                    .setAvailablePlayerCommands(TRANSPORT_ONLY)
                     .build()
             }
             val commands = MediaSession.ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS.buildUpon()
@@ -303,6 +305,16 @@ class PlaybackService : MediaLibraryService() {
 
     companion object {
         const val LIKE = "dev.darksavci.spotified.LIKE"
+
+        /** What another app may do: play, pause, skip and seek, but neither read nor change the queue. */
+        private val TRANSPORT_ONLY = Player.Commands.Builder().addAll(
+            Player.COMMAND_PLAY_PAUSE,
+            Player.COMMAND_SEEK_TO_NEXT,
+            Player.COMMAND_SEEK_TO_PREVIOUS,
+            Player.COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM,
+            Player.COMMAND_GET_CURRENT_MEDIA_ITEM,
+            Player.COMMAND_GET_METADATA,
+        ).build()
 
         /** Media hosts that are not the system but may browse: Android Auto, Wear OS, Google's app. */
         private val KNOWN_HOSTS = setOf(

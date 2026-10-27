@@ -1,5 +1,11 @@
 package dev.darksavci.spotified.ui.components
 
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.statusBars
@@ -47,6 +53,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -245,6 +252,57 @@ fun EntityRow(
     }
 }
 
+// ---------- sliders ----------
+
+/**
+ * A slider drawn as Spotify draws one: a thin line in the accent colour and
+ * a small dot that grows while it is held. A tap or a drag sets it; [onDone]
+ * is called when the finger lifts.
+ */
+@Composable
+fun ThinSlider(
+    value: Float,
+    onChange: (Float) -> Unit,
+    onDone: () -> Unit,
+    range: ClosedFloatingPointRange<Float>,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+) {
+    val p = LocalPalette.current
+    var held by remember { mutableStateOf(false) }
+    val span = range.endInclusive - range.start
+    val fraction = ((value - range.start) / span).coerceIn(0f, 1f)
+    fun at(x: Float, width: Int) = range.start + span * (x / width).coerceIn(0f, 1f)
+    val color = if (enabled) p.accent else p.dim
+    Canvas(
+        modifier.fillMaxWidth().height(32.dp)
+            .pointerInput(enabled, range) {
+                if (!enabled) return@pointerInput
+                detectTapGestures(onPress = { o ->
+                    held = true
+                    onChange(at(o.x, size.width))
+                    tryAwaitRelease()
+                    held = false
+                    onDone()
+                })
+            }
+            .pointerInput(enabled, range) {
+                if (!enabled) return@pointerInput
+                detectHorizontalDragGestures(
+                    onDragStart = { held = true },
+                    onDragEnd = { held = false; onDone() },
+                    onDragCancel = { held = false; onDone() },
+                ) { change, _ -> onChange(at(change.position.x, size.width)) }
+            },
+    ) {
+        val y = size.height / 2
+        val stroke = 4.dp.toPx()
+        drawLine(p.surfaceActive, Offset(0f, y), Offset(size.width, y), stroke, StrokeCap.Round)
+        drawLine(color, Offset(0f, y), Offset(size.width * fraction, y), stroke, StrokeCap.Round)
+        drawCircle(color, (if (held) 9 else 7).dp.toPx(), Offset(size.width * fraction, y))
+    }
+}
+
 // ---------- page tops ----------
 
 /**
@@ -269,7 +327,7 @@ fun FadingTopBar(title: String, tint: Color, list: LazyListState, onBack: () -> 
         GlyphButton(R.drawable.ic_chevron_left, "Back", onBack, tint = Color.White)
         Text(
             title, style = Type.bodyStrong, color = Color.White.copy(alpha = shown), maxLines = 1,
-            overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f),
+            overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f), textAlign = TextAlign.Center,
         )
         Spacer(Modifier.width(48.dp))
     }

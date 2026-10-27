@@ -142,7 +142,9 @@ fun Root(onReady: (Actions) -> Unit) {
             ) {
                 NowPlaying(onClose = { actions.nowPlayingOpen = false })
             }
+            // The topmost layer closes first: lyrics, then the player.
             BackHandler(actions.nowPlayingOpen) { actions.nowPlayingOpen = false }
+            BackHandler(actions.nowPlayingOpen && actions.lyricsOpen) { actions.lyricsOpen = false }
 
             Menus()
 

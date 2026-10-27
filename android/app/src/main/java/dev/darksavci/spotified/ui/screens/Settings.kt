@@ -1,5 +1,6 @@
 package dev.darksavci.spotified.ui.screens
 
+import dev.darksavci.spotified.ui.components.ThinSlider
 import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
@@ -28,8 +29,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
@@ -313,11 +312,8 @@ private fun SliderRow(title: String, value: String, current: Float, range: Close
             Text(title, style = Type.body, modifier = Modifier.weight(1f))
             Text(value, style = Type.small, color = p.secondary)
         }
-        Slider(
-            v, { v = it }, valueRange = range, onValueChangeFinished = { onDone(v) },
-            steps = (range.endInclusive - range.start).toInt() - 1,
-            colors = SliderDefaults.colors(thumbColor = p.accent, activeTrackColor = p.accent),
-        )
+        // Whole steps: seconds of crossfade, half-gigabytes of cache.
+        ThinSlider(v, { v = Math.round(it).toFloat() }, { onDone(v) }, range)
     }
 }
 
@@ -450,11 +446,11 @@ fun EqualizerScreen() {
                     Text(if (freqs[b] >= 1000) "${freqs[b] / 1000} kHz" else "${freqs[b]} Hz", style = Type.body, modifier = Modifier.weight(1f))
                     Text("%+.1f dB".format(v / 100f), style = Type.small, color = p.secondary)
                 }
-                Slider(
-                    v, { v = it }, valueRange = range.first.toFloat()..range.second.toFloat(),
-                    onValueChangeFinished = { save(freqs.indices.map { i -> if (i == b) v.toInt() else levels.getOrElse(i) { 0 } }) },
+                ThinSlider(
+                    v, { v = it },
+                    { save(freqs.indices.map { i -> if (i == b) v.toInt() else levels.getOrElse(i) { 0 } }) },
+                    range.first.toFloat()..range.second.toFloat(),
                     enabled = s.equalizerOn,
-                    colors = SliderDefaults.colors(thumbColor = p.accent, activeTrackColor = p.accent),
                 )
             }
         }

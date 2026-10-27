@@ -1,5 +1,6 @@
 package dev.darksavci.spotified.together
 
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import dev.darksavci.spotified.api.ArtistRef
 import dev.darksavci.spotified.api.Artwork
 import dev.darksavci.spotified.api.Track
@@ -86,9 +87,19 @@ enum class Policy(val wire: String, val title: String) {
     @SerialName("turns") Turns("turns", "Take turns"),
 }
 
-/** A picture's address as the relay passes it on, as the artwork it is drawn from; nothing for someone who shares none. */
-fun pictureOf(url: String): List<Artwork> =
-    if (url.isEmpty()) emptyList() else listOf(Artwork(url, 96, 96))
+/**
+ * A member's picture as the relay passes it on, as the artwork it is drawn
+ * from. Only Google's image hosts, over HTTPS: the address comes from other
+ * people, and fetching anything else would tell its owner this phone's
+ * address. Nothing for someone who shares none.
+ */
+fun pictureOf(url: String): List<Artwork> {
+    val host = url.toHttpUrlOrNull()?.takeIf { it.isHttps }?.host ?: return emptyList()
+    val google = PICTURE_HOSTS.any { host == it || host.endsWith(".$it") }
+    return if (google) listOf(Artwork(url, 96, 96)) else emptyList()
+}
+
+private val PICTURE_HOSTS = listOf("googleusercontent.com", "ggpht.com", "ytimg.com")
 
 @Serializable
 data class Member(

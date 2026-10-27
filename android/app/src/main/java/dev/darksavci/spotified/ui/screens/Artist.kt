@@ -4,6 +4,7 @@ import dev.darksavci.spotified.ui.components.artColor
 import dev.darksavci.spotified.ui.components.FadingTopBar
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -98,7 +99,7 @@ private fun ArtistPage(artist: Artist, actions: Actions) {
                 Text(
                     if (following) "Following" else "Follow", style = Type.label,
                     modifier = Modifier.clip(RoundedCornerShape(16.dp))
-                        .background(if (following) p.surface else Color.Transparent)
+                        .border(1.dp, if (following) p.text else p.secondary, RoundedCornerShape(16.dp))
                         .clickable {
                             following = !following
                             actions.launch { actions.graph.api.setFollowing(artist.id, following) }

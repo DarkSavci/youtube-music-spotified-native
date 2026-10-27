@@ -1,6 +1,7 @@
 package dev.darksavci.spotified.ui.screens
 
 import dev.darksavci.spotified.ui.components.FadingTopBar
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.draw.shadow
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -16,6 +17,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
@@ -68,6 +70,7 @@ fun LazyListScope.collectionHeader(
     tracks: List<Track>,
     origin: String,
     actions: Actions,
+    bylineArtwork: List<Artwork> = emptyList(),
     extra: @Composable () -> Unit = {},
 ) {
     item {
@@ -83,7 +86,15 @@ fun LazyListScope.collectionHeader(
             Art(artwork, 240.dp, Modifier.align(Alignment.CenterHorizontally).shadow(24.dp, RoundedCornerShape(4.dp)))
             Spacer(Modifier.height(20.dp))
             Text(title, style = Type.title, modifier = Modifier.padding(horizontal = 16.dp), maxLines = 3, overflow = TextOverflow.Ellipsis)
-            if (byline.isNotEmpty()) Text(byline, style = Type.bodyStrong, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
+            if (byline.isNotEmpty()) {
+                Row(Modifier.padding(horizontal = 16.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    if (bylineArtwork.isNotEmpty()) {
+                        Art(bylineArtwork, 24.dp, shape = CircleShape)
+                        Spacer(Modifier.width(8.dp))
+                    }
+                    Text(byline, style = Type.bodyStrong)
+                }
+            }
             if (detail.isNotEmpty()) Text(detail, style = Type.small, color = p.secondary, modifier = Modifier.padding(horizontal = 16.dp))
             Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 GlyphButton(
@@ -128,6 +139,7 @@ fun AlbumScreen(id: String) {
                 album.title, album.artists.joinToString { it.name },
                 listOf(album.kind, album.year, durationText(tracks)).filter { it.isNotEmpty() }.joinToString(" • "),
                 album.artwork, tracks, album.title, actions,
+                bylineArtwork = album.artistArtwork,
                 extra = {
                     GlyphButton(R.drawable.ic_pin, "Pin in your library", {
                         actions.launch { actions.graph.api.organise(LibraryKind.Album, album.id, pinned = true); actions.say("Pinned") }

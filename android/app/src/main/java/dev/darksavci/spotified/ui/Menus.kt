@@ -1,5 +1,6 @@
 package dev.darksavci.spotified.ui
 
+import dev.darksavci.spotified.ui.components.ThinSlider
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
@@ -19,8 +20,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -272,11 +271,10 @@ private fun SpeedMenu(actions: Actions) {
     var speed by remember(settings.speed) { mutableFloatStateOf(settings.speed) }
     val p = LocalPalette.current
     Text("Speed: %.2f×".format(speed), style = Type.heading, modifier = Modifier.padding(16.dp))
-    Slider(
-        value = speed, onValueChange = { speed = (it * 20).toInt() / 20f }, valueRange = 0.5f..2f,
-        onValueChangeFinished = { scope.launch { graph.settings.update { it.copy(speed = speed) } } },
-        modifier = Modifier.padding(horizontal = 16.dp),
-        colors = SliderDefaults.colors(thumbColor = p.accent, activeTrackColor = p.accent),
+    ThinSlider(
+        speed, { speed = (it * 20).toInt() / 20f },
+        { scope.launch { graph.settings.update { it.copy(speed = speed) } } },
+        0.5f..2f, Modifier.padding(horizontal = 16.dp),
     )
     Row(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         for (preset in listOf(0.75f, 1f, 1.25f, 1.5f)) {
