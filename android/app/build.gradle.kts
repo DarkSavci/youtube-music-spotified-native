@@ -1,6 +1,7 @@
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.chaquopy)
 }
 
@@ -13,17 +14,29 @@ android {
         minSdk = 26
         targetSdk = 36
         versionCode = 1
-        versionName = "0.0.1-spike"
+        versionName = "0.5.0"
         // Phones, and x86_64 for emulators; the core and qjs are built for
-        // these two only. -Pabis=arm64-v8a builds the phone's alone, which
-        // an x86_64 emulator also runs, through its ARM translation: the
-        // core cannot run as x86_64 Android at all (docs/android.md, risks).
+        // these two only. -Pabis=arm64-v8a builds the phone's alone.
         val abis = (findProperty("abis") as String?)?.split(",")
             ?: listOf("arm64-v8a", "x86_64")
         ndk { abiFilters += abis }
     }
 
-    buildFeatures { compose = true }
+    buildFeatures {
+        compose = true
+        buildConfig = true
+    }
+
+    buildTypes {
+        release {
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            // Signed with the release key when one is configured
+            // (keystore.properties); otherwise the debug key, for a local build.
+            signingConfig = signingConfigs.getByName("debug")
+        }
+    }
 
     packaging {
         // qjs is a program shipped as libqjs.so, and a program can only be
@@ -31,6 +44,8 @@ android {
         // APK it could not be run at all.
         jniLibs { useLegacyPackaging = true }
     }
+
+    testOptions { unitTests.isReturnDefaultValues = true }
 }
 
 chaquopy {
@@ -53,7 +68,26 @@ dependencies {
     implementation(libs.androidx.activity.compose)
     implementation(platform(libs.compose.bom))
     implementation(libs.compose.ui)
+    implementation(libs.compose.foundation)
     implementation(libs.compose.material3)
+    implementation(libs.compose.icons)
+    implementation(libs.navigation.compose)
+    implementation(libs.lifecycle.viewmodel.compose)
+    implementation(libs.lifecycle.runtime.compose)
+    implementation(libs.lifecycle.process)
     implementation(libs.media3.exoplayer)
+    implementation(libs.media3.session)
+    implementation(libs.media3.datasource.okhttp)
     implementation(libs.okhttp)
+    implementation(libs.serialization.json)
+    implementation(libs.coroutines.android)
+    implementation(libs.coroutines.guava)
+    implementation(libs.coil.compose)
+    implementation(libs.coil.okhttp)
+    implementation(libs.datastore.preferences)
+    implementation(libs.glance.appwidget)
+    implementation(libs.work.runtime)
+    implementation(libs.palette)
+
+    testImplementation(libs.junit)
 }

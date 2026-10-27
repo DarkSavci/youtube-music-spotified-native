@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- What the app shares as files: lyric cards, and an update handed to the installer. -->
+<paths>
+    <cache-path name="share" path="share/" />
+    <cache-path name="updates" path="updates/" />
+</paths>

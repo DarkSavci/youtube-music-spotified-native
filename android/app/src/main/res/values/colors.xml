@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- crates/app/src/theme.rs, DARK. -->
+    <color name="window">#FF0F0F0F</color>
+    <color name="accent">#FFFF0033</color>
+</resources>

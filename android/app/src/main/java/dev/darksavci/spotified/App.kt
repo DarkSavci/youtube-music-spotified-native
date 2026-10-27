@@ -1,0 +1,77 @@
+package dev.darksavci.spotified
+
+import android.app.Application
+import android.content.Context
+import dev.darksavci.spotified.api.Api
+import dev.darksavci.spotified.api.Session
+import dev.darksavci.spotified.core.Core
+import dev.darksavci.spotified.data.Downloads
+import dev.darksavci.spotified.data.LastFm
+import dev.darksavci.spotified.data.ReleasesWorker
+import dev.darksavci.spotified.data.Liked
+import dev.darksavci.spotified.data.SettingsStore
+import dev.darksavci.spotified.playback.Playback
+import dev.darksavci.spotified.playback.SleepTimer
+import dev.darksavci.spotified.widget.PlayerWidget
+import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import okhttp3.HttpUrl
+import okhttp3.OkHttpClient
+
+/**
+ * What the app is made of, made once per process: the core, the client that
+ * talks to it, the playback session and the settings.
+ */
+class Graph(context: Context) {
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    val core = Core(context)
+    val settings = SettingsStore(context)
+
+    /** Every request to the core carries its token, read per request: it changes when the core restarts. */
+    val http: OkHttpClient = OkHttpClient.Builder()
+        .connectTimeout(10, TimeUnit.SECONDS)
+        .readTimeout(90, TimeUnit.SECONDS)
+        .addInterceptor { chain ->
+            val token = core.currentToken()
+            val request = if (token != null && chain.request().url.host == "127.0.0.1") {
+                chain.request().newBuilder().header(Core.tokenHeader, token).build()
+            } else chain.request()
+            chain.proceed(request)
+        }
+        .build()
+
+    val origin: suspend () -> HttpUrl = { Api.originOf(core.running().address) }
+    val api = Api(http, origin)
+    val session = Session(api, Session.streamingClient(http))
+    val playback = Playback(scope, session, settings, origin)
+    val liked = Liked(api, scope)
+    val sleep = SleepTimer(scope, playback)
+    val downloads = Downloads(context, api, scope)
+    val lastFm = LastFm(context, http, settings, scope)
+}
+
+class App : Application() {
+    lateinit var graph: Graph
+        private set
+
+    override fun onCreate() {
+        super.onCreate()
+        graph = Graph(this)
+        // The core starts at once, beside the first frame, and the session
+        // connects as soon as it answers.
+        graph.scope.launch {
+            runCatching { graph.core.running() }
+            graph.playback.start()
+            graph.lastFm.follow(graph.playback)
+            PlayerWidget.follow(this@App, graph.scope)
+            ReleasesWorker.schedule(this@App)
+            if (graph.downloads.syncedPlaylists.isNotEmpty()) Downloads.schedule(this@App, graph.settings.current().downloadOnWifiOnly)
+            graph.liked.refresh()
+        }
+    }
+}
+
+val Context.graph: Graph get() = (applicationContext as App).graph
