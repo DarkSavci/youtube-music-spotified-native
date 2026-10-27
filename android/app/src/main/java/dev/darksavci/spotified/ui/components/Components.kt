@@ -1,5 +1,10 @@
 package dev.darksavci.spotified.ui.components
 
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.runtime.derivedStateOf
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.annotation.DrawableRes
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -237,6 +242,36 @@ fun EntityRow(
                 Text(subtitle, style = Type.small, color = p.secondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
+    }
+}
+
+// ---------- page tops ----------
+
+/**
+ * The bar over an album, playlist, podcast or artist page: only the back
+ * button at first, then, as the page scrolls past its header, the art's
+ * colour and the title fade in behind it, as Spotify's do.
+ */
+@Composable
+fun FadingTopBar(title: String, tint: Color, list: LazyListState, onBack: () -> Unit) {
+    val density = LocalDensity.current
+    val shown by remember(list) {
+        derivedStateOf {
+            if (list.firstVisibleItemIndex > 0) 1f
+            else with(density) { ((list.firstVisibleItemScrollOffset - 220.dp.toPx()) / 120.dp.toPx()).coerceIn(0f, 1f) }
+        }
+    }
+    Row(
+        Modifier.fillMaxWidth().background(tint.darkened(0.45f).copy(alpha = shown))
+            .windowInsetsPadding(WindowInsets.statusBars).padding(horizontal = 4.dp, vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        GlyphButton(R.drawable.ic_chevron_left, "Back", onBack, tint = Color.White)
+        Text(
+            title, style = Type.bodyStrong, color = Color.White.copy(alpha = shown), maxLines = 1,
+            overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f),
+        )
+        Spacer(Modifier.width(48.dp))
     }
 }
 

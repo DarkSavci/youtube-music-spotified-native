@@ -5,7 +5,9 @@ a Kotlin and Jetpack Compose face, and Media3 for everything the system
 expects of a music player (the notification, the lock screen, Bluetooth,
 Android Auto, Wear OS, the Assistant).
 
-Status: a plan. Nothing here is built.
+Status, 2026-10-28: built, in `android/`, and run on an Android 16
+emulator signed in with a Premium account. Section 13 says what has been
+checked and what has not.
 
 Features at a glance:
 
@@ -624,3 +626,37 @@ Settled on 2026-10-27:
 2. The desktop's Spotify palette everywhere; no Material You (section 7).
 3. One repository: the app lives in `android/` here and builds `core/`
    from this tree.
+
+## 13. Status
+
+Built on 2026-10-28, as one Gradle module (`android/app`) in packages
+rather than the modules of section 2.2: `core` (the Go core and the Python
+bridge), `api` (the core's client, a port of `crates/client`), `playback`
+(the engine, `CorePlayer`, the service, the browse tree, artwork for Auto,
+the sleep timer), `data` (settings, likes, downloads, Last.fm, other
+services, import, local files, release alerts, the updater), `together`,
+`widget` and `ui`.
+
+Checked on the emulator, signed in:
+
+- Home, search (with the mood wall), the library, album, artist, playlist
+  and Now Playing pages, in the desktop's palette;
+- playing from a row: the core's queue, the engine's decks, the mini
+  player, and the system's media controls with like and shuffle;
+- the native resolver: songs start in about 0.2 s;
+- `connectedDebugAndroidTest`: what Android Auto asks of the app through a
+  media browser (the tree, search, a song chosen in a list).
+
+Not yet checked by hand: Android Auto in a car or the Desktop Head Unit
+(it needs the Android Auto app, from the Play Store), a watch, Bluetooth
+buttons, the Assistant's voice, a release build on a phone, Last.fm with a
+real key, the importer against each service, and a release published for
+the updater. Word-by-word lyrics wait on the core: its lyrics carry lines,
+not words.
+
+Also built since the plan was written: SponsorBlock (skipped by the
+engine, from SponsorBlock's public database), Now Playing's three styles,
+audio quality per network (a bitrate ceiling the core's resolvers honour,
+sent as the phone moves between Wi-Fi and mobile data), a recently played
+widget, and several accounts, each with its own folder, switched by
+starting the core again on another.

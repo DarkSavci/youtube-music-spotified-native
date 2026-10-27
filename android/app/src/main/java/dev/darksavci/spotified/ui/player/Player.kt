@@ -1,7 +1,9 @@
 package dev.darksavci.spotified.ui.player
 
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
@@ -24,8 +26,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -39,8 +39,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
@@ -49,7 +52,10 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.darksavci.spotified.R
 import dev.darksavci.spotified.api.PlayState
 import dev.darksavci.spotified.api.Repeat
+import dev.darksavci.spotified.api.url
+import dev.darksavci.spotified.data.Settings
 import dev.darksavci.spotified.graph
+import coil3.compose.AsyncImage
 import dev.darksavci.spotified.ui.Actions
 import dev.darksavci.spotified.ui.LocalActions
 import dev.darksavci.spotified.ui.MenuTarget
@@ -62,6 +68,10 @@ import dev.darksavci.spotified.ui.components.darkened
 import dev.darksavci.spotified.ui.theme.LocalPalette
 import dev.darksavci.spotified.ui.theme.Type
 import kotlinx.coroutines.delay
+
+/** Now Playing's styles, as Settings names them. */
+const val STYLE_FULL_ART = 1
+const val STYLE_LYRICS_FIRST = 2
 
 /** Where the song is, kept moving between the core's reports. */
 @Composable
@@ -161,6 +171,8 @@ fun NowPlaying(onClose: () -> Unit) {
     val track = state.current
     val tint = artColor(track?.artwork.orEmpty())
     val liked by graph.liked.ids.collectAsStateWithLifecycle()
+    val settings by graph.settings.settings.collectAsStateWithLifecycle(Settings())
+    val style = settings.nowPlayingStyle
 
     if (actions.lyricsOpen && track != null) {
         LyricsScreen(track, tint, onClose = { actions.lyricsOpen = false })
@@ -173,6 +185,11 @@ fun NowPlaying(onClose: () -> Unit) {
             .clickable(enabled = false) {}
             .pointerInput(Unit) { detectVerticalDragGestures { _, drag -> if (drag > 30) onClose() } },
     ) {
+        // The full-art style: the picture is the page, darkened under the controls.
+        if (style == STYLE_FULL_ART && track != null) {
+            AsyncImage(track.artwork.url(1080), null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+            Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0.35f), Color.Transparent, Color.Black.copy(alpha = 0.85f)))))
+        }
         Column(
             Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing).verticalScroll(rememberScrollState()),
         ) {
@@ -192,7 +209,11 @@ fun NowPlaying(onClose: () -> Unit) {
             }
             Spacer(Modifier.height(24.dp))
             BoxWithConstraints(Modifier.fillMaxWidth().padding(horizontal = 24.dp)) {
-            Art(
+            when (style) {
+                // The art is the background already; the space it took stays, for the swipe.
+                STYLE_FULL_ART -> Spacer(Modifier.size(maxWidth))
+                STYLE_LYRICS_FIRST -> LyricsPanel(track, maxWidth, tint, onExpand = { actions.lyricsOpen = true })
+                else -> Art(
                 track.artwork,
                 size = maxWidth,
                 modifier = Modifier
@@ -207,6 +228,7 @@ fun NowPlaying(onClose: () -> Unit) {
                     },
                 shape = RoundedCornerShape(8.dp),
             )
+            }
             }
             Spacer(Modifier.height(28.dp))
             Row(Modifier.padding(horizontal = 24.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -242,7 +264,7 @@ fun NowPlaying(onClose: () -> Unit) {
                 GlyphButton(R.drawable.ic_list_music, "Queue", { actions.menu = MenuTarget.Queue })
             }
             Spacer(Modifier.height(16.dp))
-            LyricsCard(track, tint, onExpand = { actions.lyricsOpen = true })
+            if (style != STYLE_LYRICS_FIRST) LyricsCard(track, tint, onExpand = { actions.lyricsOpen = true })
             Spacer(Modifier.height(32.dp))
         }
     }
@@ -261,21 +283,60 @@ private fun Seekbar() {
     var dragging by remember { mutableStateOf(false) }
     var dragValue by remember { mutableFloatStateOf(0f) }
     val shown = if (dragging) dragValue else if (duration > 0) position.toFloat() / duration else 0f
-    Column(Modifier.padding(horizontal = 16.dp)) {
-        Slider(
-            value = shown.coerceIn(0f, 1f),
-            onValueChange = { dragging = true; dragValue = it },
-            onValueChangeFinished = {
+    Column(Modifier.padding(horizontal = 24.dp)) {
+        ThinSeekBar(
+            fraction = shown.coerceIn(0f, 1f),
+            onDrag = { dragging = true; dragValue = it },
+            onRelease = {
                 dragging = false
                 if (duration > 0) graph.playback.seek((dragValue * duration).toLong())
             },
-            colors = SliderDefaults.colors(thumbColor = Color.White, activeTrackColor = Color.White, inactiveTrackColor = Color.White.copy(alpha = 0.25f)),
         )
-        Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp)) {
-            Text(clock(if (dragging) (dragValue * duration).toLong() else position), style = Type.tiny, color = Color.White.copy(alpha = 0.7f))
+        val at = if (dragging) (dragValue * duration).toLong() else position
+        Row(Modifier.fillMaxWidth()) {
+            Text(clock(at), style = Type.tiny, color = Color.White.copy(alpha = 0.7f))
             Spacer(Modifier.weight(1f))
-            Text(clock(duration), style = Type.tiny, color = Color.White.copy(alpha = 0.7f))
+            // Spotify counts down what is left.
+            Text("-" + clock((duration - at).coerceAtLeast(0)), style = Type.tiny, color = Color.White.copy(alpha = 0.7f))
         }
+    }
+}
+
+/**
+ * Spotify's seek bar: a thin line with a small dot that grows while it is
+ * held. A tap or a drag anywhere along it moves to that point.
+ */
+@Composable
+private fun ThinSeekBar(fraction: Float, onDrag: (Float) -> Unit, onRelease: () -> Unit) {
+    var held by remember { mutableStateOf(false) }
+    val dot by animateFloatAsState(if (held) 8f else 6f, label = "dot")
+    Canvas(
+        Modifier.fillMaxWidth().height(28.dp)
+            .pointerInput(Unit) {
+                detectTapGestures(
+                    onPress = { o ->
+                        held = true
+                        onDrag((o.x / size.width).coerceIn(0f, 1f))
+                        tryAwaitRelease()
+                        held = false
+                        onRelease()
+                    },
+                )
+            }
+            .pointerInput(Unit) {
+                detectHorizontalDragGestures(
+                    onDragStart = { held = true },
+                    onDragEnd = { held = false; onRelease() },
+                    onDragCancel = { held = false; onRelease() },
+                ) { change, _ -> onDrag((change.position.x / size.width).coerceIn(0f, 1f)) }
+            },
+    ) {
+        val y = size.height / 2
+        val stroke = 4.dp.toPx()
+        drawLine(Color.White.copy(alpha = 0.3f), Offset(0f, y), Offset(size.width, y), stroke, StrokeCap.Round)
+        val x = size.width * fraction
+        drawLine(Color.White, Offset(0f, y), Offset(x, y), stroke, StrokeCap.Round)
+        drawCircle(Color.White, dot.dp.toPx(), Offset(x, y))
     }
 }
 

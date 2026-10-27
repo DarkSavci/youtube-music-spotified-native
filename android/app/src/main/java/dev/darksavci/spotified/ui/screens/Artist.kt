@@ -1,5 +1,8 @@
 package dev.darksavci.spotified.ui.screens
 
+import dev.darksavci.spotified.ui.components.artColor
+import dev.darksavci.spotified.ui.components.FadingTopBar
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -72,14 +75,13 @@ private fun ArtistPage(artist: Artist, actions: Actions) {
     val yours by produceState<StatDetail?>(null, artist.id) {
         value = runCatching { actions.graph.api.statDetail("artist", artist.id) }.getOrNull()?.takeIf { it.plays > 0 }
     }
-    LazyColumn(contentPadding = PaddingValues(bottom = 24.dp)) {
+    val list = rememberLazyListState()
+    Box {
+    LazyColumn(state = list, contentPadding = PaddingValues(bottom = 24.dp)) {
         item {
             Box(Modifier.fillMaxWidth().height(320.dp)) {
                 AsyncImage(artist.artwork.url(1080), null, Modifier.fillMaxWidth().height(320.dp), contentScale = ContentScale.Crop)
                 Box(Modifier.fillMaxWidth().height(320.dp).background(Brush.verticalGradient(listOf(Color.Transparent, p.window))))
-                Row(Modifier.windowInsetsPadding(WindowInsets.statusBars).padding(4.dp)) {
-                    GlyphButton(R.drawable.ic_chevron_left, "Back", { actions.nav.popBackStack() }, tint = Color.White)
-                }
                 Text(
                     artist.name, style = Type.display.copy(fontSize = Type.display.fontSize * 1.4f), color = Color.White,
                     maxLines = 2, overflow = TextOverflow.Ellipsis,
@@ -166,6 +168,8 @@ private fun ArtistPage(artist: Artist, actions: Actions) {
                 }
             }
         }
+    }
+    FadingTopBar(artist.name, artColor(artist.artwork), list) { actions.nav.popBackStack() }
     }
 }
 

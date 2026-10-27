@@ -20,6 +20,7 @@ android {
         val abis = (findProperty("abis") as String?)?.split(",")
             ?: listOf("arm64-v8a", "x86_64")
         ndk { abiFilters += abis }
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     buildFeatures {
@@ -90,4 +91,7 @@ dependencies {
     implementation(libs.palette)
 
     testImplementation(libs.junit)
+    androidTestImplementation(libs.androidx.junit)
+    androidTestImplementation(libs.test.runner)
+    androidTestImplementation(libs.coroutines.guava)
 }

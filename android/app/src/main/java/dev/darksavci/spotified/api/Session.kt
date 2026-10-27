@@ -98,6 +98,8 @@ data class CoreSettings(
     val autoplay: Boolean = true,
     val blockedTracks: List<String> = emptyList(),
     val blockedArtists: List<String> = emptyList(),
+    /** "high", "standard" or "low": what to resolve at on the network the phone is on. */
+    val audioQuality: String = "high",
 )
 
 @Serializable
@@ -168,6 +170,7 @@ class Session(private val api: Api, private val streaming: OkHttpClient) {
             put("reportToYouTube", s.reportToYouTube)
             put("cacheMaxMB", s.cacheMaxMb)
             put("autoplay", s.autoplay)
+            put("audioQuality", s.audioQuality)
             putJsonObject("blocked") {
                 put("tracks", buildJsonArray { s.blockedTracks.forEach { add(JsonPrimitive(it)) } })
                 put("artists", buildJsonArray { s.blockedArtists.forEach { add(JsonPrimitive(it)) } })

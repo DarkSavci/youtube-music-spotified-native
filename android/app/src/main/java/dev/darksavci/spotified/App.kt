@@ -10,8 +10,10 @@ import dev.darksavci.spotified.data.LastFm
 import dev.darksavci.spotified.data.ReleasesWorker
 import dev.darksavci.spotified.data.Liked
 import dev.darksavci.spotified.data.SettingsStore
+import dev.darksavci.spotified.data.meteredNetwork
 import dev.darksavci.spotified.playback.Playback
 import dev.darksavci.spotified.playback.SleepTimer
+import dev.darksavci.spotified.together.Together
 import dev.darksavci.spotified.widget.PlayerWidget
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CoroutineScope
@@ -30,13 +32,18 @@ class Graph(context: Context) {
     val core = Core(context)
     val settings = SettingsStore(context)
 
-    /** Every request to the core carries its token, read per request: it changes when the core restarts. */
+    /**
+     * Every request to the core carries its token, read per request: it
+     * changes when the core restarts. Only to the core's own address and
+     * port: another program on the loopback address must never see it.
+     */
     val http: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(90, TimeUnit.SECONDS)
         .addInterceptor { chain ->
             val token = core.currentToken()
-            val request = if (token != null && chain.request().url.host == "127.0.0.1") {
+            val url = chain.request().url
+            val request = if (token != null && "${url.host}:${url.port}" == core.currentAddress()) {
                 chain.request().newBuilder().header(Core.tokenHeader, token).build()
             } else chain.request()
             chain.proceed(request)
@@ -46,11 +53,14 @@ class Graph(context: Context) {
     val origin: suspend () -> HttpUrl = { Api.originOf(core.running().address) }
     val api = Api(http, origin)
     val session = Session(api, Session.streamingClient(http))
-    val playback = Playback(scope, session, settings, origin)
+    val playback = Playback(scope, session, settings, origin, meteredNetwork(context))
     val liked = Liked(api, scope)
     val sleep = SleepTimer(scope, playback)
     val downloads = Downloads(context, api, scope)
     val lastFm = LastFm(context, http, settings, scope)
+    val together = Together(scope, playback, settings, api, http).also { t ->
+        playback.room = { command -> t.state.value.inRoom.also { if (it) t.press(command) } }
+    }
 }
 
 class App : Application() {

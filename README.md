@@ -76,6 +76,30 @@ The drawing is libprojectM's, a library beside the app
 (`libprojectM-4.dll`) and not part of it; without the file there is no
 MilkDrop, and nothing else changes.
 
+## Android
+
+`android/` is the same app for phones: Kotlin and Compose in the desktop's
+look and Spotify's phone layout, with the Go core running inside it and
+Media3 for the notification, lock screen, Bluetooth, Android Auto, a watch
+and the Assistant. `docs/android.md` has the plan and what is done.
+
+Requires the Android SDK with SDK platform 37 and the NDK, gomobile
+(`go install golang.org/x/mobile/cmd/gomobile@latest` and `gobind`), and a
+JDK 21. Python 3.14 on the machine builds the bundled yt-dlp.
+
+```powershell
+scripts/build-core-android.ps1   # the core, to android/app/libs/core.aar
+scripts/build-qjs-android.ps1    # QuickJS-NG, the JavaScript runtime
+cd android
+./gradlew assembleDebug          # both ABIs; -Pabis=arm64-v8a for a phone only
+./gradlew testDebugUnitTest      # the engine's reconcile and the protocols
+./gradlew connectedDebugAndroidTest  # on a device: what Android Auto asks of the app
+```
+
+`scripts/icons-to-android.py` writes the desktop's icons as Android
+drawables. The app is not on the Play Store; releases are APKs on GitHub,
+and it updates itself from there.
+
 ## Package
 
 ```powershell
@@ -91,7 +115,7 @@ deno under `vendor/`.
 cargo fmt --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
-cd core; go test ./...
+cd core; go test ./...; go test -tags sqlitewasm ./...
 ```
 
 ## Layout
@@ -99,6 +123,7 @@ cd core; go test ./...
 - `crates/app`: the window. State, actions, views, theme.
 - `crates/client`: the HTTP client and models for the core.
 - `crates/audio`: the engine: stream source, decoding, resampling, output.
+- `android/`: the Android app.
 - `core/`: the Go service that talks to YouTube Music, copied from the
   Electron app and changed as `PLAN.md` section 3.2 lists.
 

@@ -53,6 +53,8 @@ class Engine(
     /** Asks why a track failed: true when YouTube is rate limiting, not the track at fault. */
     private val rateLimited: suspend (String) -> Boolean,
     private val scope: CoroutineScope,
+    /** Stretches of a track to skip (SponsorBlock), fetched off the main thread; empty for none. */
+    private val skipsOf: suspend (String) -> List<LongRange> = { emptyList() },
 ) {
     private val main = Handler(Looper.getMainLooper())
     private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
@@ -102,6 +104,7 @@ class Engine(
         /** When the deck began waiting for audio while meant to play; 0 when it is not. */
         var stalledSince = 0L
         var failedEpoch = -1L
+        var skips: List<LongRange> = emptyList()
     }
 
     private fun newDeck(context: Context): Deck {
@@ -175,10 +178,12 @@ class Engine(
         deck.ended = false
         deck.stalledSince = 0
         deck.gain = 1f
+        deck.skips = emptyList()
         deck.player.setMediaItem(MediaItem.Builder().setMediaId(id).setUri(streamUri(id, preload)).build(), startMs)
         deck.player.playWhenReady = false
         deck.player.prepare()
         if (normalise) scope.launchMain { deck.gain = gainOf(loudnessOf(id)); applyVolumes() }
+        scope.launchMain { if (deck.id == id) deck.skips = skipsOf(id) }
     }
 
     private fun stop(deck: Deck) {
@@ -289,7 +294,16 @@ class Engine(
             deck.player.prepare()
             deck.player.seekTo(at)
         }
+        skipMarked(deck)
         crossfade(t)
+    }
+
+    /** Past a stretch marked as not the music, when the listener asked for that. */
+    private fun skipMarked(deck: Deck) {
+        if (deck.skips.isEmpty() || !deck.player.isPlaying) return
+        val at = deck.player.currentPosition
+        // A second's grace at the end of a stretch, so a seek just short of it does not loop.
+        deck.skips.firstOrNull { at in it.first until (it.last - 1000) }?.let { deck.player.seekTo(it.last) }
     }
 
     /** Starts, runs and ends a fade into the idle deck, at the target's length. */

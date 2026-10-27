@@ -56,6 +56,7 @@ import dev.darksavci.spotified.data.LastFm
 import dev.darksavci.spotified.data.Settings
 import dev.darksavci.spotified.data.Theme
 import dev.darksavci.spotified.data.Updater
+import dev.darksavci.spotified.graph
 import dev.darksavci.spotified.ui.LocalActions
 import dev.darksavci.spotified.ui.Routes
 import dev.darksavci.spotified.ui.components.Chip
@@ -75,6 +76,10 @@ fun SettingsScreen() {
     val scope = rememberCoroutineScope()
     val s by graph.settings.settings.collectAsStateWithLifecycle(Settings())
     val account by produceState<Account?>(null) { value = runCatching { graph.api.account() }.getOrNull() }
+    // The account list names each account as it was last seen signed in.
+    LaunchedEffect(account) {
+        account?.name?.takeIf { it.isNotEmpty() }?.let { graph.core.accounts.name(graph.core.accounts.current, it) }
+    }
     var cache by remember { mutableStateOf<CacheUsage?>(null) }
     val set: ((Settings) -> Settings) -> Unit = { change -> scope.launch { graph.settings.update(change) } }
     LaunchedEffect(Unit) { cache = runCatching { graph.api.cacheUsage() }.getOrNull() }
@@ -93,7 +98,7 @@ fun SettingsScreen() {
                 Action("Sign out") {
                     actions.launch {
                         graph.api.signOut()
-                        File(context.filesDir, "credentials.json").delete()
+                        File(graph.core.accounts.currentDir(), "credentials.json").delete()
                         CookieManager.getInstance().removeAllCookies(null)
                         graph.core.restart()
                         actions.say("Signed out")
@@ -104,6 +109,8 @@ fun SettingsScreen() {
                 Action("Sign in") { actions.go(Routes.SIGN_IN) }
             }
         }
+
+        item { AccountList() }
 
         item { Heading("Appearance") }
         item {
@@ -121,10 +128,15 @@ fun SettingsScreen() {
         }
         item { Toggle("Even out loudness", "Turn loud songs down to the rest", s.normalise) { v -> set { it.copy(normalise = v) } } }
         item { Toggle("Skip silence", "Leave out quiet stretches within a song or episode", s.skipSilence) { v -> set { it.copy(skipSilence = v) } } }
+        item { Toggle("SponsorBlock", "Skip the talk and intros listeners have marked in songs from YouTube uploads", s.sponsorBlock) { v -> set { it.copy(sponsorBlock = v) } } }
         item { Toggle("Autoplay", "Carry on with similar songs when the queue ends", s.autoplay) { v -> set { it.copy(autoplay = v) } } }
         item { Toggle("Pick up where you left off", "Keep the queue for the next launch", s.resumeOnLaunch) { v -> set { it.copy(resumeOnLaunch = v) } } }
         item { Toggle("Count plays on YouTube", "Add what you play to your YouTube history", s.reportToYouTube) { v -> set { it.copy(reportToYouTube = v) } } }
         item { Action("Equalizer") { actions.go(Routes.EQUALIZER) } }
+
+        item { Heading("Audio quality") }
+        item { QualityRow("On Wi-Fi", s.wifiQuality) { q -> set { it.copy(wifiQuality = q) } } }
+        item { QualityRow("On mobile data", s.mobileQuality) { q -> set { it.copy(mobileQuality = q) } } }
 
         item { Heading("Downloads and storage") }
         item { Toggle("Download on Wi-Fi only", "Kept playlists sync on Wi-Fi", s.downloadOnWifiOnly) { v -> set { it.copy(downloadOnWifiOnly = v) } } }
@@ -181,6 +193,41 @@ fun SettingsScreen() {
     }
 }
 
+/** The accounts on this phone: switch between them, add one, remove one. */
+@Composable
+private fun AccountList() {
+    val actions = LocalActions.current
+    val accounts = actions.graph.core.accounts
+    var list by remember { mutableStateOf(accounts.list()) }
+    val current = accounts.current
+    if (list.size > 1) {
+        list.forEach { a ->
+            Row(
+                Modifier.fillMaxWidth().clickable(enabled = a.id != current) {
+                    accounts.current = a.id
+                    actions.launch {
+                        actions.graph.core.restart()
+                        actions.graph.liked.refresh()
+                        actions.say("Switched to ${a.name}")
+                    }
+                }.padding(horizontal = 16.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(a.name + if (a.id == current) "  ✓" else "", style = Type.body, modifier = Modifier.weight(1f))
+                if (a.id.isNotEmpty() && a.id != current) {
+                    GlyphButton(R.drawable.ic_trash_2, "Remove ${a.name}", { accounts.remove(a.id); list = accounts.list() })
+                }
+            }
+        }
+    }
+    Action("Add another account") {
+        accounts.add()
+        list = accounts.list()
+        actions.launch { actions.graph.core.restart() }
+        actions.go(Routes.SIGN_IN)
+    }
+}
+
 /** Connecting Last.fm: the listener's own key and secret, then Last.fm's page to allow the app. */
 @Composable
 private fun LastFmSettings(s: Settings) {
@@ -204,6 +251,19 @@ private fun LastFmSettings(s: Settings) {
             OutlinedTextField(key, { key = it }, Modifier.fillMaxWidth().padding(horizontal = 16.dp), label = { Text("API key") }, singleLine = true)
             OutlinedTextField(secret, { secret = it }, Modifier.fillMaxWidth().padding(horizontal = 16.dp), label = { Text("Shared secret") }, singleLine = true)
             Action("Connect") { actions.launch { graph.lastFm.start(key, secret) } }
+        }
+    }
+}
+
+/** Highest is Premium's 256 kbps where there is one; standard about 160; data saver about 70. */
+@Composable
+private fun QualityRow(title: String, current: String, onPick: (String) -> Unit) {
+    Column(Modifier.padding(vertical = 4.dp)) {
+        Text(title, style = Type.body, modifier = Modifier.padding(horizontal = 16.dp))
+        LazyRow(contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            items(listOf("high" to "Highest", "standard" to "Standard", "low" to "Data saver")) { (q, label) ->
+                Chip(label, current == q, { onPick(q) })
+            }
         }
     }
 }
@@ -324,8 +384,9 @@ private fun writeCredentials(context: Context): Int? {
     // An account, and a cookie request signatures are computed over.
     if ("LOGIN_INFO" !in names || names.none { it.endsWith("SAPISID") }) return null
     val json = JSONObject().put("cookie", pairs.joinToString("; ") { it.second })
-    val file = File(context.filesDir, "credentials.json")
-    val temp = File(context.filesDir, "credentials.json.part")
+    val dir = context.graph.core.accounts.currentDir()
+    val file = File(dir, "credentials.json")
+    val temp = File(dir, "credentials.json.part")
     temp.writeText(json.toString())
     temp.renameTo(file)
     return pairs.size

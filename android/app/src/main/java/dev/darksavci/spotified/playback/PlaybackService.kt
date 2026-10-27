@@ -20,6 +20,7 @@ import androidx.media3.session.LibraryResult
 import androidx.media3.session.MediaLibraryService
 import androidx.media3.session.MediaSession
 import androidx.media3.session.SessionCommand
+import androidx.media3.session.SessionCommands
 import androidx.media3.session.SessionResult
 import com.google.common.collect.ImmutableList
 import com.google.common.util.concurrent.Futures
@@ -27,6 +28,7 @@ import com.google.common.util.concurrent.ListenableFuture
 import dev.darksavci.spotified.api.Track
 import dev.darksavci.spotified.data.LocalMusic
 import dev.darksavci.spotified.data.Settings
+import dev.darksavci.spotified.data.SponsorBlock
 import dev.darksavci.spotified.graph
 import dev.darksavci.spotified.ui.MainActivity
 import kotlinx.coroutines.CoroutineScope
@@ -72,6 +74,10 @@ class PlaybackService : MediaLibraryService() {
             report = g.playback::report,
             rateLimited = { id -> runCatching { g.api.health(id).rateLimited }.getOrDefault(false) },
             scope = scope,
+            skipsOf = { id ->
+                if (LocalMusic.isLocal(id) || !g.settings.current().sponsorBlock) emptyList()
+                else SponsorBlock.segments(g.http, id)
+            },
         )
         player = CorePlayer(g.playback, engine)
         engine.onChange { player.refresh() }
@@ -184,7 +190,17 @@ class PlaybackService : MediaLibraryService() {
     // ---------- the media session ----------
 
     private inner class Callback : MediaLibrarySession.Callback {
+        /**
+         * The system, this app, Android Auto, a watch and the Assistant get
+         * everything; any other app only the playback controls, not the
+         * library to browse or the account's likes.
+         */
         override fun onConnect(session: MediaSession, controller: MediaSession.ControllerInfo): MediaSession.ConnectionResult {
+            if (!controller.isTrusted && controller.packageName !in KNOWN_HOSTS) {
+                return MediaSession.ConnectionResult.AcceptedResultBuilder(session)
+                    .setAvailableSessionCommands(SessionCommands.EMPTY)
+                    .build()
+            }
             val commands = MediaSession.ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS.buildUpon()
                 .add(SessionCommand(LIKE, Bundle.EMPTY))
                 .build()
@@ -287,6 +303,15 @@ class PlaybackService : MediaLibraryService() {
 
     companion object {
         const val LIKE = "dev.darksavci.spotified.LIKE"
+
+        /** Media hosts that are not the system but may browse: Android Auto, Wear OS, Google's app. */
+        private val KNOWN_HOSTS = setOf(
+            "com.google.android.projection.gearhead",
+            "com.google.android.wearable.app",
+            "com.google.android.apps.wearables.maestro.companion",
+            "com.google.android.googlequicksearchbox",
+            "com.google.android.carassistant",
+        )
     }
 }
 

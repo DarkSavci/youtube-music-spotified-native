@@ -15,6 +15,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
 
@@ -76,12 +77,13 @@ object Importer {
     }
 
     private suspend fun read(http: OkHttpClient, input: String): Pair<String, List<Wanted>> = withContext(Dispatchers.IO) {
-        val link = Regex("https?://\\S+").find(input)?.value
-        when {
-            link == null -> "Imported" to lines(input)
-            "deezer" in link -> deezer(http, link)
-            "spotify" in link -> spotify(http, link)
-            "apple.com" in link -> apple(http, link)
+        val link = Regex("https?://\\S+").find(input)?.value ?: return@withContext "Imported" to lines(input)
+        // Exactly these hosts, over HTTPS: a link is fetched only where it says it is from.
+        val url = link.toHttpUrlOrNull()?.takeIf { it.isHttps } ?: error("That is not a playlist link this app can read.")
+        when (url.host.removePrefix("www.")) {
+            "deezer.com", "link.deezer.com", "deezer.page.link" -> deezer(http, link)
+            "open.spotify.com" -> spotify(http, link)
+            "music.apple.com" -> apple(http, link)
             else -> error("That is not a playlist link this app can read.")
         }
     }
@@ -98,8 +100,11 @@ object Importer {
         }
 
     private fun deezer(http: OkHttpClient, link: String): Pair<String, List<Wanted>> {
-        val id = Regex("playlist/(\\d+)").find(page(http, link).first)?.groupValues?.get(1)
-            ?: Regex("playlist/(\\d+)").find(link)?.groupValues?.get(1) ?: error("That Deezer link is not to a playlist.")
+        // A short link is followed, but only to where Deezer itself sends it.
+        val id = Regex("playlist/(\\d+)").find(link)?.groupValues?.get(1)
+            ?: page(http, link).first.takeIf { it.toHttpUrlOrNull()?.host?.endsWith("deezer.com") == true }
+                ?.let { Regex("playlist/(\\d+)").find(it)?.groupValues?.get(1) }
+            ?: error("That Deezer link is not to a playlist.")
         val playlist = json(http, "https://api.deezer.com/playlist/$id")
         val name = (playlist["title"] as? JsonPrimitive)?.content ?: "Imported"
         val songs = mutableListOf<Wanted>()
@@ -118,7 +123,8 @@ object Importer {
     private fun spotify(http: OkHttpClient, link: String): Pair<String, List<Wanted>> {
         val (_, html) = page(http, link)
         val name = meta(html, "og:title").firstOrNull() ?: "Imported"
-        val links = meta(html, "music:song").take(100)
+        // Only Spotify's own song pages are followed.
+        val links = meta(html, "music:song").filter { it.startsWith("https://open.spotify.com/track/") }.take(100)
         if (links.isEmpty()) error("Spotify did not list that playlist's songs.")
         val songs = links.mapNotNull { song ->
             runCatching {

@@ -114,7 +114,6 @@ fun LibraryScreen() {
                     if (kind == null && folder == null) {
                         item(span = { GridItemSpan(maxLineSpan) }) {
                             Column {
-                                Shortcut("Liked Music", "Playlist • Auto", R.drawable.ic_heart_filled) { actions.go(Routes.LIKED) }
                                 Shortcut("Downloads", "Songs on this phone", R.drawable.ic_archive) { actions.go(Routes.DOWNLOADS) }
                                 Shortcut("Music on this phone", "Your own files", R.drawable.ic_folder) { actions.go(Routes.LOCAL) }
                             }

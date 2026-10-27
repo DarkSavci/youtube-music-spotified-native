@@ -1,5 +1,9 @@
 package dev.darksavci.spotified.ui.screens
 
+import dev.darksavci.spotified.ui.components.FadingTopBar
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.shadow
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -74,10 +78,9 @@ fun LazyListScope.collectionHeader(
         val downloads by actions.graph.downloads.done.collectAsStateWithLifecycle()
         val allDownloaded = tracks.isNotEmpty() && tracks.all { it.id in downloads }
         Column(Modifier.background(Brush.verticalGradient(listOf(tint.darkened(0.2f), p.window)))) {
-            Row(Modifier.windowInsetsPadding(WindowInsets.statusBars).padding(4.dp)) {
-                GlyphButton(R.drawable.ic_chevron_left, "Back", { actions.nav.popBackStack() })
-            }
-            Art(artwork, 240.dp, Modifier.align(Alignment.CenterHorizontally))
+            // Room for the bar that floats over the page.
+            Spacer(Modifier.windowInsetsPadding(WindowInsets.statusBars).height(56.dp))
+            Art(artwork, 240.dp, Modifier.align(Alignment.CenterHorizontally).shadow(24.dp, RoundedCornerShape(4.dp)))
             Spacer(Modifier.height(20.dp))
             Text(title, style = Type.title, modifier = Modifier.padding(horizontal = 16.dp), maxLines = 3, overflow = TextOverflow.Ellipsis)
             if (byline.isNotEmpty()) Text(byline, style = Type.bodyStrong, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
@@ -118,7 +121,9 @@ fun AlbumScreen(id: String) {
         val tracks = album.tracks.map { if (it.artwork.isEmpty()) it.copy(artwork = album.artwork) else it }
         val projection by actions.graph.playback.projection.collectAsStateWithLifecycle()
         val downloads by actions.graph.downloads.done.collectAsStateWithLifecycle()
-        LazyColumn(contentPadding = PaddingValues(bottom = 24.dp)) {
+        val list = rememberLazyListState()
+        Box {
+        LazyColumn(state = list, contentPadding = PaddingValues(bottom = 24.dp)) {
             collectionHeader(
                 album.title, album.artists.joinToString { it.name },
                 listOf(album.kind, album.year, durationText(tracks)).filter { it.isNotEmpty() }.joinToString(" • "),
@@ -145,6 +150,8 @@ fun AlbumScreen(id: String) {
                 ShelfRow(shelf.items, actions::open, actions::menuFor)
             }
         }
+        FadingTopBar(album.title, artColor(album.artwork), list) { actions.nav.popBackStack() }
+        }
     }
 }
 
@@ -161,7 +168,9 @@ private fun TrackList(playlist: Playlist, origin: String, byline: String, artwor
     val projection by actions.graph.playback.projection.collectAsStateWithLifecycle()
     val downloads by actions.graph.downloads.done.collectAsStateWithLifecycle()
     val tracks = playlist.tracks
-    LazyColumn(contentPadding = PaddingValues(bottom = 24.dp)) {
+    val list = rememberLazyListState()
+    Box {
+    LazyColumn(state = list, contentPadding = PaddingValues(bottom = 24.dp)) {
         collectionHeader(
             playlist.title, byline, durationText(tracks), artwork.ifEmpty { tracks.firstOrNull()?.artwork.orEmpty() },
             tracks, origin, actions,
@@ -195,6 +204,8 @@ private fun TrackList(playlist: Playlist, origin: String, byline: String, artwor
             )
         }
     }
+    FadingTopBar(playlist.title, artColor(artwork.ifEmpty { tracks.firstOrNull()?.artwork.orEmpty() }), list) { actions.nav.popBackStack() }
+    }
 }
 
 @Composable
@@ -212,7 +223,9 @@ fun PodcastScreen(id: String) {
     val actions = LocalActions.current
     val loader = rememberLoader("podcast:$id") { actions.graph.api.podcast(id) }
     Loaded(loader) { podcast ->
-        LazyColumn(contentPadding = PaddingValues(bottom = 24.dp)) {
+        val list = rememberLazyListState()
+        Box {
+        LazyColumn(state = list, contentPadding = PaddingValues(bottom = 24.dp)) {
             collectionHeader(podcast.title, podcast.author, "${podcast.episodes.size} episodes", podcast.artwork, podcast.episodes, podcast.title, actions)
             if (podcast.description.isNotEmpty()) {
                 item { Text(podcast.description, style = Type.small, color = LocalPalette.current.secondary, modifier = Modifier.padding(16.dp), maxLines = 6, overflow = TextOverflow.Ellipsis) }
@@ -220,6 +233,8 @@ fun PodcastScreen(id: String) {
             itemsIndexed(podcast.episodes) { i, e ->
                 TrackRow(e, { actions.play(podcast.episodes, i, podcast.title) }, { actions.menuFor(e) }, subtitle = clock(e.durationMs).takeIf { e.durationMs > 0 } ?: podcast.author)
             }
+        }
+        FadingTopBar(podcast.title, artColor(podcast.artwork), list) { actions.nav.popBackStack() }
         }
     }
 }

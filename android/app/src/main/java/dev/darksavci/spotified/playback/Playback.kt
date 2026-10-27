@@ -14,12 +14,13 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -37,6 +38,8 @@ class Playback(
     private val session: Session,
     private val settings: SettingsStore,
     private val origin: suspend () -> HttpUrl,
+    /** Whether the phone is on a network that costs, for the quality to ask for. */
+    private val metered: Flow<Boolean>,
 ) {
     private val _projection = MutableStateFlow(Projection())
     val projection: StateFlow<Projection> = _projection
@@ -68,7 +71,7 @@ class Playback(
             deviceId = settings.deviceId()
             // The core acts on some settings; every change is sent whole.
             launch {
-                settings.settings.map { it.forCore() }.distinctUntilChanged().collect { core ->
+                combine(settings.settings, metered) { s, m -> s.forCore(m) }.distinctUntilChanged().collect { core ->
                     runCatching { session.setSettings(core) }
                 }
             }
@@ -112,7 +115,17 @@ class Playback(
         }
     }
 
+    /**
+     * While in a Listen Together room the core takes only following, leaving
+     * and volume from this player; anything else is the room's to decide,
+     * and goes there. Returns whether the room took the command.
+     */
+    @Volatile
+    var room: ((Command) -> Boolean)? = null
+
     fun send(command: Command) {
+        val ownsIt = command is Command.FollowRoom || command is Command.LeaveRoom || command is Command.SetVolume
+        if (!ownsIt && _projection.value.followingRoom && room?.invoke(command) == true) return
         scope.launch {
             try {
                 if (deviceId.isEmpty()) deviceId = settings.deviceId()

@@ -23,6 +23,9 @@ class Core(context: Context) {
     private val app = context.applicationContext
     private val lock = Mutex()
 
+    /** The accounts on the phone; the core runs in the folder of the one in use. */
+    val accounts = Accounts(app)
+
     /** Where the core answers, and the token every request must carry. */
     data class Running(val address: String, val token: String)
 
@@ -57,7 +60,7 @@ class Core(context: Context) {
 
     private fun start(): Running {
         val cfg = Mobile.newConfig()
-        cfg.dataDir = app.filesDir.path
+        cfg.dataDir = accounts.currentDir().path
         cfg.cacheDir = app.cacheDir.path
         // yt-dlp, and the core's own resolver, run qjs as a program, from
         // where Android put it.

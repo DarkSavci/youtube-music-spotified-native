@@ -37,6 +37,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
@@ -184,7 +185,11 @@ private fun MoodWall() {
                         Modifier.weight(1f).height(96.dp).clip(RoundedCornerShape(8.dp)).background(color)
                             .clickable { actions.go(Routes.browse(mood.id, mood.params, mood.title)) }.padding(12.dp),
                     ) {
-                        Text(mood.title, style = Type.heading, color = Color.White, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        // YouTube's own colours run from deep to pale; the words stay readable on both.
+                        Text(
+                            mood.title, style = Type.heading, maxLines = 2, overflow = TextOverflow.Ellipsis,
+                            color = if (color.luminance() > 0.5f) Color.Black else Color.White,
+                        )
                     }
                 }
                 if (pair.size == 1) Spacer(Modifier.weight(1f))

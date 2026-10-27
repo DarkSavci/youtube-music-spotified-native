@@ -11,9 +11,13 @@ import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import dev.darksavci.spotified.api.CoreSettings
+import dev.darksavci.spotified.together.Mode
+import dev.darksavci.spotified.together.SavedServer
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.json.Json
 import java.util.UUID
 
 private val Context.store: DataStore<Preferences> by preferencesDataStore("settings")
@@ -47,8 +51,24 @@ data class Settings(
     val lastfmToken: String = "",
     val newReleaseAlerts: Boolean = true,
     val sponsorBlock: Boolean = false,
+    /** "high", "standard" or "low", on Wi-Fi and on mobile data. */
+    val wifiQuality: String = "high",
+    val mobileQuality: String = "standard",
+    /** The Listen Together relays saved, and the one rooms are made and joined on. */
+    val togetherServers: List<SavedServer> = emptyList(),
+    val togetherSelected: String = "",
+    /** The name a room sees; empty for the account's. */
+    val togetherName: String = "",
+    /** Remembered for the next room made. */
+    val togetherRoomName: String = "",
+    val togetherMode: Mode = Mode.Collaborative,
+    val togetherSharePicture: Boolean = false,
+    val togetherNotifications: Boolean = false,
 ) {
-    fun forCore() = CoreSettings(
+    val togetherServer: SavedServer? get() = togetherServers.firstOrNull { it.id == togetherSelected }
+
+    fun forCore(metered: Boolean) = CoreSettings(
+        audioQuality = if (metered) mobileQuality else wifiQuality,
         crossfadeMs = crossfadeMs,
         gapless = gapless,
         resumeOnLaunch = resumeOnLaunch,
@@ -83,9 +103,21 @@ class SettingsStore(private val context: Context) {
         val lastfmToken = stringPreferencesKey("lastfmToken")
         val releaseAlerts = booleanPreferencesKey("newReleaseAlerts")
         val sponsorBlock = booleanPreferencesKey("sponsorBlock")
+        val wifiQuality = stringPreferencesKey("wifiQuality")
+        val mobileQuality = stringPreferencesKey("mobileQuality")
         val deviceId = stringPreferencesKey("deviceId")
         val offsets = stringPreferencesKey("lyricsOffsets")
+        val togetherServers = stringPreferencesKey("togetherServers")
+        val togetherSelected = stringPreferencesKey("togetherSelected")
+        val togetherName = stringPreferencesKey("togetherName")
+        val togetherRoomName = stringPreferencesKey("togetherRoomName")
+        val togetherMode = stringPreferencesKey("togetherMode")
+        val togetherSharePicture = booleanPreferencesKey("togetherSharePicture")
+        val togetherNotifications = booleanPreferencesKey("togetherNotifications")
     }
+
+    private val servers = ListSerializer(SavedServer.serializer())
+    private val json = Json { ignoreUnknownKeys = true }
 
     val settings: Flow<Settings> = context.store.data.map(::read)
 
@@ -115,6 +147,15 @@ class SettingsStore(private val context: Context) {
             lastfmToken = p[K.lastfmToken] ?: d.lastfmToken,
             newReleaseAlerts = p[K.releaseAlerts] ?: d.newReleaseAlerts,
             sponsorBlock = p[K.sponsorBlock] ?: d.sponsorBlock,
+            wifiQuality = p[K.wifiQuality] ?: d.wifiQuality,
+            mobileQuality = p[K.mobileQuality] ?: d.mobileQuality,
+            togetherServers = p[K.togetherServers]?.let { runCatching { json.decodeFromString(servers, it) }.getOrNull() } ?: d.togetherServers,
+            togetherSelected = p[K.togetherSelected] ?: d.togetherSelected,
+            togetherName = p[K.togetherName] ?: d.togetherName,
+            togetherRoomName = p[K.togetherRoomName] ?: d.togetherRoomName,
+            togetherMode = p[K.togetherMode]?.let(Mode::ofWire) ?: d.togetherMode,
+            togetherSharePicture = p[K.togetherSharePicture] ?: d.togetherSharePicture,
+            togetherNotifications = p[K.togetherNotifications] ?: d.togetherNotifications,
         )
     }
 
@@ -146,6 +187,15 @@ class SettingsStore(private val context: Context) {
             p[K.lastfmToken] = s.lastfmToken
             p[K.releaseAlerts] = s.newReleaseAlerts
             p[K.sponsorBlock] = s.sponsorBlock
+            p[K.wifiQuality] = s.wifiQuality
+            p[K.mobileQuality] = s.mobileQuality
+            p[K.togetherServers] = json.encodeToString(servers, s.togetherServers)
+            p[K.togetherSelected] = s.togetherSelected
+            p[K.togetherName] = s.togetherName
+            p[K.togetherRoomName] = s.togetherRoomName
+            p[K.togetherMode] = s.togetherMode.wire
+            p[K.togetherSharePicture] = s.togetherSharePicture
+            p[K.togetherNotifications] = s.togetherNotifications
         }
     }
 

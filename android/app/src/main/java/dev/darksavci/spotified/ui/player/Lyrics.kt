@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
@@ -36,6 +37,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.darksavci.spotified.R
@@ -58,6 +60,34 @@ private fun rememberLyrics(track: Track): Result<Lyrics?>? {
         value = runCatching { graph.api.lyrics(track) }
     }
     return loaded
+}
+
+/**
+ * The lyrics in the art's place, for the lyrics-first style: the current
+ * line and the next few, following the song. A tap gives them the screen.
+ */
+@Composable
+fun LyricsPanel(track: Track, size: Dp, tint: Color, onExpand: () -> Unit) {
+    val lyrics = rememberLyrics(track)?.getOrNull()
+    val (position, _) = rememberPosition()
+    val graph = LocalContext.current.graph
+    val offsets by graph.settings.lyricsOffsets.collectAsStateWithLifecycle(emptyMap())
+    val current = lyrics?.lineAt(position + (offsets[track.id] ?: 0L)) ?: 0
+    Column(
+        Modifier.size(size).clip(RoundedCornerShape(8.dp)).background(tint.darkened(0.2f)).clickable(onClick = onExpand).padding(20.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        val lines = lyrics?.lines.orEmpty()
+        if (lines.isEmpty()) {
+            Text(if (lyrics == null) "No lyrics for this song." else "", style = Type.title, color = Color.White.copy(alpha = 0.7f))
+        }
+        lines.drop(current).take(7).forEachIndexed { i, line ->
+            Text(
+                line.text.ifEmpty { "♪" }, style = Type.title, maxLines = 2, overflow = TextOverflow.Ellipsis,
+                color = if (i == 0 && lyrics?.synced == true) Color.White else Color.White.copy(alpha = 0.5f),
+            )
+        }
+    }
 }
 
 /** The card under the controls: the first lines, and a button that gives them the screen. */

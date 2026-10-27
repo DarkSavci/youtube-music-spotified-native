@@ -2,6 +2,7 @@
 <resources>
     <string name="app_name">Youtube Music Spotified</string>
     <string name="widget_player">Now playing</string>
+    <string name="widget_recent">Recently played</string>
     <string name="shortcut_search">Search</string>
     <string name="shortcut_liked">Liked Music</string>
     <string name="shortcut_shuffle">Shuffle Liked Music</string>
