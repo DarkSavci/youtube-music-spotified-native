@@ -446,11 +446,9 @@ pub fn apply(state: &mut State, action: Action) -> Vec<Effect> {
         | Action::ReportSaved(_)
         | Action::StartAtLoginKnown(_) => desktop::desktop(state, action),
         Action::SetLyricsFullscreen(on) => {
+            // They take the whole window, not the whole screen.
             state.lyrics_fullscreen = on;
-            // The player may be open over them, holding the screen itself.
-            let mut effects = vec![Effect::SetFullscreen(on || state.fullscreen_player)];
-            effects.extend(want_lyrics(state));
-            effects
+            want_lyrics(state)
         }
         Action::SetFullscreenPlayer(_) | Action::ToggleFullscreenPlayer => {
             playback::fullscreen_player(state, action)

@@ -98,6 +98,7 @@ pub fn show(state: &State, ui: &mut Ui, actions: &mut Vec<Action>) {
     // The lyrics, given the whole window, bring their own transport.
     if state.lyrics_fullscreen {
         lyrics::fullscreen(state, ui, actions);
+        chrome::resize(state, ui);
         drag::ghost(state, ui);
         toasts::show(state, ui, actions);
         return;

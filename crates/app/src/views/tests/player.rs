@@ -78,7 +78,7 @@ fn the_lyrics_panel_can_take_the_whole_window_and_give_it_back() {
     // Settled, not loading: a spinner would keep the window redrawing.
     state.lyrics.words = Loadable::Loaded(None);
     let mut harness = harness(state);
-    harness.get_by_label("Full screen").click();
+    harness.get_by_label("Expand").click();
     harness.run();
     assert!(asked(&harness, |action| matches!(
         action,
@@ -89,7 +89,7 @@ fn the_lyrics_panel_can_take_the_whole_window_and_give_it_back() {
     state.lyrics_fullscreen = true;
     state.lyrics.words = Loadable::Loaded(None);
     let mut harness = self::harness(state);
-    harness.get_by_label("Leave full screen").click();
+    harness.get_by_label("Collapse").click();
     harness.run();
     assert!(asked(&harness, |action| matches!(
         action,

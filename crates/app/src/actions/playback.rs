@@ -226,6 +226,5 @@ pub(super) fn fullscreen_player(state: &mut State, action: Action) -> Vec<Effect
         return Vec::new();
     }
     state.fullscreen_player = on;
-    // Closed over full-screen lyrics, the screen stays theirs.
-    vec![Effect::SetFullscreen(on || state.lyrics_fullscreen)]
+    vec![Effect::SetFullscreen(on)]
 }

@@ -1,5 +1,5 @@
 //! Lyrics: the words of what is playing, following the song when they are
-//! timed. A panel on the right, or the whole window.
+//! timed. A panel on the right, or the whole window (never the screen).
 //!
 //! Both sit on the cover's colour. Every line is bold; the one being sung
 //! is white and the rest are white seen through the colour, so the eye
@@ -69,9 +69,7 @@ pub fn show(state: &State, ui: &mut Ui, actions: &mut Vec<Action>, most: f32) {
                     if widgets::icon_button(ui, palette, Icon::X, 16.0, "Close").clicked() {
                         actions.push(Action::ToggleLyrics);
                     }
-                    if widgets::icon_button(ui, palette, Icon::Expand, 16.0, "Full screen")
-                        .clicked()
-                    {
+                    if widgets::icon_button(ui, palette, Icon::Expand, 16.0, "Expand").clicked() {
                         actions.push(Action::SetLyricsFullscreen(true));
                     }
                 });
@@ -115,7 +113,15 @@ pub fn fullscreen(state: &State, ui: &mut Ui, actions: &mut Vec<Action>) {
             let side = (area.width() * 0.08).clamp(24.0, 120.0);
 
             chrome::drag(state, ui, header);
-            self::header(state, ui, actions, header.shrink2(vec2(24.0, 16.0)));
+            // Only the window is theirs, so its buttons stay in its corner.
+            let buttons = chrome::buttons_width(state);
+            let corner = Rect::from_min_max(
+                pos2(header.right() - buttons, header.top()),
+                pos2(header.right(), header.top() + theme::TOP_BAR_HEIGHT),
+            );
+            chrome::buttons(state, ui, corner);
+            let room = header.shrink2(vec2(24.0, 16.0));
+            self::header(state, ui, actions, room.with_max_x(room.right() - buttons));
 
             let style = LineStyle {
                 size: (area.width() * 0.032).clamp(24.0, 34.0),
@@ -146,7 +152,7 @@ fn header(state: &State, ui: &mut Ui, actions: &mut Vec<Action>, area: Rect) {
     let leave = widgets::IconButton {
         icon: Icon::Shrink,
         size: 18.0,
-        tooltip: "Leave full screen",
+        tooltip: "Collapse",
         active: false,
     };
     let corner = pos2(area.right() - 15.0, area.center().y);

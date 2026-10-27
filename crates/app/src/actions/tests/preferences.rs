@@ -233,13 +233,15 @@ fn the_full_screen_player_needs_something_playing() {
 }
 
 #[test]
-fn the_player_closed_over_full_screen_lyrics_leaves_them_the_screen() {
+fn expanded_lyrics_take_the_window_and_leave_the_screen_alone() {
     let mut state = playing();
-    apply(&mut state, Action::SetLyricsFullscreen(true));
+    let effects = apply(&mut state, Action::SetLyricsFullscreen(true));
+    assert!(!effects.contains(&Effect::SetFullscreen(true)));
     apply(&mut state, Action::SetFullscreenPlayer(true));
+    // The player closed over them gives the screen back; they keep the window.
     assert_eq!(
         apply(&mut state, Action::SetFullscreenPlayer(false)),
-        [Effect::SetFullscreen(true)]
+        [Effect::SetFullscreen(false)]
     );
     assert!(state.lyrics_fullscreen);
 }
