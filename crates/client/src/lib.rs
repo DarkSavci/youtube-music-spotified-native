@@ -160,7 +160,11 @@ impl Client {
     /// Deletes every kept song, and says what is left.
     pub fn clear_cache(&self) -> Result<CacheUsage, ApiError> {
         let url = format!("{}/v1/cache", self.origin);
-        let response = self.agent.delete(&url).call().map_err(|error| unreachable(&url, error))?;
+        let response = self
+            .agent
+            .delete(&url)
+            .call()
+            .map_err(|error| unreachable(&url, error))?;
         let body = successful_body(response)?;
         decoded(&url, &body)
     }
@@ -280,7 +284,11 @@ impl Client {
     /// Deletes a folder. What was in it goes back to the top of the library.
     pub fn delete_folder(&self, id: &str) -> Result<(), ApiError> {
         let url = format!("{}/v1/me/folders/{}", self.origin, encode(id));
-        let response = self.agent.delete(&url).call().map_err(|error| unreachable(&url, error))?;
+        let response = self
+            .agent
+            .delete(&url)
+            .call()
+            .map_err(|error| unreachable(&url, error))?;
         successful_body(response).map(drop)
     }
 
@@ -350,7 +358,11 @@ impl Client {
 
     pub fn delete_playlist(&self, playlist_id: &str) -> Result<(), ApiError> {
         let url = format!("{}/v1/me/playlists/{}", self.origin, encode(playlist_id));
-        let response = self.agent.delete(&url).call().map_err(|error| unreachable(&url, error))?;
+        let response = self
+            .agent
+            .delete(&url)
+            .call()
+            .map_err(|error| unreachable(&url, error))?;
         successful_body(response).map(drop)
     }
 
@@ -398,7 +410,11 @@ impl Client {
 
     fn get<T: DeserializeOwned>(&self, path: &str) -> Result<T, ApiError> {
         let url = format!("{}{path}", self.origin);
-        let response = self.agent.get(&url).call().map_err(|error| unreachable(&url, error))?;
+        let response = self
+            .agent
+            .get(&url)
+            .call()
+            .map_err(|error| unreachable(&url, error))?;
         let body = successful_body(response)?;
         decoded(path, &body)
     }
@@ -415,14 +431,22 @@ impl Client {
 
     fn post_text(&self, path: &str, body: &Value) -> Result<String, ApiError> {
         let url = format!("{}{path}", self.origin);
-        let response = self.agent.post(&url).send_json(body).map_err(|error| unreachable(&url, error))?;
+        let response = self
+            .agent
+            .post(&url)
+            .send_json(body)
+            .map_err(|error| unreachable(&url, error))?;
         successful_body(response)
     }
 
     /// Opens a response that is read for as long as it lasts.
     fn stream(&self, path: &str) -> Result<impl Read + use<>, ApiError> {
         let url = format!("{}{path}", self.origin);
-        let response = self.streaming.get(&url).call().map_err(|error| unreachable(&url, error))?;
+        let response = self
+            .streaming
+            .get(&url)
+            .call()
+            .map_err(|error| unreachable(&url, error))?;
         let status = response.status().as_u16();
         if (200..300).contains(&status) {
             Ok(response.into_body().into_reader())
