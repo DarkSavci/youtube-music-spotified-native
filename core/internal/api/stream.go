@@ -561,7 +561,13 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "offline", http.StatusServiceUnavailable)
 			return
 		}
-		s.deps.Log.Warn("stream resolve failed", "video", videoID, "err", err)
+		// A skip or a seek abandons the request, and the resolve with it:
+		// that is not a failure, and not worth a warning.
+		if r.Context().Err() != nil {
+			s.deps.Log.Debug("stream resolve abandoned", "video", videoID, "err", err)
+			return
+		}
+		s.deps.Log.Warn("stream resolve failed", "video", videoID, "err", withoutQueries(err.Error()))
 		http.Error(w, withoutQueries(err.Error()), http.StatusBadGateway)
 		return
 	}
@@ -667,10 +673,17 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.WriteHeader(resp.StatusCode)
 
-	if _, err := io.Copy(w, stallGuard(resp.Body, cancel)); err != nil {
+	if n, err := io.Copy(w, stallGuard(resp.Body, cancel)); err != nil {
 		// A client seeking away mid-transfer aborts the copy. That is normal
-		// and not worth reporting as an error.
-		s.deps.Log.Debug("stream copy ended", "video", videoID, "err", err)
+		// and not worth reporting as an error; upstream breaking off or
+		// stalling while the player still listens is, since the player sees
+		// only that the connection dropped.
+		if r.Context().Err() != nil {
+			s.deps.Log.Debug("stream copy ended", "video", videoID, "err", err)
+		} else {
+			s.deps.Log.Warn("stream ended short: upstream transfer broke off",
+				"video", videoID, "copied", n, "err", withoutQueries(err.Error()))
+		}
 	}
 }
 

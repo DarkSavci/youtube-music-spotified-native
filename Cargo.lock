@@ -3073,6 +3073,7 @@ dependencies = [
 name = "spotified-client"
 version = "0.4.7"
 dependencies = [
+ "log",
  "serde",
  "serde_json",
  "ureq",

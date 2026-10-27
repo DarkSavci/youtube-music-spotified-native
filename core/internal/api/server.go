@@ -398,6 +398,15 @@ func (s *Server) fail(w http.ResponseWriter, r *http.Request, err error) {
 	}
 }
 
+// errText is an error as the log may hold it: without the query strings of
+// any URL it quotes. A nil error is the empty string.
+func errText(err error) string {
+	if err == nil {
+		return ""
+	}
+	return withoutQueries(err.Error())
+}
+
 // queryString matches a URL's query, up to the quote or space that ends it.
 var queryString = regexp.MustCompile(`\?[^"'\s]*`)
 

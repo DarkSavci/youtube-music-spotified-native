@@ -811,13 +811,27 @@ func (s *Server) serveCached(w http.ResponseWriter, r *http.Request, videoID str
 // relayRest completes a response the cache could not, straight from
 // upstream, in the bounded windows every URL serves.
 func (s *Server) relayRest(ctx context.Context, w io.Writer, videoID string, pos, end int64) {
+	/*
+	 * Every way out before the end leaves the player's response short, and
+	 * the player sees only a connection that broke off. Each says why here,
+	 * unless the player is what went away.
+	 */
+	stopped := func(why string, args ...any) {
+		if ctx.Err() != nil {
+			return
+		}
+		args = append([]any{"video", videoID, "at", pos, "end", end}, args...)
+		s.deps.Log.Warn("stream ended short: "+why, args...)
+	}
 	retried := false
 	for pos <= end {
 		if s.net.Offline() {
+			stopped("offline")
 			return
 		}
 		e, err := s.resolveCached(ctx, videoID)
 		if err != nil {
+			stopped("could not resolve the rest", "err", withoutQueries(err.Error()))
 			return
 		}
 		to := min(pos+streamWindow-1, end)
@@ -825,6 +839,7 @@ func (s *Server) relayRest(ctx context.Context, w io.Writer, videoID string, pos
 		resp, err := s.fetchUpstream(rctx, e.stream.URL, fmt.Sprintf("bytes=%d-%d", pos, to))
 		if err != nil {
 			cancel()
+			stopped("upstream request failed", "err", withoutQueries(err.Error()))
 			return
 		}
 		if resp.StatusCode == http.StatusForbidden && !retried {
@@ -837,6 +852,7 @@ func (s *Server) relayRest(ctx context.Context, w io.Writer, videoID string, pos
 		if resp.StatusCode != http.StatusPartialContent {
 			_ = resp.Body.Close()
 			cancel()
+			stopped("upstream refused the range", "status", resp.StatusCode)
 			return
 		}
 		n, err := io.Copy(w, stallGuard(resp.Body, cancel))
@@ -844,6 +860,7 @@ func (s *Server) relayRest(ctx context.Context, w io.Writer, videoID string, pos
 		cancel()
 		pos += n
 		if err != nil || n == 0 {
+			stopped("upstream transfer broke off", "err", errText(err), "copied", n)
 			return
 		}
 	}

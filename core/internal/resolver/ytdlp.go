@@ -167,7 +167,7 @@ func (y *Ytdlp) resolveMedia(ctx context.Context, videoID string, extra []string
 
 	if err := cmd.Run(); err != nil {
 		return domain.Stream{}, Quality{}, classify(
-			fmt.Errorf("yt-dlp: %v: %s", err, strings.TrimSpace(stderr.String())))
+			fmt.Errorf("yt-dlp: %v: %s", err, said(stderr.Bytes(), stdout.Bytes())))
 	}
 
 	var info ytdlpInfo
@@ -338,4 +338,30 @@ func bestYtdlpVideo(formats []ytdlpFormat, pick VideoPick) *ytdlpFormat {
 		}
 	}
 	return best
+}
+
+// saidMost is how much of what yt-dlp printed an error carries.
+const saidMost = 400
+
+/*
+said is what yt-dlp gave as the reason it failed: its error output. Where that
+is empty, only how much it printed otherwise is said, never what: its output
+is the track's JSON, whose stream addresses are signed for this machine, and
+an error goes to the log and to the screen. A failure that printed nothing at
+all says so, rather than ending in a colon that reads as a lost message.
+*/
+func said(stderr, stdout []byte) string {
+	text := strings.TrimSpace(string(stderr))
+	if len(text) > saidMost {
+		// Cut by bytes, so a letter cut in two is dropped.
+		text = "…" + strings.ToValidUTF8(text[len(text)-saidMost:], "")
+	}
+	switch {
+	case text != "":
+		return text
+	case len(bytes.TrimSpace(stdout)) > 0:
+		return fmt.Sprintf("nothing on stderr; %d bytes on stdout", len(stdout))
+	default:
+		return "yt-dlp printed nothing"
+	}
 }

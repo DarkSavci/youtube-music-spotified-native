@@ -82,9 +82,14 @@ impl log::Log for FileLogger {
     fn enabled(&self, metadata: &log::Metadata) -> bool {
         // Verbose means this app's own detail. The libraries under it log
         // every request and frame at debug, which would bury that.
-        let ours = metadata.target().starts_with("spotified") || metadata.target() == "core";
+        let target = metadata.target();
+        let ours = target.starts_with("spotified") || target == "core";
         let level = if ours {
             self.level
+        } else if target.starts_with("symphonia") {
+            // The decoder warns of the bytes it skips before every track
+            // YouTube serves: hundreds of lines a day that say nothing.
+            log::LevelFilter::Error
         } else {
             log::LevelFilter::Warn
         };
@@ -138,7 +143,12 @@ pub fn init(dir: &Path, started: Instant, verbose: bool) -> io::Result<PathBuf> 
     log::set_boxed_logger(Box::new(logger)).map_err(io::Error::other)?;
     log::set_max_level(level);
     std::panic::set_hook(Box::new(|panic| {
-        log::error!("panic: {panic}");
+        // Where it happened, and how it got there: a release build aborts
+        // here, and this is all there will be to go on.
+        let thread = std::thread::current();
+        let name = thread.name().unwrap_or("unnamed");
+        let trace = std::backtrace::Backtrace::force_capture();
+        log::error!("panic on thread {name}: {panic}\n{trace}");
         log::logger().flush();
     }));
     prune(dir, &path);

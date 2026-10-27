@@ -413,12 +413,12 @@ impl Client {
             .agent
             .post(&url)
             .send_json(&body)
-            .map_err(crate::unreachable)?;
+            .map_err(|error| crate::unreachable(&url, error))?;
         let status = response.status().as_u16();
         let text = response
             .body_mut()
             .read_to_string()
-            .map_err(crate::unreachable)?;
+            .map_err(|error| crate::unreachable(&url, error))?;
         if (200..300).contains(&status) {
             return Ok(MixStart::Playing);
         }

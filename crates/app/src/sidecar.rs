@@ -124,18 +124,51 @@ impl Drop for Sidecar {
     }
 }
 
+/// The lines of the core's log, until it ends. A line that is not UTF-8
+/// (a program's message in the system's code page, passed on) is read
+/// with what cannot be read replaced: it must not end the reading, which
+/// would leave every later line unread and the core taken for stopped.
+fn lines_of(mut log: impl BufRead) -> impl Iterator<Item = String> {
+    std::iter::from_fn(move || {
+        let mut bytes = Vec::new();
+        match log.read_until(b'\n', &mut bytes) {
+            Ok(0) | Err(_) => None,
+            Ok(_) => {
+                let line = String::from_utf8_lossy(&bytes);
+                Some(line.trim_end_matches(['\r', '\n']).to_owned())
+            }
+        }
+    })
+}
+
+/// How much a line of the core's log matters. The core's own lines say;
+/// anything else on its standard error is not its logger speaking but
+/// something gone wrong under it (Go's report of a panic and the stack
+/// under it, or the HTTP server's complaint), and is kept in every log.
+fn level_of(line: &str) -> log::Level {
+    if line.contains("level=ERROR") {
+        log::Level::Error
+    } else if line.contains("level=WARN") {
+        log::Level::Warn
+    } else if line.contains("level=") || line.trim().is_empty() {
+        log::Level::Debug
+    } else if line.starts_with("panic:") || line.starts_with("fatal error:") {
+        log::Level::Error
+    } else {
+        log::Level::Warn
+    }
+}
+
 /// Copies the core's log into ours and watches it for the listening line.
 fn follow_log(log: impl BufRead, report: impl Fn(CoreStatus)) {
     let mut ready = false;
-    for line in log.lines().map_while(Result::ok) {
+    for line in lines_of(log) {
         // The core's warnings are kept in every log, not only a verbose
         // one: they are what explains a song that would not play.
-        if line.contains("level=ERROR") {
-            log::error!(target: "core", "{line}");
-        } else if line.contains("level=WARN") {
-            log::warn!(target: "core", "{line}");
-        } else {
-            log::debug!(target: "core", "{line}");
+        match level_of(&line) {
+            log::Level::Error => log::error!(target: "core", "{line}"),
+            log::Level::Warn => log::warn!(target: "core", "{line}"),
+            _ => log::debug!(target: "core", "{line}"),
         }
         if !ready && let Some(addr) = listening_addr(&line) {
             ready = true;
@@ -245,6 +278,34 @@ mod tests {
     fn other_lines_carrying_an_address_are_not_the_signal() {
         let line = "level=INFO msg=\"upstream call\" addr=1.2.3.4:443";
         assert_eq!(listening_addr(line), None);
+    }
+
+    #[test]
+    fn what_the_core_says_outside_its_logger_is_kept_in_every_log() {
+        assert_eq!(level_of("time=x level=INFO msg=hello"), log::Level::Debug);
+        assert_eq!(level_of("time=x level=WARN msg=hm"), log::Level::Warn);
+        assert_eq!(level_of("time=x level=ERROR msg=oh"), log::Level::Error);
+        assert_eq!(
+            level_of("panic: runtime error: index out of range"),
+            log::Level::Error
+        );
+        assert_eq!(
+            level_of("fatal error: concurrent map writes"),
+            log::Level::Error
+        );
+        assert_eq!(level_of("goroutine 7 [running]:"), log::Level::Warn);
+        assert_eq!(
+            level_of("2026/10/27 20:00:00 http: panic serving"),
+            log::Level::Warn
+        );
+        assert_eq!(level_of(""), log::Level::Debug);
+    }
+
+    #[test]
+    fn a_line_that_is_not_utf8_does_not_end_the_reading() {
+        let log: &[u8] = b"first\r\nbroken \xff here\nlast\n";
+        let lines: Vec<String> = lines_of(log).collect();
+        assert_eq!(lines, ["first", "broken \u{fffd} here", "last"]);
     }
 
     fn statuses(log: &str) -> Vec<CoreStatus> {

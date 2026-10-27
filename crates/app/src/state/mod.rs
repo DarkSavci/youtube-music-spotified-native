@@ -493,8 +493,12 @@ impl State {
         self.push_toast(text.into(), false);
     }
 
+    /// An error the listener is shown is written down too: a report of a
+    /// problem should hold what they saw, not only what the core noticed.
     pub fn toast_error(&mut self, text: impl Into<String>) {
-        self.push_toast(text.into(), true);
+        let text = text.into();
+        log::warn!("shown as an error: {text}");
+        self.push_toast(text, true);
     }
 
     /// A toast with a button that opens a page.

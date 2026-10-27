@@ -160,9 +160,9 @@ impl Client {
     /// Deletes every kept song, and says what is left.
     pub fn clear_cache(&self) -> Result<CacheUsage, ApiError> {
         let url = format!("{}/v1/cache", self.origin);
-        let response = self.agent.delete(&url).call().map_err(unreachable)?;
+        let response = self.agent.delete(&url).call().map_err(|error| unreachable(&url, error))?;
         let body = successful_body(response)?;
-        serde_json::from_str(&body).map_err(|error| ApiError::Decode(error.to_string()))
+        decoded(&url, &body)
     }
 
     /// Who is signed in; `None` when nobody is, or it cannot be told.
@@ -280,7 +280,7 @@ impl Client {
     /// Deletes a folder. What was in it goes back to the top of the library.
     pub fn delete_folder(&self, id: &str) -> Result<(), ApiError> {
         let url = format!("{}/v1/me/folders/{}", self.origin, encode(id));
-        let response = self.agent.delete(&url).call().map_err(unreachable)?;
+        let response = self.agent.delete(&url).call().map_err(|error| unreachable(&url, error))?;
         successful_body(response).map(drop)
     }
 
@@ -350,7 +350,7 @@ impl Client {
 
     pub fn delete_playlist(&self, playlist_id: &str) -> Result<(), ApiError> {
         let url = format!("{}/v1/me/playlists/{}", self.origin, encode(playlist_id));
-        let response = self.agent.delete(&url).call().map_err(unreachable)?;
+        let response = self.agent.delete(&url).call().map_err(|error| unreachable(&url, error))?;
         successful_body(response).map(drop)
     }
 
@@ -375,7 +375,7 @@ impl Client {
             .delete(&url)
             .force_send_body()
             .send_json(json!({ "items": items }))
-            .map_err(unreachable)?;
+            .map_err(|error| unreachable(&url, error))?;
         successful_body(response).map(drop)
     }
 
@@ -398,14 +398,14 @@ impl Client {
 
     fn get<T: DeserializeOwned>(&self, path: &str) -> Result<T, ApiError> {
         let url = format!("{}{path}", self.origin);
-        let response = self.agent.get(&url).call().map_err(unreachable)?;
+        let response = self.agent.get(&url).call().map_err(|error| unreachable(&url, error))?;
         let body = successful_body(response)?;
-        serde_json::from_str(&body).map_err(|error| ApiError::Decode(error.to_string()))
+        decoded(path, &body)
     }
 
     fn post<T: DeserializeOwned>(&self, path: &str, body: &Value) -> Result<T, ApiError> {
         let body = self.post_text(path, body)?;
-        serde_json::from_str(&body).map_err(|error| ApiError::Decode(error.to_string()))
+        decoded(path, &body)
     }
 
     /// A post whose answer has no body worth reading.
@@ -415,14 +415,14 @@ impl Client {
 
     fn post_text(&self, path: &str, body: &Value) -> Result<String, ApiError> {
         let url = format!("{}{path}", self.origin);
-        let response = self.agent.post(&url).send_json(body).map_err(unreachable)?;
+        let response = self.agent.post(&url).send_json(body).map_err(|error| unreachable(&url, error))?;
         successful_body(response)
     }
 
     /// Opens a response that is read for as long as it lasts.
     fn stream(&self, path: &str) -> Result<impl Read + use<>, ApiError> {
         let url = format!("{}{path}", self.origin);
-        let response = self.streaming.get(&url).call().map_err(unreachable)?;
+        let response = self.streaming.get(&url).call().map_err(|error| unreachable(&url, error))?;
         let status = response.status().as_u16();
         if (200..300).contains(&status) {
             Ok(response.into_body().into_reader())
@@ -432,14 +432,32 @@ impl Client {
     }
 }
 
-fn unreachable(error: ureq::Error) -> ApiError {
+/// The core could not be asked, or its answer not read to the end. Said
+/// in the log here, the one place every request passes: the core never
+/// saw it, so its own log has nothing.
+fn unreachable(url: &str, error: ureq::Error) -> ApiError {
+    log::warn!("the playback service did not answer {url}: {error}");
     ApiError::Unreachable(error.to_string())
+}
+
+/// An answer read as `T`, or the error that says it was not what this
+/// build expects, which is written down: the core thought it had
+/// answered well.
+fn decoded<T: DeserializeOwned>(path: &str, body: &str) -> Result<T, ApiError> {
+    serde_json::from_str(body).map_err(|error| {
+        log::warn!("the answer to {path} could not be read: {error}");
+        ApiError::Decode(error.to_string())
+    })
 }
 
 /// The body of a successful answer, or the error an unsuccessful one names.
 fn successful_body(mut response: ureq::http::Response<ureq::Body>) -> Result<String, ApiError> {
     let status = response.status().as_u16();
-    let body = response.body_mut().read_to_string().map_err(unreachable)?;
+    let url = ureq::ResponseExt::get_uri(&response).path().to_owned();
+    let body = response
+        .body_mut()
+        .read_to_string()
+        .map_err(|error| unreachable(&url, error))?;
     if (200..300).contains(&status) {
         Ok(body)
     } else {

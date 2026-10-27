@@ -219,6 +219,8 @@ mod win {
         button_created: u32,
         /// The buttons are on the thumbnail; later changes update them.
         added: Cell<bool>,
+        /// They have been on one of the window's taskbar buttons before.
+        ever_added: Cell<bool>,
         /// What was last asked for, and at which drawn scale.
         wanted: Cell<Option<(Buttons, usize)>>,
         /// What the system last took.
@@ -257,6 +259,7 @@ mod win {
                 on_action,
                 button_created,
                 added: Cell::new(false),
+                ever_added: Cell::new(false),
                 wanted: Cell::new(None),
                 shown: Cell::new(None),
                 tried: Cell::new(None),
@@ -308,8 +311,15 @@ mod win {
             };
             match result {
                 Ok(()) => {
+                    // Windows makes the taskbar button more than once as the
+                    // window starts, and each new one is given the buttons
+                    // again: only the first time is news.
                     if !self.added.replace(true) {
-                        log::info!("taskbar buttons added (HRESULT 0x00000000)");
+                        if self.ever_added.replace(true) {
+                            log::debug!("taskbar buttons added again, to a new taskbar button");
+                        } else {
+                            log::info!("taskbar buttons added");
+                        }
                     }
                     self.refused.set(false);
                     self.shown.set(Some(wanted));
