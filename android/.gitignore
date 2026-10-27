@@ -1,0 +1,10 @@
+# Gradle's and Android Studio's.
+.gradle/
+.kotlin/
+build/
+local.properties
+*.iml
+
+# Built by scripts/build-core-android.ps1 and scripts/build-qjs-android.ps1.
+/app/libs/
+/app/src/main/jniLibs/
