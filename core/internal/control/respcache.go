@@ -38,7 +38,7 @@ const ResponsesFile = "responses.db"
 
 // OpenResponses opens (or creates) the answers file.
 func OpenResponses(ctx context.Context, path string) (*Responses, error) {
-	db, err := sql.Open("sqlite", path+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)")
+	db, err := sql.Open(driverName, dsn(path, "_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)"))
 	if err != nil {
 		return nil, fmt.Errorf("responses: open: %w", err)
 	}
