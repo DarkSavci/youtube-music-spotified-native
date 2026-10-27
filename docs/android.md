@@ -664,14 +664,15 @@ Checked on the emulator since:
   pasted lines, all matched against the real core (a connected test);
 - the updater against the project's real releases: an older app is told
   the newest (0.4.9, the desktop's only) has no APK for it, a newer one
-  that it is up to date. Downloading and checking an APK needs a release
-  that carries one;
+  that it is up to date; and against a release with an APK, answered in
+  the test, the APK is downloaded, checked against SHA256SUMS.txt and
+  handed to Android's installer, or deleted when the sums differ;
 - signed out, Android Auto's library and recent lists say to sign in.
 
 Not yet checked: Android Auto in a car or the Desktop Head Unit (it needs
 the Android Auto app, from the Play Store, on a phone), a watch, a phone
-(only the emulator), Last.fm with a real key, and an update installed from
-a release with an APK. Word-by-word lyrics are tested on both sides (the
+(only the emulator), Last.fm with a real key, and Android's installer
+finishing an update from a published release with an APK. Word-by-word lyrics are tested on both sides (the
 core's parsers, the phone's lighting), but not seen on a real song: LRCLIB
 had none with word timings among the hundreds looked at.
 
