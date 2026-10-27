@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -103,7 +104,7 @@ func (l *LRCLib) Lyrics(ctx context.Context, track domain.Track) (domain.Lyrics,
 	}
 
 	var body lrclibResponse
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxResponse)).Decode(&body); err != nil {
 		return domain.Lyrics{}, fmt.Errorf("lyrics: lrclib: decode: %w", err)
 	}
 	if body.Instrumental {
@@ -127,6 +128,17 @@ func (l *LRCLib) Lyrics(ctx context.Context, track domain.Track) (domain.Lyrics,
 
 var errBadTimestamp = errors.New("bad timestamp")
 
+/*
+Bounds on what one answer may hold. A song's lyrics are a few kilobytes and a
+few hundred words; these are far above that, and keep a broken or hostile
+answer from costing the phone its memory.
+*/
+const (
+	maxResponse = 2 << 20 // bytes of one answer
+	maxStamps   = 64      // timestamps on one LRC line
+	maxWords    = 20_000  // words in the whole song
+)
+
 // lyricsfile is the part of LRCLIB's YAML lyrics file that is read: its
 // lines, and each line's words. The format is LRCGET's (LYRICSFILE_CONCEPT.md).
 type lyricsfile struct {
@@ -149,20 +161,42 @@ func ParseLyricsfile(s string) []domain.LyricLine {
 	if strings.TrimSpace(s) == "" {
 		return nil
 	}
+	// Anchors and aliases have no place in a lyrics file, and an alias
+	// repeated inside another can make a small file decode into a huge one.
+	var doc yaml.Node
+	if err := yaml.Unmarshal([]byte(s), &doc); err != nil || hasAliases(&doc) {
+		return nil
+	}
 	var f lyricsfile
-	if err := yaml.Unmarshal([]byte(s), &f); err != nil {
+	if err := doc.Decode(&f); err != nil {
 		return nil
 	}
 	out := make([]domain.LyricLine, 0, len(f.Lines))
+	words := 0
 	for _, l := range f.Lines {
 		line := domain.LyricLine{AtMs: l.StartMs, Text: strings.TrimSpace(l.Text)}
-		for _, w := range l.Words {
-			line.Words = append(line.Words, domain.LyricWord{AtMs: w.StartMs, Text: w.Text})
+		if words += len(l.Words); words <= maxWords {
+			for _, w := range l.Words {
+				line.Words = append(line.Words, domain.LyricWord{AtMs: w.StartMs, Text: w.Text})
+			}
 		}
 		out = append(out, line)
 	}
 	sortLines(out)
 	return out
+}
+
+// hasAliases reports whether a YAML document uses anchors or aliases.
+func hasAliases(n *yaml.Node) bool {
+	if n.Kind == yaml.AliasNode || n.Anchor != "" {
+		return true
+	}
+	for _, c := range n.Content {
+		if hasAliases(c) {
+			return true
+		}
+	}
+	return false
 }
 
 // hasWords reports whether any line is timed word by word.
@@ -261,6 +295,7 @@ func ParseLRC(s string) []domain.LyricLine {
 		return nil
 	}
 	var out []domain.LyricLine
+	wordCount := 0
 
 	for _, raw := range strings.Split(s, "\n") {
 		line := strings.TrimRight(raw, "\r")
@@ -283,7 +318,16 @@ func ParseLRC(s string) []domain.LyricLine {
 			continue
 		}
 
+		if len(stamps) > maxStamps {
+			stamps = stamps[:maxStamps]
+		}
 		words := parseWords(line)
+		if words != nil {
+			wordCount += len(words) * len(stamps)
+			if wordCount > maxWords {
+				words = nil
+			}
+		}
 		text := strings.TrimSpace(stripWordTags(line))
 		if words != nil {
 			var b strings.Builder

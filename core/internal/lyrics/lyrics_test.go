@@ -281,6 +281,11 @@ func TestParseLyricsfileReadsWords(t *testing.T) {
 	if lyrics.ParseLyricsfile("lines: [unclosed") != nil {
 		t.Fatal("a broken file gave lines")
 	}
+	// Aliases are refused: nested, they turn a small file into a huge one.
+	const bomb = "a: &a [x, x, x]\nb: &b [*a, *a, *a]\nlines:\n- text: x\n  start_ms: 1\n  words: *b\n"
+	if lyrics.ParseLyricsfile(bomb) != nil {
+		t.Fatal("a file with aliases gave lines")
+	}
 }
 
 func TestParseLRCIgnoresJunk(t *testing.T) {
