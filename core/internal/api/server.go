@@ -272,6 +272,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /v1/resolve/{id}", s.handleResolve)
 	s.mux.HandleFunc("GET /v1/stream/{id}", s.handleStream)
 	s.mux.HandleFunc("POST /v1/prefetch/{id}", s.handlePrefetch)
+	s.mux.HandleFunc("GET /v1/downloads", s.handleDownloads)
+	s.mux.HandleFunc("POST /v1/downloads/{id}", s.handleDownload)
+	s.mux.HandleFunc("DELETE /v1/downloads/{id}", s.handleDownload)
 	s.mux.HandleFunc("GET /v1/cache", s.handleCache)
 	s.mux.HandleFunc("DELETE /v1/cache", s.handleCache)
 

@@ -132,3 +132,49 @@ func TestEvictsWhileWriting(t *testing.T) {
 	}
 	_ = w.Close()
 }
+
+// A download is never evicted or cleared, and the mark outlives a restart.
+func TestKeptTracksSurviveEvictionClearAndRestart(t *testing.T) {
+	dir := t.TempDir()
+	c, err := New(dir, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fill := func(id string, n int) {
+		w, ok, err := c.Writer(id, "audio/webm", int64(n))
+		if err != nil || !ok {
+			t.Fatalf("writer %s: %v %v", id, ok, err)
+		}
+		if _, err := w.Write(make([]byte, n)); err != nil {
+			t.Fatal(err)
+		}
+		w.Close()
+	}
+	if err := c.Keep("keepme1", true); err != nil {
+		t.Fatal(err)
+	}
+	fill("keepme1", 80)
+	fill("other01", 80) // over the cap: the other one goes, not the download
+	if _, ok := c.Get("keepme1"); !ok {
+		t.Fatal("a download was evicted")
+	}
+	c.Clear()
+	if _, ok := c.Get("keepme1"); !ok {
+		t.Fatal("a download was cleared")
+	}
+
+	again, err := New(dir, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kept := again.KeptTracks()
+	if len(kept) != 1 || kept[0].ID != "keepme1" || !kept[0].Complete {
+		t.Fatalf("after a restart: %+v", kept)
+	}
+	if err := again.Keep("keepme1", false); err != nil {
+		t.Fatal(err)
+	}
+	if len(again.KeptTracks()) != 0 {
+		t.Error("unkeeping left the mark")
+	}
+}

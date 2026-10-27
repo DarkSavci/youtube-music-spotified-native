@@ -52,7 +52,13 @@ type Cache struct {
 	// changed is closed and replaced whenever any track grows or a writer
 	// finishes, which is what lets a reader follow a download in progress.
 	changed chan struct{}
+	// kept are the listener's downloads: never evicted, never cleared, kept
+	// in their own file so the mark outlives a track not yet fetched.
+	kept map[string]bool
 }
+
+// keptFile holds the downloads' ids. Too short a name to be read as a track.
+const keptFile = "kept.json"
 
 // validID admits YouTube video ids only, which also keeps every path inside
 // the cache directory.
@@ -67,7 +73,17 @@ func New(dir string, maxBytes int64) (*Cache, error) {
 		return nil, err
 	}
 	c := &Cache{dir: dir, max: maxBytes, metas: map[string]*Meta{}, writing: map[string]bool{},
-		changed: make(chan struct{})}
+		changed: make(chan struct{}), kept: map[string]bool{}}
+	if raw, err := os.ReadFile(filepath.Join(dir, keptFile)); err == nil {
+		var ids []string
+		if json.Unmarshal(raw, &ids) == nil {
+			for _, id := range ids {
+				if validID.MatchString(id) {
+					c.kept[id] = true
+				}
+			}
+		}
+	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, err
@@ -174,6 +190,65 @@ func (c *Cache) Usage() (bytes int64, tracks int) {
 	return bytes, tracks
 }
 
+// Kept is a download: what the listener asked to keep, and how much is here.
+type Kept struct {
+	ID       string `json:"id"`
+	Have     int64  `json:"have"`
+	Size     int64  `json:"size"`
+	Complete bool   `json:"complete"`
+}
+
+// Keep marks a track as a download, or unmarks it. An unmarked track stays
+// in the cache as any other, to be evicted in its turn.
+func (c *Cache) Keep(id string, keep bool) error {
+	if !validID.MatchString(id) {
+		return ErrBadID
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if keep {
+		c.kept[id] = true
+	} else {
+		delete(c.kept, id)
+	}
+	ids := make([]string, 0, len(c.kept))
+	for k := range c.kept {
+		ids = append(ids, k)
+	}
+	sort.Strings(ids)
+	raw, err := json.Marshal(ids)
+	if err != nil {
+		return err
+	}
+	tmp := filepath.Join(c.dir, keptFile+".part")
+	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, filepath.Join(c.dir, keptFile)); err != nil {
+		return err
+	}
+	if !keep {
+		c.evictLocked()
+	}
+	return nil
+}
+
+// KeptTracks lists the downloads, in id order.
+func (c *Cache) KeptTracks() []Kept {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make([]Kept, 0, len(c.kept))
+	for id := range c.kept {
+		k := Kept{ID: id}
+		if m, ok := c.metas[id]; ok {
+			k.Have, k.Size, k.Complete = m.Have, m.Size, m.Complete()
+		}
+		out = append(out, k)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
+}
+
 // Drop removes one track, unless it is being written.
 func (c *Cache) Drop(id string) {
 	c.mu.Lock()
@@ -183,12 +258,12 @@ func (c *Cache) Drop(id string) {
 	}
 }
 
-// Clear removes every track not being written right now.
+// Clear removes every track not being written right now, but the downloads.
 func (c *Cache) Clear() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for id := range c.metas {
-		if !c.writing[id] {
+		if !c.writing[id] && !c.kept[id] {
 			c.forgetLocked(id)
 		}
 	}
@@ -213,7 +288,7 @@ func (c *Cache) evictLocked() {
 		if total <= c.max {
 			return
 		}
-		if c.writing[id] {
+		if c.writing[id] || c.kept[id] {
 			continue
 		}
 		total -= c.metas[id].Have

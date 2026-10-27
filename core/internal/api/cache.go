@@ -928,6 +928,37 @@ func (s *Server) handlePrefetch(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusAccepted)
 }
 
+// handleDownloads lists the listener's downloads and how far each has come.
+func (s *Server) handleDownloads(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Audio == nil {
+		s.write(w, http.StatusServiceUnavailable, apiError{Error: "cache unavailable"})
+		return
+	}
+	s.write(w, http.StatusOK, s.deps.Audio.KeptTracks())
+}
+
+/*
+handleDownload keeps a track for listening offline (POST), fetching the whole
+of it in the background, or lets it go back to being an ordinary cached track
+(DELETE). A download is never evicted or cleared.
+*/
+func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Audio == nil {
+		s.write(w, http.StatusServiceUnavailable, apiError{Error: "cache unavailable"})
+		return
+	}
+	id := r.PathValue("id")
+	keep := r.Method == http.MethodPost
+	if err := s.deps.Audio.Keep(id, keep); err != nil {
+		s.write(w, http.StatusBadRequest, apiError{Error: err.Error()})
+		return
+	}
+	if keep {
+		s.prefetchTrack(id, true, true, "")
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // handleCache reports the cache's size, and clears it on DELETE.
 func (s *Server) handleCache(w http.ResponseWriter, r *http.Request) {
 	if s.deps.Audio == nil {
