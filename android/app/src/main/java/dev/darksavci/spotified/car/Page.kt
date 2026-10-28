@@ -152,9 +152,4 @@ sealed interface Collection {
     data class Playlist(override val id: String, override val title: String) : Collection
     data class Artist(override val id: String, override val title: String) : Collection
     data class Podcast(override val id: String, override val title: String) : Collection
-
-    /** Songs already at hand, such as one of Home's shelves. */
-    data class Songs(override val title: String, val tracks: List<Track>) : Collection {
-        override val id get() = ""
-    }
 }

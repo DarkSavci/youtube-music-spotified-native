@@ -678,14 +678,17 @@ Checked on the emulator since:
   developer mode with unknown sources on. Our app sits in Android Auto's
   launcher. In Android Auto the app draws its own screens with the Car App
   Library's media templates (`car/`, Car App Library 1.8): tabs for Home
-  (recently played, then Home's shelves as cover grids), Search (recent
+  (one screen, no scrolling, every tile starting music at once: Continue
+  listening, a row of mixes made from Home's shelves of songs, a row of
+  playlists), Search (recent
   searches, then a search screen typed or said, the top result first),
   the Library (by kind, artists round) and Liked (with Shuffle); album,
   playlist, artist and podcast pages with Play and Shuffle, an artist's
   popular songs, albums, singles and the artists like them; Now Playing
   from the session with Queue and Radio in its header; and the queue,
-  where a song jumps there, its button takes it out, and shuffle and
-  repeat sit below. The media service's browse tree stays for Android
+  where a song jumps there and its button opens its moves (play now or
+  next, up or down a place, to the end, out), and shuffle and repeat sit
+  below. The media service's browse tree stays for Android
   Automotive OS, the Assistant and other media browsers. With Maps open,
   the player is the side card (cover, title, play, skip, like, shuffle),
   and tapping it brings Now Playing to the big panel. The car's rules

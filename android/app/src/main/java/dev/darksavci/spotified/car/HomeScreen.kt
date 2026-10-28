@@ -20,6 +20,8 @@ import dev.darksavci.spotified.api.LibraryItem
 import dev.darksavci.spotified.api.LibraryKind
 import dev.darksavci.spotified.api.Shelf
 import dev.darksavci.spotified.api.Track
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
 /**
@@ -40,6 +42,10 @@ class HomeScreen(carContext: CarContext) : Page(carContext) {
 
     init {
         fetch(HOME)
+        // Continue listening follows what plays.
+        lifecycleScope.launch {
+            graph.playback.projection.map { it.state.current?.id }.distinctUntilChanged().collect { if (active == HOME) invalidate() }
+        }
     }
 
     override fun onGetTemplate(): Template {
@@ -160,58 +166,92 @@ class HomeScreen(carContext: CarContext) : Page(carContext) {
     }
 
     /**
-     * Home, built for a glance: the albums played lately to jump back into,
-     * the shelves of songs as one tile each that opens them, then the
-     * shelves of albums, playlists and artists as covers.
+     * Home, short enough to take in at a glance, and every tile starts music
+     * at once: what was playing to carry on with, a row of mixes, a row of
+     * playlists. Browsing is the Library's and Search's.
      */
     private fun home(template: SectionedItemTemplate.Builder, shelves: List<Shelf>) {
-        var room = limit(ConstraintManager.CONTENT_LIMIT_TYPE_GRID).coerceAtLeast(SHELF_ITEMS)
-        val albums = recent.orEmpty().filter { !it.album?.id.isNullOrEmpty() }.distinctBy { it.album!!.id }.take(JUMP_BACK)
-        if (albums.isNotEmpty()) {
-            template.addSection(
-                grid("Jump back in", albums.map { track -> jumpBackTile(track) }, GridSection.ITEM_SIZE_SMALL),
-            )
-            room -= albums.size
-        }
-        // A shelf of songs is a mix to open, not a wall of song covers.
+        continueRow()?.let { template.addSection(RowSection.Builder().setTitle("Continue listening").addItem(it).build()) }
+
+        // Shelves mostly of songs are mixes; the rest are playlists and albums.
         val (songShelves, others) = shelves.filter { it.items.isNotEmpty() }
             .partition { shelf -> shelf.items.count { trackOf(it) != null } * 2 > shelf.items.size }
-        val mixes = listOfNotNull(
-            recent.orEmpty().takeIf { it.isNotEmpty() }?.let { "Recently played" to it },
-        ) + songShelves.map { it.title.ifEmpty { "Songs" } to it.items.mapNotNull(::trackOf) }
-        if (mixes.isNotEmpty()) {
-            template.addSection(grid("Your mixes", mixes.take(room).map { (title, songs) -> mixTile(title, songs) }))
-            room -= mixes.size
+        val mixes = songShelves.map { it.title.ifEmpty { "Songs" } to it.items.mapNotNull(::trackOf) }.filter { it.second.isNotEmpty() }
+        // Each mix shows a cover none of the others shows.
+        val used = mutableSetOf<String>()
+        val mixTiles = mixes.take(ROW).map { (title, songs) ->
+            val cover = songs.firstOrNull { it.album?.id !in used || it.album?.id.isNullOrEmpty() } ?: songs.first()
+            cover.album?.id?.let(used::add)
+            mixTile(title, songs, cover)
         }
-        for (shelf in others) {
-            if (room <= 0) break
-            val items = shelf.items.take(minOf(SHELF_ITEMS, room))
-            val tiles = items.mapNotNull { tile(items, it, shelf.title) }
-            if (tiles.isEmpty()) continue
-            val round = items.all { it is Item.ArtistItem }
-            template.addSection(grid(shelf.title.ifEmpty { "More" }, tiles, round = round))
-            room -= tiles.size
+        if (mixTiles.isNotEmpty()) template.addSection(grid("Your mixes", mixTiles, GridSection.ITEM_SIZE_LARGE))
+
+        val playlists = others.flatMap { it.items }
+            .filter { it is Item.PlaylistItem || it is Item.AlbumItem }
+            .distinctBy { it.title }
+            .take(ROW)
+        if (playlists.isNotEmpty()) {
+            template.addSection(grid("Playlists for you", playlists.map(::playTile), GridSection.ITEM_SIZE_LARGE))
         }
     }
 
-    private fun jumpBackTile(track: Track): GridItem {
-        val album = track.album!!
-        return GridItem.Builder()
-            .setTitle(album.name.ifEmpty { track.title })
-            .apply { if (track.artistNames.isNotEmpty()) setText(track.artistNames) }
-            .setImage(art(track.artwork) ?: icon(R.drawable.ic_music), GridItem.IMAGE_TYPE_LARGE)
-            .setOnClickListener { open(Collection.Album(album.id, album.name)) }
+    /** What was playing, or else what played last, as a full-width card that carries on. */
+    private fun continueRow(): Row? {
+        val state = graph.playback.projection.value.state
+        val current = state.current
+        val track = current ?: recent.orEmpty().firstOrNull() ?: return null
+        val carryOn = {
+            if (current != null) {
+                graph.playback.resume()
+                showNowPlaying(screenManager, carContext)
+            } else {
+                play(recent.orEmpty(), 0, "Recently played")
+            }
+        }
+        val from = if (current != null) state.queue.origin else "Recently played"
+        return Row.Builder()
+            .setTitle(track.title)
+            .addText(listOf(track.artistNames, from).filter { it.isNotEmpty() }.joinToString(" • "))
+            .setImage(art(track.artwork, 300) ?: icon(R.drawable.ic_music), Row.IMAGE_TYPE_LARGE)
+            .addAction(Action.Builder().setIcon(icon(R.drawable.ic_play_filled)).setOnClickListener(carryOn).build())
+            .setOnClickListener(carryOn)
             .build()
     }
 
-    /** A shelf of songs as one tile: its first cover, who is on it, and its songs a tap away. */
-    private fun mixTile(title: String, songs: List<Track>): GridItem {
-        val artists = songs.flatMap { it.artists }.map { it.name }.filter { it.isNotEmpty() }.distinct().take(3)
+    /** A shelf of songs as one tile that plays it: a cover of its own and who is on it. */
+    private fun mixTile(title: String, songs: List<Track>, cover: Track): GridItem {
+        val artists = songs.flatMap { it.artists }.map { it.name }.filter { it.isNotEmpty() }.distinct().take(2)
         return GridItem.Builder()
             .setTitle(title)
             .setText(artists.joinToString(", ").ifEmpty { "${songs.size} songs" })
-            .setImage(art(songs.first().artwork) ?: icon(R.drawable.ic_music), GridItem.IMAGE_TYPE_LARGE)
-            .setOnClickListener { open(Collection.Songs(title, songs)) }
+            .setImage(art(cover.artwork) ?: icon(R.drawable.ic_music), GridItem.IMAGE_TYPE_LARGE)
+            .setOnClickListener { play(songs, 0, title) }
+            .build()
+    }
+
+    /** A playlist or album that starts playing when tapped. */
+    private fun playTile(item: Item): GridItem {
+        val subtitle = when (item) {
+            is Item.PlaylistItem -> item.playlist.owner
+            is Item.AlbumItem -> albumLine(item.album)
+            else -> ""
+        }
+        return GridItem.Builder()
+            .setTitle(item.title.ifEmpty { "Unknown" })
+            .apply { if (subtitle.isNotEmpty()) setText(subtitle) }
+            .setImage(art(item.artwork) ?: icon(R.drawable.ic_music), GridItem.IMAGE_TYPE_LARGE)
+            .setOnClickListener {
+                lifecycleScope.launch {
+                    val songs = runCatching {
+                        when (item) {
+                            is Item.PlaylistItem -> graph.api.completePlaylist(item.playlist.id).tracks
+                            is Item.AlbumItem -> graph.api.album(item.album.id).let { a -> a.tracks.map { if (it.artwork.isEmpty()) it.copy(artwork = a.artwork) else it } }
+                            else -> emptyList()
+                        }
+                    }.getOrDefault(emptyList())
+                    play(songs, 0, item.title)
+                }
+            }
             .build()
     }
 
@@ -241,8 +281,8 @@ class HomeScreen(carContext: CarContext) : Page(carContext) {
         private const val SEARCH = "search"
         private const val LIBRARY = "library"
         private const val LIKED = "liked"
-        private const val SHELF_ITEMS = 10
-        private const val JUMP_BACK = 5
+        /** One row of large tiles. */
+        private const val ROW = 5
         private val KINDS = listOf(
             LibraryKind.Playlist to "Playlists",
             LibraryKind.Album to "Albums",
