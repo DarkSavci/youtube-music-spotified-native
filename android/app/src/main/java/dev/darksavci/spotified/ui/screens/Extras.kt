@@ -72,6 +72,7 @@ import dev.darksavci.spotified.ui.LocalActions
 import dev.darksavci.spotified.ui.Routes
 import dev.darksavci.spotified.ui.components.Art
 import dev.darksavci.spotified.ui.components.Chip
+import dev.darksavci.spotified.ui.components.Empty
 import dev.darksavci.spotified.ui.components.EntityRow
 import dev.darksavci.spotified.ui.components.GlyphButton
 import dev.darksavci.spotified.ui.components.Loaded
@@ -295,11 +296,11 @@ fun DownloadsScreen() {
         }
         item {
             Text(
-                "${done.size} of ${tracks.size} songs on this phone." + if (downloads.syncedPlaylists.isNotEmpty()) " ${downloads.syncedPlaylists.size} playlists are kept in step." else "",
+                (if (tracks.isEmpty()) "" else "${done.size} of ${tracks.size} songs on this phone.") + if (downloads.syncedPlaylists.isNotEmpty()) " ${downloads.syncedPlaylists.size} playlists are kept in step." else "",
                 style = Type.small, color = p.secondary, modifier = Modifier.padding(horizontal = 16.dp),
             )
         }
-        if (tracks.isEmpty()) item { Problem("Download songs, albums or playlists to play them offline.", null) }
+        if (tracks.isEmpty()) item { Empty("No downloads yet" to "Tap the download button on a song, album or playlist to play it offline.") }
         itemsIndexed(tracks) { i, t ->
             Column {
                 TrackRow(t, { actions.play(tracks, i, "Downloads") }, { actions.menuFor(t) }, downloaded = t.id in done)
@@ -329,7 +330,7 @@ fun LocalFilesScreen() {
         val loader = rememberLoader("local") { LocalMusic.scan(context) }
         Loaded(loader) { tracks ->
             if (tracks.isEmpty()) {
-                Problem("No music files were found on this phone.", null)
+                Empty("No music files" to "Songs you copy onto this phone show up here.")
                 return@Loaded
             }
             LazyColumn(contentPadding = PaddingValues(bottom = 24.dp)) {
@@ -372,7 +373,7 @@ fun ImportScreen() {
             )
             OutlinedTextField(text, { text = it }, Modifier.fillMaxWidth().padding(16.dp).height(140.dp), label = { Text("Link or songs") })
             Row(Modifier.padding(horizontal = 16.dp)) {
-                Pill(if (running) "Looking…" else "Find the songs", {
+                Pill(primary = true, text = if (running) "Looking…" else "Find the songs", onClick = {
                     if (running || text.isBlank()) return@Pill
                     running = true
                     scope.launch {

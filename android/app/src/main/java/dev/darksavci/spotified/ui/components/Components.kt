@@ -438,18 +438,20 @@ fun PlayButton(onClick: () -> Unit, modifier: Modifier = Modifier, playing: Bool
 }
 
 @Composable
-fun Pill(text: String, onClick: () -> Unit, modifier: Modifier = Modifier, @DrawableRes icon: Int? = null) {
+fun Pill(text: String, onClick: () -> Unit, modifier: Modifier = Modifier, @DrawableRes icon: Int? = null, primary: Boolean = false) {
     val p = LocalPalette.current
+    // The page's main action is filled in the accent, larger; the rest are quiet.
+    val content = if (primary) p.onAccent else p.text
     Row(
-        modifier.clip(RoundedCornerShape(18.dp)).background(p.surface).clickable(onClick = onClick)
-            .padding(horizontal = 14.dp, vertical = 8.dp),
+        modifier.clip(RoundedCornerShape(24.dp)).background(if (primary) p.accent else p.surface).clickable(onClick = onClick)
+            .padding(horizontal = if (primary) 24.dp else 14.dp, vertical = if (primary) 12.dp else 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (icon != null) {
-            Glyph(icon, null, size = 16.dp)
+            Glyph(icon, null, tint = content, size = 16.dp)
             Spacer(Modifier.width(6.dp))
         }
-        Text(text, style = Type.label)
+        Text(text, style = if (primary) Type.bodyStrong else Type.label, color = content)
     }
 }
 
