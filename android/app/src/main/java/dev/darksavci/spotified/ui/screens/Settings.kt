@@ -2,6 +2,19 @@ package dev.darksavci.spotified.ui.screens
 
 import dev.darksavci.spotified.ui.components.ThinSlider
 import android.annotation.SuppressLint
+import androidx.annotation.DrawableRes
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.sp
+import coil3.compose.AsyncImage
+import dev.darksavci.spotified.ui.components.Glyph
 import android.content.Context
 import android.content.Intent
 import android.media.audiofx.Equalizer
@@ -81,39 +94,32 @@ fun SettingsScreen() {
     val set: ((Settings) -> Settings) -> Unit = { change -> scope.launch { graph.settings.update(change) } }
     LaunchedEffect(Unit) { cache = runCatching { graph.api.cacheUsage() }.getOrNull() }
 
-    LazyColumn(Modifier.windowInsetsPadding(WindowInsets.statusBars), contentPadding = PaddingValues(bottom = 32.dp)) {
-        item {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                GlyphButton(R.drawable.ic_chevron_left, "Back", { actions.nav.popBackStack() })
-                Text("Settings", style = Type.title)
-            }
+    val signOut: () -> Unit = {
+        actions.launch {
+            graph.api.signOut()
+            File(graph.core.accounts.currentDir(), "credentials.json").delete()
+            CookieManager.getInstance().removeAllCookies(null)
+            graph.core.restart()
+            actions.say("Signed out")
         }
-        item { Heading("Account") }
-        item {
-            if (account != null) {
-                Line(account!!.name.ifEmpty { "Signed in" }, account!!.handle)
-                Action("Sign out") {
-                    actions.launch {
-                        graph.api.signOut()
-                        File(graph.core.accounts.currentDir(), "credentials.json").delete()
-                        CookieManager.getInstance().removeAllCookies(null)
-                        graph.core.restart()
-                        actions.say("Signed out")
-                    }
-                }
-            } else {
-                Line("Not signed in", "Sign in for your library, likes and Premium audio")
-                Action("Sign in") { actions.go(Routes.SIGN_IN) }
-            }
-        }
+    }
 
+    LazyColumn(Modifier.windowInsetsPadding(WindowInsets.statusBars), contentPadding = PaddingValues(bottom = 40.dp)) {
+        item {
+            Row(Modifier.padding(end = 16.dp, top = 4.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                GlyphButton(R.drawable.ic_chevron_left, "Back", { actions.nav.popBackStack() })
+                Text("Settings", style = Type.bodyStrong.copy(fontSize = 17.sp))
+            }
+        }
+        item { ProfileCard(account) { actions.go(Routes.SIGN_IN) } }
         item { AccountList() }
 
         item { Heading("Appearance") }
         item {
-            LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(Theme.entries) { t -> Chip(t.name, s.theme == t, { set { it.copy(theme = t) } }) }
-            }
+            Choice("Theme", Theme.entries.map { it to it.name }, s.theme) { t -> set { it.copy(theme = t) } }
+        }
+        item {
+            Choice("Now Playing", listOf(0 to "Spotify", 1 to "Full art", 2 to "Lyrics first"), s.nowPlayingStyle) { i -> set { it.copy(nowPlayingStyle = i) } }
         }
 
         item { Heading("Playback") }
@@ -125,67 +131,107 @@ fun SettingsScreen() {
         }
         item { Toggle("Even out loudness", "Turn loud songs down to the rest", s.normalise) { v -> set { it.copy(normalise = v) } } }
         item { Toggle("Skip silence", "Leave out quiet stretches within a song or episode", s.skipSilence) { v -> set { it.copy(skipSilence = v) } } }
-        item { Toggle("SponsorBlock", "Skip the talk and intros listeners have marked in songs from YouTube uploads", s.sponsorBlock) { v -> set { it.copy(sponsorBlock = v) } } }
+        item { Toggle("SponsorBlock", "Skip the talk and intros listeners have marked in YouTube uploads", s.sponsorBlock) { v -> set { it.copy(sponsorBlock = v) } } }
         item { Toggle("Autoplay", "Carry on with similar songs when the queue ends", s.autoplay) { v -> set { it.copy(autoplay = v) } } }
         item { Toggle("Pick up where you left off", "Keep the queue for the next launch", s.resumeOnLaunch) { v -> set { it.copy(resumeOnLaunch = v) } } }
         item { Toggle("Count plays on YouTube", "Add what you play to your YouTube history", s.reportToYouTube) { v -> set { it.copy(reportToYouTube = v) } } }
-        item { Action("Equalizer") { actions.go(Routes.EQUALIZER) } }
+        item { Action("Equalizer", "Shape the sound by band", R.drawable.ic_sliders_vertical) { actions.go(Routes.EQUALIZER) } }
 
         item { Heading("Audio quality") }
-        item { QualityRow("On Wi-Fi", s.wifiQuality) { q -> set { it.copy(wifiQuality = q) } } }
-        item { QualityRow("On mobile data", s.mobileQuality) { q -> set { it.copy(mobileQuality = q) } } }
+        item { Choice("On Wi-Fi", QUALITIES, s.wifiQuality) { q -> set { it.copy(wifiQuality = q) } } }
+        item { Choice("On mobile data", QUALITIES, s.mobileQuality) { q -> set { it.copy(mobileQuality = q) } } }
 
         item { Heading("Downloads and storage") }
         item { Toggle("Download on Wi-Fi only", "Kept playlists sync on Wi-Fi", s.downloadOnWifiOnly) { v -> set { it.copy(downloadOnWifiOnly = v) } } }
         item {
             val c = cache
-            Line("Song cache", if (c == null) "…" else "${c.tracks} songs, ${c.bytes / 1_048_576} MB")
-            SliderRow("Cache size", "${s.cacheMaxMb / 1024.0} GB".replace(".0 ", " "), s.cacheMaxMb / 512f, 1f..16f) { v ->
-                set { it.copy(cacheMaxMb = (v.toInt() * 512).toLong()) }
+            SliderRow(
+                "Song cache", "${s.cacheMaxMb / 1024.0} GB".replace(".0 ", " "), s.cacheMaxMb / 512f, 1f..16f,
+                subtitle = if (c == null) "Counting\u2026" else "${c.tracks} songs, ${c.bytes / 1_048_576} MB used",
+            ) { v -> set { it.copy(cacheMaxMb = (v.toInt() * 512).toLong()) } }
+        }
+        item {
+            Action("Empty the cache", "Downloads are kept", R.drawable.ic_trash_2, chevron = false) {
+                actions.launch { cache = graph.api.clearCache(); actions.say("Emptied; downloads were kept") }
             }
-            Action("Empty the cache") { actions.launch { cache = graph.api.clearCache(); actions.say("Emptied; downloads were kept") } }
         }
 
         item { Heading("Lyrics") }
         item { Toggle("Romanise", "Show lyrics in other scripts in Latin letters", s.lyricsRomanise) { v -> set { it.copy(lyricsRomanise = v) } } }
         item { Toggle("Translate", "Show a translation into your language (sent to Google Translate)", s.lyricsTranslate) { v -> set { it.copy(lyricsTranslate = v) } } }
 
-        item { Heading("Now Playing") }
-        item {
-            LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(listOf("Spotify", "Full art", "Lyrics first").withIndex().toList()) { (i, name) ->
-                    Chip(name, s.nowPlayingStyle == i, { set { it.copy(nowPlayingStyle = i) } })
-                }
-            }
-        }
-
         item { Heading("Your listening") }
-        item { Action("Listening stats") { actions.go(Routes.STATS) } }
-        item { Action("Your year") { actions.go(Routes.RECAP) } }
+        item { Action("Listening stats", "Your top songs, artists and hours", R.drawable.ic_audio_lines) { actions.go(Routes.STATS) } }
+        item { Action("Your year", "Your year in music, as a story", R.drawable.ic_gift) { actions.go(Routes.RECAP) } }
         item { Toggle("New releases", "Tell me when an artist I follow releases something", s.newReleaseAlerts) { v -> set { it.copy(newReleaseAlerts = v) } } }
-        item { Action("Import playlists from Spotify, Apple Music or Deezer") { actions.go(Routes.IMPORT) } }
-        item { Action("Listen Together") { actions.go(Routes.TOGETHER) } }
+        item { Action("Import playlists", "From Spotify, Apple Music or Deezer", R.drawable.ic_list_plus) { actions.go(Routes.IMPORT) } }
+        item { Action("Listen Together", "Play in step with friends", R.drawable.ic_users) { actions.go(Routes.TOGETHER) } }
 
         item { Heading("Battery") }
         item {
             val pm = context.getSystemService(Context.POWER_SERVICE) as PowerManager
             val exempt = pm.isIgnoringBatteryOptimizations(context.packageName)
-            Line("Battery optimisation", if (exempt) "Off for this app: playback is not stopped in the background" else "On: some phones stop music in the background")
-            if (!exempt) {
-                Action("Let it play in the background") {
+            if (exempt) {
+                Line("Background playback", "Battery optimisation is off for this app, so music keeps playing")
+            } else {
+                Action("Let it play in the background", "Battery optimisation can stop music on some phones", R.drawable.ic_headphones) {
                     @SuppressLint("BatteryLife")
                     val intent = Intent(SystemSettings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:${context.packageName}"))
                     runCatching { context.startActivity(intent) }
                 }
             }
-            Action("Why music stops on some phones") {
+        }
+        item {
+            Action("Why music stops on some phones", "dontkillmyapp.com", R.drawable.ic_external_link) {
                 context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://dontkillmyapp.com")))
             }
         }
 
         item { Heading("About") }
-        item { Line("Youtube Music Spotified", "Version ${BuildConfig.VERSION_NAME}. Not affiliated with Spotify or YouTube.") }
-        item { Action("Check for updates") { actions.launch { Updater.check(context, graph.http, actions::say) } } }
+        item { Line("Version", "${BuildConfig.VERSION_NAME}. Not affiliated with Spotify or YouTube.") }
+        item { Action("Check for updates", null, R.drawable.ic_refresh_cw) { actions.launch { Updater.check(context, graph.http, actions::say) } } }
+
+        if (account != null) {
+            item {
+                Box(Modifier.fillMaxWidth().padding(top = 32.dp), contentAlignment = Alignment.Center) {
+                    Text(
+                        "Log out", style = Type.bodyStrong, color = LocalPalette.current.window,
+                        modifier = Modifier.clip(RoundedCornerShape(24.dp)).background(LocalPalette.current.text)
+                            .clickable(onClick = signOut).padding(horizontal = 32.dp, vertical = 12.dp),
+                    )
+                }
+            }
+        }
+    }
+}
+
+private val QUALITIES = listOf("high" to "Highest", "standard" to "Standard", "low" to "Data saver")
+
+/** Who is signed in, picture and name, as Spotify's settings open; or a way to sign in. */
+@Composable
+private fun ProfileCard(account: Account?, onSignIn: () -> Unit) {
+    val p = LocalPalette.current
+    Row(
+        Modifier.padding(horizontal = 16.dp, vertical = 8.dp).fillMaxWidth().clip(RoundedCornerShape(12.dp))
+            .background(p.surface).clickable(enabled = account == null, onClick = onSignIn).padding(16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.size(56.dp).clip(CircleShape).background(p.surfaceActive), contentAlignment = Alignment.Center) {
+            if (account?.avatarUrl.isNullOrEmpty()) {
+                Glyph(R.drawable.ic_user, null, tint = p.secondary, size = 28.dp)
+            } else {
+                AsyncImage(account!!.avatarUrl, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+            }
+        }
+        Spacer(Modifier.width(16.dp))
+        Column(Modifier.weight(1f)) {
+            Text(account?.name?.ifEmpty { "Signed in" } ?: "Not signed in", style = Type.bodyStrong.copy(fontSize = 18.sp))
+            Text(
+                account?.handle?.ifEmpty { "YouTube Music" } ?: "Sign in for your library, likes and Premium audio",
+                style = Type.small, color = p.secondary,
+            )
+        }
+        if (account == null) Glyph(R.drawable.ic_chevron_right, null, tint = p.secondary, size = 20.dp)
     }
 }
 
@@ -209,14 +255,15 @@ private fun AccountList() {
                 }.padding(horizontal = 16.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(a.name + if (a.id == current) "  ✓" else "", style = Type.body, modifier = Modifier.weight(1f))
+                Text(a.name, style = Type.body.copy(fontSize = 16.sp), modifier = Modifier.weight(1f))
+                if (a.id == current) Glyph(R.drawable.ic_check, "Current", tint = LocalPalette.current.accent, size = 20.dp)
                 if (a.id.isNotEmpty() && a.id != current) {
                     GlyphButton(R.drawable.ic_trash_2, "Remove ${a.name}", { accounts.remove(a.id); list = accounts.list() })
                 }
             }
         }
     }
-    Action("Add another account") {
+    Action("Add another account", null, R.drawable.ic_plus) {
         accounts.add()
         list = accounts.list()
         actions.launch { actions.graph.core.restart() }
@@ -224,38 +271,37 @@ private fun AccountList() {
     }
 }
 
-/** Highest is Premium's 256 kbps where there is one; standard about 160; data saver about 70. */
-@Composable
-private fun QualityRow(title: String, current: String, onPick: (String) -> Unit) {
-    Column(Modifier.padding(vertical = 4.dp)) {
-        Text(title, style = Type.body, modifier = Modifier.padding(horizontal = 16.dp))
-        LazyRow(contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(listOf("high" to "Highest", "standard" to "Standard", "low" to "Data saver")) { (q, label) ->
-                Chip(label, current == q, { onPick(q) })
-            }
-        }
-    }
-}
-
 @Composable
 private fun Heading(text: String) {
-    Text(text, style = Type.heading, modifier = Modifier.padding(start = 16.dp, top = 24.dp, bottom = 8.dp))
+    Text(text, style = Type.bodyStrong.copy(fontSize = 19.sp), modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 28.dp, bottom = 6.dp))
 }
 
 @Composable
 private fun Line(title: String, subtitle: String) {
-    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
-        Text(title, style = Type.body)
+    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp)) {
+        Text(title, style = Type.body.copy(fontSize = 16.sp))
         if (subtitle.isNotEmpty()) Text(subtitle, style = Type.small, color = LocalPalette.current.secondary)
     }
 }
 
+/** A row that does something: an icon, what it does, and a chevron when it opens a page. */
 @Composable
-private fun Action(label: String, onClick: () -> Unit) {
-    Text(
-        label, style = Type.bodyStrong, color = LocalPalette.current.accent,
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 12.dp),
-    )
+private fun Action(title: String, subtitle: String? = null, @DrawableRes icon: Int? = null, chevron: Boolean = true, onClick: () -> Unit) {
+    val p = LocalPalette.current
+    Row(
+        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (icon != null) {
+            Glyph(icon, null, tint = p.text, size = 22.dp)
+            Spacer(Modifier.width(16.dp))
+        }
+        Column(Modifier.weight(1f)) {
+            Text(title, style = Type.body.copy(fontSize = 16.sp))
+            if (!subtitle.isNullOrEmpty()) Text(subtitle, style = Type.small, color = p.secondary)
+        }
+        if (chevron) Glyph(R.drawable.ic_chevron_right, null, tint = p.secondary, size = 20.dp)
+    }
 }
 
 @Composable
@@ -265,22 +311,55 @@ private fun Toggle(title: String, subtitle: String, on: Boolean, onChange: (Bool
         Modifier.fillMaxWidth().clickable { onChange(!on) }.padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Column(Modifier.weight(1f)) {
-            Text(title, style = Type.body)
+        Column(Modifier.weight(1f).padding(end = 12.dp)) {
+            Text(title, style = Type.body.copy(fontSize = 16.sp))
             Text(subtitle, style = Type.small, color = p.secondary)
         }
-        Switch(on, onChange, colors = SwitchDefaults.colors(checkedTrackColor = p.accent))
+        Switch(
+            on, onChange,
+            colors = SwitchDefaults.colors(
+                checkedTrackColor = p.accent, checkedThumbColor = Color.White, checkedBorderColor = Color.Transparent,
+                uncheckedTrackColor = p.surfaceActive, uncheckedThumbColor = p.secondary, uncheckedBorderColor = Color.Transparent,
+            ),
+        )
+    }
+}
+
+/** One of a few options, as a segmented control under its title. */
+@Composable
+private fun <T> Choice(title: String, options: List<Pair<T, String>>, current: T, onPick: (T) -> Unit) {
+    val p = LocalPalette.current
+    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+        Text(title, style = Type.body.copy(fontSize = 16.sp), modifier = Modifier.padding(bottom = 8.dp))
+        Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(p.surface).padding(4.dp)) {
+            options.forEach { (value, label) ->
+                val on = value == current
+                Box(
+                    Modifier.weight(1f).clip(RoundedCornerShape(8.dp)).background(if (on) p.surfaceActive else Color.Transparent)
+                        .clickable { onPick(value) }.padding(vertical = 10.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(label, style = if (on) Type.label.copy(fontWeight = FontWeight.Bold) else Type.label, color = if (on) p.text else p.secondary, maxLines = 1)
+                }
+            }
+        }
     }
 }
 
 @Composable
-private fun SliderRow(title: String, value: String, current: Float, range: ClosedFloatingPointRange<Float>, onDone: (Float) -> Unit) {
+private fun SliderRow(
+    title: String, value: String, current: Float, range: ClosedFloatingPointRange<Float>,
+    subtitle: String? = null, onDone: (Float) -> Unit,
+) {
     val p = LocalPalette.current
     var v by remember(current) { mutableFloatStateOf(current) }
-    Column(Modifier.padding(horizontal = 16.dp, vertical = 6.dp)) {
-        Row {
-            Text(title, style = Type.body, modifier = Modifier.weight(1f))
-            Text(value, style = Type.small, color = p.secondary)
+    Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(title, style = Type.body.copy(fontSize = 16.sp))
+                if (!subtitle.isNullOrEmpty()) Text(subtitle, style = Type.small, color = p.secondary)
+            }
+            Text(value, style = Type.bodyStrong, color = p.text)
         }
         // Whole steps: seconds of crossfade, half-gigabytes of cache.
         ThinSlider(v, { v = Math.round(it).toFloat() }, { onDone(v) }, range)
