@@ -84,6 +84,7 @@ class HomeScreen(carContext: CarContext) : Page(carContext) {
                     HOME -> {
                         recent = runCatching { graph.api.history() }.getOrDefault(emptyList())
                         shelves = graph.api.homeShelves()
+                        if (library == null) library = runCatching { graph.api.library() }.getOrNull()
                     }
                     LIBRARY -> library = graph.api.library()
                     LIKED -> liked = graph.api.liked().tracks
@@ -186,14 +187,46 @@ class HomeScreen(carContext: CarContext) : Page(carContext) {
         }
         if (mixTiles.isNotEmpty()) template.addSection(grid("Your mixes", mixTiles, GridSection.ITEM_SIZE_LARGE))
 
+        // Albums played lately, each opening to its songs.
+        val albums = recent.orEmpty().filter { !it.album?.id.isNullOrEmpty() }.distinctBy { it.album!!.id }.take(ROW)
+        if (albums.isNotEmpty()) template.addSection(grid("Jump back in", albums.map(::jumpBackTile), GridSection.ITEM_SIZE_LARGE))
+
         val playlists = others.flatMap { it.items }
             .filter { it is Item.PlaylistItem || it is Item.AlbumItem }
             .distinctBy { it.title }
-            .take(ROW)
         if (playlists.isNotEmpty()) {
-            template.addSection(grid("Playlists for you", playlists.map(::playTile), GridSection.ITEM_SIZE_LARGE))
+            template.addSection(grid("Playlists for you", playlists.take(ROW).map(::playTile), GridSection.ITEM_SIZE_LARGE))
+        }
+
+        // From the library: the pinned and most played first.
+        val mine = library.orEmpty().sortedByDescending { it.pinned }
+        val myPlaylists = mine.filter { it.kind == LibraryKind.Playlist }.take(ROW)
+        if (myPlaylists.isNotEmpty()) template.addSection(grid("Your playlists", myPlaylists.map(::libraryTile), GridSection.ITEM_SIZE_LARGE))
+        val myArtists = mine.filter { it.kind == LibraryKind.Artist }.take(ROW)
+        if (myArtists.isNotEmpty()) template.addSection(grid("Your artists", myArtists.map(::libraryTile), GridSection.ITEM_SIZE_LARGE, round = true))
+
+        // The rest of Home's shelves, a row each.
+        val shown = playlists.take(ROW).map { it.title }.toSet()
+        for (shelf in others) {
+            val items = shelf.items.filter { trackOf(it) == null && it.title !in shown }.take(ROW)
+            if (items.size < 3) continue
+            template.addSection(grid(shelf.title.ifEmpty { "More" }, items.map(::shelfTile), GridSection.ITEM_SIZE_LARGE, round = items.all { it is Item.ArtistItem }))
         }
     }
+
+    private fun jumpBackTile(track: Track): GridItem {
+        val album = track.album!!
+        return GridItem.Builder()
+            .setTitle(album.name.ifEmpty { track.title })
+            .apply { if (track.artistNames.isNotEmpty()) setText(track.artistNames) }
+            .setImage(art(track.artwork) ?: icon(R.drawable.ic_music), GridItem.IMAGE_TYPE_LARGE)
+            .setOnClickListener { open(Collection.Album(album.id, album.name)) }
+            .build()
+    }
+
+    /** A playlist or album plays at once; an artist opens. */
+    private fun shelfTile(item: Item): GridItem =
+        if (item is Item.PlaylistItem || item is Item.AlbumItem) playTile(item) else tile(listOf(item), item, "Home")!!
 
     /** What was playing, or else what played last, as a full-width card that carries on. */
     private fun continueRow(): Row? {

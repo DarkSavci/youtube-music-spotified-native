@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
@@ -35,6 +36,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.luminance
@@ -44,6 +47,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.darksavci.spotified.R
+import dev.darksavci.spotified.api.Artwork
 import dev.darksavci.spotified.api.Item
 import dev.darksavci.spotified.api.MoodChip
 import dev.darksavci.spotified.api.SearchFilter
@@ -51,6 +55,7 @@ import dev.darksavci.spotified.api.SearchResults
 import dev.darksavci.spotified.data.Services
 import dev.darksavci.spotified.ui.LocalActions
 import dev.darksavci.spotified.ui.Routes
+import dev.darksavci.spotified.ui.components.Art
 import dev.darksavci.spotified.ui.components.Chip
 import dev.darksavci.spotified.ui.components.EntityRow
 import dev.darksavci.spotified.ui.components.Glyph
@@ -183,12 +188,21 @@ private fun MoodWall() {
                     val color = runCatching { Color(mood.color.toColorInt()) }.getOrDefault(LocalPalette.current.surfaceActive)
                     Box(
                         Modifier.weight(1f).height(96.dp).clip(RoundedCornerShape(8.dp)).background(color)
-                            .clickable { actions.go(Routes.browse(mood.id, mood.params, mood.title)) }.padding(12.dp),
+                            .clickable { actions.go(Routes.browse(mood.id, mood.params, mood.title)) },
                     ) {
+                        // A cover from the mood's page, tilted into the corner.
+                        val cover = rememberMoodCover(mood)
+                        if (cover.isNotEmpty()) {
+                            Art(
+                                cover, 64.dp,
+                                Modifier.align(Alignment.BottomEnd).offset(x = 14.dp, y = 6.dp).rotate(25f).shadow(6.dp),
+                            )
+                        }
                         // YouTube's own colours run from deep to pale; the words stay readable on both.
                         Text(
                             mood.title, style = Type.heading, maxLines = 2, overflow = TextOverflow.Ellipsis,
                             color = if (color.luminance() > 0.5f) Color.Black else Color.White,
+                            modifier = Modifier.padding(12.dp).padding(end = 28.dp),
                         )
                     }
                 }
@@ -197,6 +211,29 @@ private fun MoodWall() {
         }
         if (state is Load.Pending) item { Loading() }
     }
+}
+
+/** Covers of the moods' pages, kept for the session: a tile asks once. */
+private val moodCovers = mutableMapOf<String, List<Artwork>>()
+
+/** The first cover on [mood]'s page, loaded when its tile shows. */
+@Composable
+private fun rememberMoodCover(mood: MoodChip): List<Artwork> {
+    val api = LocalActions.current.graph.api
+    val key = mood.id + "|" + mood.params
+    val cover by produceState(moodCovers[key].orEmpty(), key) {
+        if (moodCovers[key] != null) return@produceState
+        // A cover no other tile has taken, so no two tiles look alike.
+        val found = runCatching {
+            val covers = api.browse(mood.id, mood.params).shelves.flatMap { it.items }.map { it.artwork }.filter { it.isNotEmpty() }
+            // Taken is read once the page is here, after the tiles that answered first chose.
+            val taken = moodCovers.values.mapNotNull { it.firstOrNull()?.url }.toSet()
+            covers.firstOrNull { it.first().url !in taken } ?: covers.firstOrNull().orEmpty()
+        }
+        // A failed ask, say while YouTube limits requests, is asked again next time.
+        found.onSuccess { moodCovers[key] = it; value = it }
+    }
+    return cover
 }
 
 /** A link from Spotify, Apple Music, Deezer or SoundCloud, matched on YouTube Music. */

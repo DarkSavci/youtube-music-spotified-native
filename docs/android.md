@@ -678,9 +678,10 @@ Checked on the emulator since:
   developer mode with unknown sources on. Our app sits in Android Auto's
   launcher. In Android Auto the app draws its own screens with the Car App
   Library's media templates (`car/`, Car App Library 1.8): tabs for Home
-  (one screen, no scrolling, every tile starting music at once: Continue
-  listening, a row of mixes made from Home's shelves of songs, a row of
-  playlists), Search (recent
+  (big tiles a row a section: Continue listening, mixes made from Home's
+  shelves of songs, albums played lately, playlists for you, your
+  playlists and artists, then Home's other shelves; a mix or playlist
+  starts playing at a tap), Search (recent
   searches, then a search screen typed or said, the top result first),
   the Library (by kind, artists round) and Liked (with Shuffle); album,
   playlist, artist and podcast pages with Play and Shuffle, an artist's
