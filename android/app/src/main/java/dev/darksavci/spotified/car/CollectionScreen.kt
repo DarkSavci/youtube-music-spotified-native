@@ -42,6 +42,10 @@ class CollectionScreen(carContext: CarContext, private val collection: Collectio
                     artist = found
                     songs = found.topTracks
                 }
+                is Collection.Songs -> {
+                    songs = collection.tracks
+                    subtitle = "${songs.size} songs"
+                }
                 is Collection.Podcast -> {
                     val podcast = graph.api.podcast(collection.id)
                     songs = podcast.episodes
