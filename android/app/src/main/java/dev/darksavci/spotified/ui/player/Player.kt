@@ -66,6 +66,8 @@ import dev.darksavci.spotified.ui.components.GlyphButton
 import dev.darksavci.spotified.ui.components.artColor
 import dev.darksavci.spotified.ui.components.darkened
 import dev.darksavci.spotified.ui.theme.LocalPalette
+import dev.darksavci.spotified.ui.theme.DarkPalette
+import androidx.compose.runtime.CompositionLocalProvider
 import dev.darksavci.spotified.ui.theme.Type
 import kotlinx.coroutines.delay
 
@@ -160,9 +162,17 @@ fun MiniPlayer(onOpen: () -> Unit) {
     }
 }
 
-/** The full-screen player, over a gradient from the art's colour. */
+/**
+ * The full-screen player, over a gradient from the art's colour. It is dark
+ * whatever the app's theme, as Spotify's is: white controls on the art's colour.
+ */
 @Composable
 fun NowPlaying(onClose: () -> Unit) {
+    CompositionLocalProvider(LocalPalette provides DarkPalette) { NowPlayingPage(onClose) }
+}
+
+@Composable
+private fun NowPlayingPage(onClose: () -> Unit) {
     val actions = LocalActions.current
     val graph = actions.graph
     val projection by graph.playback.projection.collectAsStateWithLifecycle()
