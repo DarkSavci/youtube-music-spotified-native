@@ -7,9 +7,11 @@ import androidx.core.net.toUri
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.session.MediaConstants
 import dev.darksavci.spotified.api.Api
 import dev.darksavci.spotified.api.BrowsePage
 import dev.darksavci.spotified.api.Item
+import dev.darksavci.spotified.api.LibraryItem
 import dev.darksavci.spotified.api.LibraryKind
 import dev.darksavci.spotified.api.SearchFilter
 import dev.darksavci.spotified.api.Shelf
@@ -35,29 +37,31 @@ class BrowseTree(private val api: Api, private val artwork: (String?) -> Uri?) {
     /** The children of [parentId]: folders to open, or songs to play. */
     suspend fun children(parentId: String): List<MediaItem> = when {
         parentId == ROOT -> listOf(
-            folder(HOME, "Home", grid = true),
+            folder(HOME, "Home", grid = true, songsAsGrid = true),
             folder(LIBRARY, "Library", grid = true),
             folder(LIKED, "Liked"),
             folder(RECENT, "Recent"),
         )
-        parentId == HOME -> loadHome().mapIndexedNotNull { i, shelf ->
-            // A shelf has no picture of its own; its first item's stands for it.
-            val art = shelf.items.firstNotNullOfOrNull { it.artwork.url(300) }
-            folder("$SHELF$i", shelf.title.ifEmpty { "More" }, art = art, grid = true).takeIf { shelf.items.isNotEmpty() }
+        // Home as the phone shows it: each shelf's first items under its title.
+        parentId == HOME -> loadHome().withIndex().flatMap { (i, shelf) ->
+            itemsOf("$SHELF$i", shelf.items.take(SHELF_ITEMS), group = shelf.title.ifEmpty { "More" })
         }
         parentId.startsWith(SHELF) -> {
             val shelf = (home ?: loadHome()).getOrNull(parentId.removePrefix(SHELF).toIntOrNull() ?: -1)
             itemsOf(parentId, shelf?.items.orEmpty())
         }
-        parentId == LIBRARY -> api.library().sortedByDescending { it.pinned }.mapNotNull { item ->
-            val art = item.artwork.url(300)
-            when (item.kind) {
-                LibraryKind.Playlist -> folder("$PLAYLIST${item.id}", item.title, item.subtitle, art)
-                LibraryKind.Album -> folder("$ALBUM${item.id}", item.title, item.subtitle, art)
-                LibraryKind.Artist -> folder("$ARTIST${item.id}", item.title, item.subtitle, art)
-                LibraryKind.Podcast -> folder("$PODCAST${item.id}", item.title, item.subtitle, art)
+        // The library under a heading for each kind, the pinned first in each.
+        parentId == LIBRARY -> api.library()
+            .sortedWith(compareBy<LibraryItem> { LIBRARY_KINDS.indexOf(it.kind) }.thenByDescending { it.pinned })
+            .map { item ->
+                val (id, group) = when (item.kind) {
+                    LibraryKind.Playlist -> "$PLAYLIST${item.id}" to "Playlists"
+                    LibraryKind.Album -> "$ALBUM${item.id}" to "Albums"
+                    LibraryKind.Artist -> "$ARTIST${item.id}" to "Artists"
+                    LibraryKind.Podcast -> "$PODCAST${item.id}" to "Podcasts"
+                }
+                folder(id, item.title, item.subtitle, item.artwork.url(300), group = group)
             }
-        }
         parentId == LIKED -> songs(LIKED, api.liked().tracks)
         parentId == RECENT -> songs(RECENT, api.history())
         parentId.startsWith(PLAYLIST) -> songs(parentId, api.completePlaylist(parentId.removePrefix(PLAYLIST)).tracks)
@@ -107,19 +111,39 @@ class BrowseTree(private val api: Api, private val artwork: (String?) -> Uri?) {
         api.search(query, SearchFilter.Songs).shelves.flatMap { it.items }
             .filterIsInstance<Item.Song>().map { it.track }.distinctBy { it.id }.take(25)
 
-    private fun itemsOf(parent: String, items: List<Item>): List<MediaItem> {
-        val tracks = items.filterIsInstance<Item.Song>().map { it.track }
-        val songItems = songs(parent, tracks)
-        val folders = items.mapNotNull { item ->
+    /**
+     * [items] in their order, songs to play and the rest to open, under
+     * [group]'s heading when there is one. The songs make the list a chosen
+     * one plays from.
+     */
+    private fun itemsOf(parent: String, items: List<Item>, group: String? = null): List<MediaItem> {
+        val songItems = songs(parent, items.mapNotNull(::trackOf))
+        val playable = lists[parent].orEmpty()
+        var next = 0
+        return items.mapNotNull { item ->
             when (item) {
-                is Item.AlbumItem -> folder("$ALBUM${item.album.id}", item.title, item.album.artists.joinToString { it.name }, item.artwork.url(300))
-                is Item.PlaylistItem -> folder("$PLAYLIST${item.playlist.id}", item.title, item.playlist.owner, item.artwork.url(300))
-                is Item.ArtistItem -> folder("$ARTIST${item.artist.id}", item.title, "Artist", item.artwork.url(300))
-                is Item.PodcastItem -> folder("$PODCAST${item.podcast.id}", item.title, item.podcast.author, item.artwork.url(300))
-                else -> null
+                // songs() drops what cannot play; the rest keep their order.
+                is Item.Song, is Item.Episode ->
+                    if (next < playable.size && playable[next] === trackOf(item)) songItems[next++].grouped(group) else null
+                is Item.AlbumItem -> folder("$ALBUM${item.album.id}", item.title, item.album.artists.joinToString { it.name }, item.artwork.url(300), group = group)
+                is Item.PlaylistItem -> folder("$PLAYLIST${item.playlist.id}", item.title, item.playlist.owner, item.artwork.url(300), group = group)
+                is Item.ArtistItem -> folder("$ARTIST${item.artist.id}", item.title, "Artist", item.artwork.url(300), group = group)
+                is Item.PodcastItem -> folder("$PODCAST${item.podcast.id}", item.title, item.podcast.author, item.artwork.url(300), group = group)
             }
         }
-        return songItems + folders
+    }
+
+    private fun trackOf(item: Item): Track? = when (item) {
+        is Item.Song -> item.track
+        is Item.Episode -> item.track
+        else -> null
+    }
+
+    /** This item under [group]'s heading: Auto puts neighbours that share one together. */
+    private fun MediaItem.grouped(group: String?): MediaItem {
+        if (group == null) return this
+        val extras = Bundle(mediaMetadata.extras ?: Bundle()).apply { putString(MediaConstants.EXTRAS_KEY_CONTENT_STYLE_GROUP_TITLE, group) }
+        return buildUpon().setMediaMetadata(mediaMetadata.buildUpon().setExtras(extras).build()).build()
     }
 
     private fun songs(list: String, tracks: List<Track>): List<MediaItem> {
@@ -127,18 +151,25 @@ class BrowseTree(private val api: Api, private val artwork: (String?) -> Uri?) {
         lists[list] = playable
         return playable.mapIndexed { i, t ->
             val item = CorePlayer.mediaItemOf(t)
+            val extras = Bundle(item.mediaMetadata.extras ?: Bundle()).apply {
+                if (t.explicit) putLong(MediaConstants.EXTRAS_KEY_IS_EXPLICIT, MediaConstants.EXTRAS_VALUE_ATTRIBUTE_PRESENT)
+            }
             item.buildUpon()
                 .setMediaId("$list#$i")
-                .setMediaMetadata(item.mediaMetadata.buildUpon().setArtworkUri(artwork(t.artwork.url(300))).build())
+                .setMediaMetadata(item.mediaMetadata.buildUpon().setArtworkUri(artwork(t.artwork.url(300))).setExtras(extras).build())
                 .build()
         }
     }
 
-    private fun folder(id: String, title: String, subtitle: String = "", art: String? = null, grid: Boolean = false): MediaItem {
+    private fun folder(
+        id: String, title: String, subtitle: String = "", art: String? = null,
+        grid: Boolean = false, songsAsGrid: Boolean = false, group: String? = null,
+    ): MediaItem {
         val extras = Bundle().apply {
             // Auto shows a folder's children as a grid or a list as asked.
             putInt(CONTENT_STYLE_BROWSABLE, if (grid) STYLE_GRID else STYLE_LIST)
-            putInt(CONTENT_STYLE_PLAYABLE, STYLE_LIST)
+            putInt(CONTENT_STYLE_PLAYABLE, if (songsAsGrid) STYLE_GRID else STYLE_LIST)
+            if (group != null) putString(MediaConstants.EXTRAS_KEY_CONTENT_STYLE_GROUP_TITLE, group)
         }
         return MediaItem.Builder()
             .setMediaId(id)
@@ -159,6 +190,8 @@ class BrowseTree(private val api: Api, private val artwork: (String?) -> Uri?) {
     companion object {
         const val ROOT = "root"
         private const val HOME_PAGES = 3
+        private const val SHELF_ITEMS = 10
+        private val LIBRARY_KINDS = listOf(LibraryKind.Playlist, LibraryKind.Album, LibraryKind.Artist, LibraryKind.Podcast)
         const val HOME = "home"
         const val LIBRARY = "library"
         const val LIKED = "liked"

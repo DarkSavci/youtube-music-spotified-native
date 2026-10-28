@@ -674,11 +674,19 @@ Checked on the emulator since:
   takes an app with a launcher for one that draws its own screens and
   will not show it) and artwork served by the app for what plays too.
 
-Not yet checked: Android Auto itself in a car or the Desktop Head Unit
-(the Play Store will not install Android Auto on an emulator, on Android
-14 or 16, so it needs a phone), a watch, a phone (only the emulator), and
-Android's installer finishing an update from a published release with an
-APK. Word-by-word lyrics are tested on both sides (the
+- Android Auto itself, on the Desktop Head Unit: Android Auto 18.1
+  sideloaded onto an Android 14 emulator (the Play Store will not install
+  it on one; the APK is Google's, signed with Android Auto's key), in
+  developer mode with unknown sources on. Our app sits in Android Auto's
+  launcher; Home shows each shelf's songs and albums as cover tiles under
+  the shelf's title, the library sits under Playlists, Albums, Artists and
+  Podcasts, and a song plays from either. With Maps open, the player is
+  the side card (cover, title, play, skip, like, shuffle) and tapping it
+  brings Now Playing to the big panel with its queue.
+
+Not yet checked: a car's own head unit, a watch, a phone (only the
+emulator), and Android's installer finishing an update from a published
+release with an APK. Word-by-word lyrics are tested on both sides (the
 core's parsers, the phone's lighting), but not seen on a real song: LRCLIB
 had none with word timings among the hundreds looked at.
 

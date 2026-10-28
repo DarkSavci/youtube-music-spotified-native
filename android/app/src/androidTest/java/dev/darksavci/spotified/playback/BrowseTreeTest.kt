@@ -5,6 +5,7 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.session.LibraryResult
 import androidx.media3.session.MediaBrowser
+import androidx.media3.session.MediaConstants
 import androidx.media3.session.SessionError
 import androidx.media3.session.SessionToken
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -68,14 +69,19 @@ class BrowseTreeTest {
     }
 
     @Test
-    fun homeShelvesOpenToSomethingToPlay() = runBlocking {
-        val shelves = children(BrowseTree.HOME)
-        assertTrue("Home has shelves", shelves.isNotEmpty())
-        val inside = children(shelves.first().mediaId)
-        assertTrue("a shelf has items", inside.isNotEmpty())
+    fun homeShowsShelvesItemsUnderTheirTitles() = runBlocking {
+        val items = children(BrowseTree.HOME)
+        assertTrue("Home has items", items.isNotEmpty())
+        val groups = items.map { it.mediaMetadata.extras?.getString(MediaConstants.EXTRAS_KEY_CONTENT_STYLE_GROUP_TITLE) }
+        assertTrue("every item sits under a shelf's title: $groups", groups.all { !it.isNullOrEmpty() })
         // Artwork reaches the car through the app's provider, as content://.
-        val art = inside.firstNotNullOfOrNull { it.mediaMetadata.artworkUri }
-        assertTrue("artwork is content://: $art", art == null || art.scheme == "content")
+        val art = items.mapNotNull { it.mediaMetadata.artworkUri }
+        assertTrue("items have artwork", art.isNotEmpty())
+        assertTrue("artwork is content://: $art", art.all { it.scheme == "content" })
+        // A song on Home names its shelf and place, so choosing it plays the shelf from there.
+        val song = items.firstOrNull { it.mediaMetadata.isPlayable == true } ?: return@runBlocking
+        val found = withContext(Dispatchers.Main) { browser.getItem(song.mediaId).await() }
+        assertEquals("${song.mediaId} is found", LibraryResult.RESULT_SUCCESS, found.resultCode)
     }
 
     @Test

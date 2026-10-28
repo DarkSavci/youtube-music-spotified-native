@@ -6,6 +6,7 @@ import android.database.Cursor
 import android.net.Uri
 import android.os.ParcelFileDescriptor
 import android.util.Base64
+import android.util.Log
 import dev.darksavci.spotified.graph
 import okhttp3.Request
 import java.io.File
@@ -37,7 +38,10 @@ class ArtworkProvider : ContentProvider() {
         if (!file.exists()) {
             val request = Request.Builder().url(source).build()
             context.graph.http.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) throw FileNotFoundException("HTTP ${response.code}")
+                if (!response.isSuccessful) {
+                    Log.w(TAG, "artwork from $host: HTTP ${response.code}")
+                    throw FileNotFoundException("HTTP ${response.code}")
+                }
                 val tmp = File(dir, file.name + ".part")
                 tmp.outputStream().use { response.body.byteStream().copyTo(it) }
                 tmp.renameTo(file)
@@ -65,6 +69,7 @@ class ArtworkProvider : ContentProvider() {
     companion object {
         const val AUTHORITY = "dev.darksavci.spotified.artwork"
         private const val KEEP = 400
+        private const val TAG = "Artwork"
         // gstatic.com holds the pictures of YouTube Music's own lists, such as Liked Music.
         private val ALLOWED = listOf("googleusercontent.com", "ytimg.com", "ggpht.com", "gstatic.com")
 
