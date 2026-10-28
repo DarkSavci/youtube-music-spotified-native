@@ -17,8 +17,8 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
 /**
- * What plays, drawn by the car from the session, with the queue and a radio
- * from the song in its header.
+ * What plays, drawn by the car from the session, with the queue and the
+ * lyrics in its header: the car allows two buttons there.
  */
 class NowPlayingScreen(carContext: CarContext) : Page(carContext) {
     override fun onGetTemplate(): Template {
@@ -34,8 +34,8 @@ class NowPlayingScreen(carContext: CarContext) : Page(carContext) {
         if (current != null) {
             header.addEndHeaderAction(
                 Action.Builder()
-                    .setIcon(icon(R.drawable.ic_radio))
-                    .setOnClickListener { graph.playback.startRadio(current) }
+                    .setIcon(icon(R.drawable.ic_mic_vocal))
+                    .setOnClickListener { screenManager.push(LyricsScreen(carContext)) }
                     .build(),
             )
         }
@@ -74,6 +74,8 @@ class QueueScreen(carContext: CarContext) : Page(carContext) {
                         .setTitle(current.title)
                         .apply { if (current.artistNames.isNotEmpty()) addText(current.artistNames) }
                         .apply { art(current.artwork, 120)?.let { setImage(it, Row.IMAGE_TYPE_LARGE) } }
+                        // A radio from what plays: its button.
+                        .addAction(Action.Builder().setIcon(icon(R.drawable.ic_radio)).setOnClickListener { graph.playback.startRadio(current) }.build())
                         .setOnClickListener { showNowPlaying(screenManager, carContext) }
                         .build(),
                 )
@@ -114,7 +116,7 @@ class QueueScreen(carContext: CarContext) : Page(carContext) {
 
 /**
  * One queued song's moves: play it now or next, up or down a place (the
- * screen stays, to move it again), to the end, or out of the queue.
+ * screen stays, to move it again), to the end, a radio from it, or out of the queue.
  */
 class QueueSongScreen(carContext: CarContext, private val id: String) : Page(carContext) {
     init {
@@ -158,6 +160,7 @@ class QueueSongScreen(carContext: CarContext, private val id: String) : Page(car
                         move(R.drawable.ic_chevron_up, "Move up", at > next, true) { graph.playback.move(at, at - 1) },
                         move(R.drawable.ic_chevron_down, "Move down", at < last, true) { graph.playback.move(at, at + 1) },
                         move(R.drawable.ic_list_end, "Move to the end", at < last, false) { graph.playback.move(at, last) },
+                        move(R.drawable.ic_radio, "Start radio from this song", true, false) { graph.playback.startRadio(track) },
                         move(R.drawable.ic_trash_2, "Remove from queue", true, false) { graph.playback.remove(at) },
                     ),
                 )
