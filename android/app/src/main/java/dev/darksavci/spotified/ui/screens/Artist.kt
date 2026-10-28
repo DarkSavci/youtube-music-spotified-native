@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -80,9 +81,15 @@ private fun ArtistPage(artist: Artist, actions: Actions) {
     Box {
     LazyColumn(state = list, contentPadding = PaddingValues(bottom = 24.dp)) {
         item {
-            Box(Modifier.fillMaxWidth().height(320.dp)) {
-                AsyncImage(artist.artwork.url(1080), null, Modifier.fillMaxWidth().height(320.dp), contentScale = ContentScale.Crop)
-                Box(Modifier.fillMaxWidth().height(320.dp).background(Brush.verticalGradient(listOf(Color.Transparent, p.window))))
+            // The artist's banner as it is, wide: asked for square, YouTube pads it with black bars.
+            val banner = artist.artwork.maxByOrNull { it.width }?.url
+            Box(Modifier.fillMaxWidth().height(380.dp)) {
+                AsyncImage(banner, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop, alignment = Alignment.TopCenter)
+                Box(
+                    Modifier.fillMaxSize().background(
+                        Brush.verticalGradient(0f to Color.Black.copy(alpha = 0.35f), 0.25f to Color.Transparent, 0.6f to Color.Transparent, 1f to p.window),
+                    ),
+                )
                 Text(
                     artist.name, style = Type.display.copy(fontSize = Type.display.fontSize * 1.4f), color = Color.White,
                     maxLines = 2, overflow = TextOverflow.Ellipsis,

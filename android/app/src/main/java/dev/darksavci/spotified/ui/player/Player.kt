@@ -188,7 +188,15 @@ fun NowPlaying(onClose: () -> Unit) {
         // The full-art style: the picture is the page, darkened under the controls.
         if (style == STYLE_FULL_ART && track != null) {
             AsyncImage(track.artwork.url(1080), null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
-            Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0.35f), Color.Transparent, Color.Black.copy(alpha = 0.85f)))))
+            // Dark under the title and controls whatever the picture, so white words read on a pale cover too.
+            Box(
+                Modifier.fillMaxSize().background(
+                    Brush.verticalGradient(
+                        0f to Color.Black.copy(alpha = 0.45f), 0.18f to Color.Transparent, 0.38f to Color.Transparent,
+                        0.56f to Color.Black.copy(alpha = 0.72f), 1f to Color.Black.copy(alpha = 0.92f),
+                    ),
+                ),
+            )
         }
         Column(
             Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing).verticalScroll(rememberScrollState()),

@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -38,6 +39,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.darksavci.spotified.R
 import dev.darksavci.spotified.api.Artwork
@@ -293,16 +295,22 @@ private fun QueueSheet(actions: Actions) {
     val projection by graph.playback.projection.collectAsStateWithLifecycle()
     val queue = projection.state.queue
     val p = LocalPalette.current
-    val list = rememberLazyListState(initialFirstVisibleItemIndex = queue.index.coerceAtLeast(0))
+    val list = rememberLazyListState()
     var dragFrom by remember { mutableIntStateOf(-1) }
     var dragBy by remember { mutableFloatStateOf(0f) }
-    Text("Queue", style = Type.heading, modifier = Modifier.padding(start = 16.dp, top = 8.dp))
-    Text(
-        "Playing ${queue.origin.ifEmpty { "your queue" }}", style = Type.small, color = p.secondary,
-        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-    )
+    Text("Queue", style = Type.heading, modifier = Modifier.padding(start = 16.dp, top = 8.dp, bottom = 4.dp))
+    // What plays, then what comes, as Spotify's queue reads; what was played is behind the previous button.
+    val current = queue.items.getOrNull(queue.index)
+    val upcoming = queue.items.withIndex().drop(queue.index + 1)
     LazyColumn(state = list, modifier = Modifier.heightIn(max = 560.dp)) {
-        itemsIndexed(queue.items, key = { i, t -> "$i:${t.id}" }) { i, track ->
+        if (current != null) {
+            item { QueueHeading("Now playing") }
+            item(key = "now:${current.id}") {
+                TrackRow(track = current, playing = true, onClick = {}, onMenu = { actions.menuFor(current, queueIndex = queue.index) })
+            }
+        }
+        if (upcoming.isNotEmpty()) item { QueueHeading("Next from: ${queue.origin.ifEmpty { "your queue" }}") }
+        items(upcoming, key = { (i, t) -> "$i:${t.id}" }) { (i, track) ->
             val dragging = i == dragFrom
             TrackRow(
                 track = track,
@@ -329,9 +337,14 @@ private fun QueueSheet(actions: Actions) {
     Row(Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         val s = projection.state
         QueueButton(R.drawable.ic_shuffle, "Shuffle", s.shuffle, Modifier.weight(1f)) { actions.playback.setShuffle(!s.shuffle) }
-        QueueButton(R.drawable.ic_repeat, "Repeat", s.repeat != Repeat.Off, Modifier.weight(1f)) { actions.playback.cycleRepeat() }
+        QueueButton(if (s.repeat == Repeat.One) R.drawable.ic_repeat_1 else R.drawable.ic_repeat, if (s.repeat == Repeat.One) "Repeat one" else "Repeat", s.repeat != Repeat.Off, Modifier.weight(1f)) { actions.playback.cycleRepeat() }
         QueueButton(R.drawable.ic_clock, "Timer", graph.sleep.endsAt.value != null, Modifier.weight(1f)) { actions.menu = MenuTarget.SleepTimer }
     }
+}
+
+@Composable
+private fun QueueHeading(text: String) {
+    Text(text, style = Type.bodyStrong.copy(fontSize = 16.sp), maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 4.dp))
 }
 
 @Composable

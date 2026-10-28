@@ -111,6 +111,8 @@ fun LazyListScope.collectionHeader(
                 PlayButton(
                     onClick = { if (playingHere) actions.playback.toggle() else actions.play(tracks, 0, origin) },
                     playing = playingHere,
+                    // The row's edge is 8dp; the button lines up with the 16dp of the words above.
+                    modifier = Modifier.padding(end = 8.dp),
                 )
             }
         }

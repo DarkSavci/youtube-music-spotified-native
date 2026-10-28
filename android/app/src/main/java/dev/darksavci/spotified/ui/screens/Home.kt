@@ -49,11 +49,11 @@ import dev.darksavci.spotified.ui.components.Loading
 import dev.darksavci.spotified.ui.components.Problem
 import dev.darksavci.spotified.ui.components.SectionTitle
 import dev.darksavci.spotified.ui.components.ShelfRow
-import dev.darksavci.spotified.ui.components.TrackRow
 import dev.darksavci.spotified.ui.components.rememberLoader
 import dev.darksavci.spotified.ui.theme.LocalPalette
 import dev.darksavci.spotified.ui.theme.Type
 import coil3.compose.AsyncImage
+import java.time.LocalTime
 
 @Composable
 fun HomeScreen() {
@@ -68,17 +68,21 @@ fun HomeScreen() {
     val p = LocalPalette.current
 
     LazyColumn(Modifier.windowInsetsPadding(WindowInsets.statusBars), contentPadding = PaddingValues(bottom = 24.dp)) {
+        // The greeting with the way to history and settings, then the moods on a row of their own.
         item {
-            Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp, top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp, top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                 Avatar(account) { actions.go(Routes.SETTINGS) }
                 Spacer(Modifier.width(12.dp))
-                val chips = (state as? Load.Ready<BrowsePage>)?.value?.chips.orEmpty()
-                LazyRow(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    item { Chip("All", mood.isEmpty(), { mood = "" }) }
-                    items(chips) { chip -> Chip(chip.title, chip.params == mood, { mood = if (mood == chip.params) "" else chip.params }) }
-                }
+                Text(greeting(), style = Type.title, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
                 GlyphButton(R.drawable.ic_clock, "History", { actions.go(Routes.HISTORY) })
                 GlyphButton(R.drawable.ic_settings, "Settings", { actions.go(Routes.SETTINGS) })
+            }
+        }
+        item {
+            val chips = (state as? Load.Ready<BrowsePage>)?.value?.chips.orEmpty()
+            LazyRow(contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                item { Chip("All", mood.isEmpty(), { mood = "" }) }
+                items(chips) { chip -> Chip(chip.title, chip.params == mood, { mood = if (mood == chip.params) "" else chip.params }) }
             }
         }
         val history = (recentState as? Load.Ready<List<Track>>)?.value.orEmpty()
@@ -94,17 +98,11 @@ fun HomeScreen() {
                         shelf.title, action = if (shelf.showAllId.isNotEmpty()) "Show all" else null,
                         onAction = { actions.go(Routes.browse(shelf.showAllId, shelf.showAllParams, shelf.title)) },
                     )
-                    // A shelf of songs reads as a list; anything else as cards.
-                    val songs = shelf.items.filterIsInstance<Item.Song>()
-                    if (songs.size == shelf.items.size && songs.size > 3) {
-                        Column {
-                            songs.take(4).forEachIndexed { i, song ->
-                                TrackRow(song.track, { actions.play(songs.map { it.track }, i, shelf.title) }, { actions.menuFor(song.track) })
-                            }
-                        }
-                    } else {
-                        ShelfRow(shelf.items, actions::open, actions::menuFor)
-                    }
+                    // Every shelf as covers; a song plays its shelf's songs from there.
+                    val songs = shelf.items.filterIsInstance<Item.Song>().map { it.track }
+                    ShelfRow(shelf.items, { item ->
+                        if (item is Item.Song) actions.play(songs, songs.indexOf(item.track), shelf.title) else actions.open(item)
+                    }, actions::menuFor)
                 }
                 if (s.value.shelves.isEmpty()) item { Problem("Nothing here yet.", null) }
             }
@@ -114,6 +112,13 @@ fun HomeScreen() {
             Text("", style = Type.small, color = p.secondary)
         }
     }
+}
+
+/** Good morning, afternoon or evening, by the phone's clock. */
+private fun greeting(): String = when (LocalTime.now().hour) {
+    in 5..11 -> "Good morning"
+    in 12..17 -> "Good afternoon"
+    else -> "Good evening"
 }
 
 @Composable
