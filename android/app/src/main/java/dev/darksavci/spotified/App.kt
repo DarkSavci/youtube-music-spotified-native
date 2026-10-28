@@ -47,6 +47,7 @@ class Graph(context: Context) {
             } else chain.request()
             chain.proceed(request)
         }
+        .also { DebugHooks.install(it, context) }
         .build()
 
     val origin: suspend () -> HttpUrl = { Api.originOf(core.running().address) }

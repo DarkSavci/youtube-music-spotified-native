@@ -709,6 +709,11 @@ Checked on the emulator since:
   cancelled): Google's developer verification, rolling out from September
   2026, will ask that the developer be registered for sideloaded installs.
 
+- word-by-word lyrics on a real song playing: a debug build answers a
+  song's lyrics from files/debug/lyrics/<id>.json (`DebugHooks`, nothing
+  of it in a release build). Duman's "Aman Aman" with LRCLIB's line
+  timings and each line's words spread across it lit word by word.
+
 Not yet checked: a car's own head unit, a watch, and a phone (only the
 emulator). Word-by-word lyrics are tested on both sides (the
 core's parsers, the phone's lighting), but not seen on a real song: LRCLIB
