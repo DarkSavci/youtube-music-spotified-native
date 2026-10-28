@@ -84,7 +84,11 @@ private fun PageTitle(title: String, actions: Actions, trailing: @Composable () 
 
 private fun hours(ms: Long): String {
     val minutes = ms / 60_000
-    return if (minutes >= 60) "${minutes / 60} h ${minutes % 60} min" else "$minutes min"
+    return when {
+        minutes >= 60 -> "${minutes / 60} h ${minutes % 60} min"
+        minutes == 0L && ms > 0 -> "under a minute"
+        else -> "$minutes min"
+    }
 }
 
 // ---------- your listening ----------
@@ -119,22 +123,22 @@ private fun StatsBody(stats: Stats, actions: Actions) {
         if (stats.onRepeat.isNotEmpty()) {
             item { SectionTitle("On repeat") }
             val tracks = stats.onRepeat.map { it.track() }
-            itemsIndexed(tracks) { i, t -> TrackRow(t, { actions.play(tracks, i, "On repeat") }, { actions.menuFor(t) }, subtitle = "${stats.onRepeat[i].plays} plays") }
+            itemsIndexed(tracks) { i, t -> TrackRow(t, { actions.play(tracks, i, "On repeat") }, { actions.menuFor(t) }, subtitle = plays(stats.onRepeat[i].plays)) }
         }
         item { SectionTitle("Top songs") }
         val top = stats.tracks.map { it.track() }
         itemsIndexed(top.take(20)) { i, t ->
-            TrackRow(t, { actions.play(top, i, "Your top songs") }, { actions.menuFor(t) }, number = i + 1, subtitle = "${t.artistNames} • ${stats.tracks[i].plays} plays")
+            TrackRow(t, { actions.play(top, i, "Your top songs") }, { actions.menuFor(t) }, number = i + 1, subtitle = "${t.artistNames} • ${plays(stats.tracks[i].plays)}")
         }
         item { SectionTitle("Top artists") }
         items(stats.artists) { a ->
-            EntityRow(a.artist, "${a.plays} plays • ${hours(a.totalMs)}", cover(a.artwork), {
+            EntityRow(a.artist, "${plays(a.plays)} • ${hours(a.totalMs)}", artistPhoto(a.artistId) ?: cover(a.artwork), {
                 channelId(a.artistId)?.let { actions.go(Routes.artist(it)) }
             }, round = true)
         }
         item { SectionTitle("Top albums") }
         items(stats.albums) { a ->
-            EntityRow(a.album, "${a.artist} • ${a.plays} plays", cover(a.artwork), {
+            EntityRow(a.album, "${a.artist} • ${plays(a.plays)}", cover(a.artwork), {
                 if (a.albumId.isNotEmpty()) actions.go(Routes.album(a.albumId))
             })
         }
@@ -164,8 +168,8 @@ fun RecapScreen() {
                 return@Loaded
             }
             val cards = buildList<Pair<String, @Composable () -> Unit>> {
-                add("You listened for ${hours(stats.summary.totalMs)}" to { Big(hours(stats.summary.totalMs), "of music this year, ${stats.summary.plays} plays") })
-                stats.tracks.firstOrNull()?.let { t -> add("My song of the year: ${t.title} by ${t.artist}" to { Feature(t.title, t.artist, cover(t.artwork), "Your song of the year, ${t.plays} plays") }) }
+                add("You listened for ${hours(stats.summary.totalMs)}" to { Big(hours(stats.summary.totalMs), "of music this year, ${plays(stats.summary.plays)}") })
+                stats.tracks.firstOrNull()?.let { t -> add("My song of the year: ${t.title} by ${t.artist}" to { Feature(t.title, t.artist, cover(t.artwork), "Your song of the year, ${plays(t.plays)}") }) }
                 stats.artists.firstOrNull()?.let { a -> add("My artist of the year: ${a.artist}" to { Feature(a.artist, "", cover(a.artwork), "Your artist of the year, ${hours(a.totalMs)}") }) }
                 add("My top songs: " + stats.tracks.take(5).joinToString("; ") { "${it.title} — ${it.artist}" } to {
                     Column(Modifier.padding(24.dp)) {
@@ -352,4 +356,21 @@ fun ImportScreen() {
             }
         }
     }
+}
+
+private fun plays(n: Int) = if (n == 1) "1 play" else "$n plays"
+
+/** Artists' photos, kept for the session: the stats keep a song's cover, not the artist's picture. */
+private val artistPhotos = mutableMapOf<String, List<Artwork>>()
+
+/** [artistId]'s photo from their page, once it has come; null until then or without an id. */
+@Composable
+private fun artistPhoto(artistId: String): List<Artwork>? {
+    val id = channelId(artistId) ?: return null
+    val api = LocalActions.current.graph.api
+    val photo by produceState(artistPhotos[id], id) {
+        if (artistPhotos[id] != null) return@produceState
+        runCatching { api.artist(id).artwork }.getOrNull()?.takeIf { it.isNotEmpty() }?.let { artistPhotos[id] = it; value = it }
+    }
+    return photo
 }
