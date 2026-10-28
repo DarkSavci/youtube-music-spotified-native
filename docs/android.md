@@ -698,9 +698,19 @@ Checked on the emulator since:
   and none may be marked primary; a search field shows only on a screen
   of its own, not in a tab.
 
-Not yet checked: a car's own head unit, a watch, a phone (only the
-emulator), and Android's installer finishing an update from a published
-release with an APK. Word-by-word lyrics are tested on both sides (the
+- an update all the way, from a release served on the machine
+  (`-PreleasesUrl`, debug builds only; `-PversionCode` and `-PversionName`
+  stamp the versions): 0.5.1 found 0.5.2, downloaded and checked it, asked
+  for the right to install apps once, Android asked to update, and the app
+  came back as 0.5.2, still signed in. The updater hands the APK to a
+  PackageInstaller session, so how it ends comes back and is said. With
+  Play Protect on, an APK from an unregistered developer meets Play
+  Protect's "App scan recommended" (declined, the app says the update was
+  cancelled): Google's developer verification, rolling out from September
+  2026, will ask that the developer be registered for sideloaded installs.
+
+Not yet checked: a car's own head unit, a watch, and a phone (only the
+emulator). Word-by-word lyrics are tested on both sides (the
 core's parsers, the phone's lighting), but not seen on a real song: LRCLIB
 had none with word timings among the hundreds looked at.
 

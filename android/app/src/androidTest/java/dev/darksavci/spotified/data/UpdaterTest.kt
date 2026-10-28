@@ -1,7 +1,5 @@
 package dev.darksavci.spotified.data
 
-import android.app.Instrumentation
-import android.content.Intent
 import android.os.Build
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -28,8 +26,8 @@ import org.junit.runner.RunWith
  * carries the desktop's files only: an older phone app is told there is
  * nothing for it, and a newer one that it is up to date. Then against a
  * release with an APK, answered in the test: it is downloaded, checked
- * against the release's checksums, and handed to Android's installer only
- * when they match.
+ * against the release's checksums, and handed to be installed only when
+ * they match.
  */
 @RunWith(AndroidJUnit4::class)
 class UpdaterTest {
@@ -54,7 +52,6 @@ class UpdaterTest {
         assertEquals(listOf("This is the newest version (99.0.0)."), said("99.0.0"))
     }
 
-    private val instrumentation = InstrumentationRegistry.getInstrumentation()
     private val update = File(context.cacheDir, "updates/update.apk")
 
     @After
@@ -81,24 +78,12 @@ class UpdaterTest {
         }.build()
     }
 
-    /** Runs the updater and returns what it said and the installer it asked for, which is caught, not opened. */
-    private fun install(http: OkHttpClient): Pair<List<String>, Intent?> = runBlocking {
-        var asked: Intent? = null
-        val monitor = object : Instrumentation.ActivityMonitor() {
-            override fun onStartActivity(intent: Intent): Instrumentation.ActivityResult? {
-                if (intent.action != Intent.ACTION_VIEW || intent.type != "application/vnd.android.package-archive") return null
-                asked = intent
-                return Instrumentation.ActivityResult(0, null)
-            }
-        }
-        instrumentation.addMonitor(monitor)
+    /** Runs the updater and returns what it said and the file it handed to be installed, which is kept, not installed. */
+    private fun install(http: OkHttpClient): Pair<List<String>, ByteArray?> = runBlocking {
+        var handed: ByteArray? = null
         val said = mutableListOf<String>()
-        try {
-            Updater.check(context, http, { said += it }, "0.0.1")
-            said to asked
-        } finally {
-            instrumentation.removeMonitor(monitor)
-        }
+        Updater.check(context, http, { said += it }, "0.0.1") { handed = it.readBytes() }
+        said to handed
     }
 
     @Test
@@ -108,8 +93,7 @@ class UpdaterTest {
         val (said, installer) = install(github(apk) { name -> "0000  other.zip\n$sum  $name\n" })
         assertEquals(listOf("Downloading version 9.9.9…"), said)
         assertNotNull("the installer was asked for", installer)
-        assertTrue(update.exists())
-        assertTrue(update.readBytes().contentEquals(apk))
+        assertTrue(installer!!.contentEquals(apk))
     }
 
     @Test

@@ -5,6 +5,8 @@ plugins {
     alias(libs.plugins.chaquopy)
 }
 
+val RELEASES = "https://api.github.com/repos/DarkSavci/youtube-music-spotified-native/releases/latest"
+
 android {
     namespace = "dev.darksavci.spotified"
     compileSdk = 37
@@ -13,8 +15,10 @@ android {
         applicationId = "dev.darksavci.spotified"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.5.0"
+        // -PversionCode and -PversionName stamp a release's own version.
+        versionCode = (findProperty("versionCode") as String?)?.toInt() ?: 1
+        versionName = (findProperty("versionName") as String?) ?: "0.5.0"
+        buildConfigField("String", "RELEASES_URL", "\"$RELEASES\"")
         // Phones, and x86_64 for emulators; the core and qjs are built for
         // these two only. -Pabis=arm64-v8a builds the phone's alone.
         val abis = (findProperty("abis") as String?)?.split(",")
@@ -29,6 +33,11 @@ android {
     }
 
     buildTypes {
+        debug {
+            // -PreleasesUrl points a test build's updater at a release served
+            // on this machine; a release build always asks GitHub.
+            (findProperty("releasesUrl") as String?)?.let { buildConfigField("String", "RELEASES_URL", "\"$it\"") }
+        }
         release {
             isMinifyEnabled = true
             isShrinkResources = true

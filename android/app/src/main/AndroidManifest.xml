@@ -108,6 +108,11 @@
             android:name="androidx.car.app.minCarApiLevel"
             android:value="8" />
 
+        <!-- How an update's install ended, from Android's installer. -->
+        <receiver
+            android:name=".data.Updater$Installed"
+            android:exported="false" />
+
         <!-- Carries playback on after a reboot, from the system's media controls. -->
         <receiver
             android:name="androidx.media3.session.MediaButtonReceiver"

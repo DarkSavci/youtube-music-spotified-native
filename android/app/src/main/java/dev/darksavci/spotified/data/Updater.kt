@@ -1,10 +1,13 @@
 package dev.darksavci.spotified.data
 
+import android.app.PendingIntent
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageInstaller
 import android.os.Build
-import androidx.core.content.FileProvider
 import dev.darksavci.spotified.BuildConfig
+import dev.darksavci.spotified.graph
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
@@ -23,10 +26,11 @@ import java.security.MessageDigest
  * install it.
  */
 object Updater {
-    private const val RELEASES = "https://api.github.com/repos/DarkSavci/youtube-music-spotified-native/releases/latest"
+    private val RELEASES = BuildConfig.RELEASES_URL
 
     suspend fun check(
         context: Context, http: OkHttpClient, say: (String) -> Unit, current: String = BuildConfig.VERSION_NAME,
+        install: (File) -> Unit = { install(context, it) },
     ) = withContext(Dispatchers.IO) {
         val release = http.newCall(Request.Builder().url(RELEASES).header("Accept", "application/vnd.github+json").build())
             .execute().use { r ->
@@ -57,10 +61,52 @@ object Updater {
             file.delete()
             return@withContext say("The download does not match its checksum; it was not installed.")
         }
-        val uri = FileProvider.getUriForFile(context, "${context.packageName}.files", file)
-        val install = Intent(Intent.ACTION_VIEW).setDataAndType(uri, "application/vnd.android.package-archive")
-            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
-        context.startActivity(install)
+        install(file)
+    }
+
+    /**
+     * Hands [apk] to Android's installer as a session, so how it ends comes
+     * back to [Installed]: Android asks the listener to confirm, and a
+     * refusal (Play Protect's, say) is said rather than lost.
+     */
+    fun install(context: Context, apk: File) {
+        val installer = context.packageManager.packageInstaller
+        val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL)
+            .apply { setAppPackageName(context.packageName) }
+        val id = installer.createSession(params)
+        installer.openSession(id).use { session ->
+            session.openWrite("update.apk", 0, apk.length()).use { out ->
+                apk.inputStream().use { it.copyTo(out) }
+                session.fsync(out)
+            }
+            val done = PendingIntent.getBroadcast(
+                context, id, Intent(context, Installed::class.java),
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE,
+            )
+            session.commit(done.intentSender)
+        }
+        apk.delete()
+    }
+
+    /** How an install ended: Android's confirmation shown, or why it was refused. */
+    class Installed : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            val status = intent.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE)
+            val say = context.graph.playback::say
+            when (status) {
+                PackageInstaller.STATUS_PENDING_USER_ACTION -> {
+                    @Suppress("DEPRECATION")
+                    val confirm = intent.getParcelableExtra<Intent>(Intent.EXTRA_INTENT) ?: return
+                    context.startActivity(confirm.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                }
+                PackageInstaller.STATUS_SUCCESS -> Unit
+                PackageInstaller.STATUS_FAILURE_ABORTED -> say("The update was cancelled.")
+                PackageInstaller.STATUS_FAILURE_BLOCKED ->
+                    say("Android blocked the update. Install it from the project's GitHub releases instead.")
+                PackageInstaller.STATUS_FAILURE_STORAGE -> say("There is not enough space for the update.")
+                else -> say("The update was not installed: ${intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE) ?: "Android refused it"}.")
+            }
+        }
     }
 
     private fun url(asset: JsonObject) = (asset["browser_download_url"] as JsonPrimitive).content
