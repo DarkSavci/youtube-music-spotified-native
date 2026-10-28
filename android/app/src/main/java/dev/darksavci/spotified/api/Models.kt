@@ -42,7 +42,8 @@ private fun resized(url: String, size: Int): String? {
     return when {
         parts.getOrNull(0)?.startsWith("w") == true && parts.getOrNull(1)?.startsWith("h") == true &&
             digits(width) && digits(height) ->
-            "$base=w$size-h$size-${parts.getOrNull(2) ?: "l90-rj"}"
+            // A wide banner asked for square comes back padded with black; it keeps its own shape, and is cropped where it shows.
+            if (width == height) "$base=w$size-h$size-${parts.getOrNull(2) ?: "l90-rj"}" else null
         spec.startsWith("s") -> "$base=s$size"
         else -> null
     }

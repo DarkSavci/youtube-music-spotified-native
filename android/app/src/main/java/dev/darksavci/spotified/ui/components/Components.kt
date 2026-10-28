@@ -66,6 +66,7 @@ import coil3.imageLoader
 import coil3.request.ImageRequest
 import coil3.request.SuccessResult
 import coil3.request.allowHardware
+import coil3.request.transformations
 import coil3.toBitmap
 import dev.darksavci.spotified.R
 import dev.darksavci.spotified.api.Artwork
@@ -113,7 +114,11 @@ fun Art(artwork: List<Artwork>, size: Dp, modifier: Modifier = Modifier, shape: 
     Box(modifier.size(size).clip(shape).background(LocalPalette.current.surface)) {
         val address = artwork.url(px.coerceAtLeast(60))
         if (address != null) {
-            AsyncImage(address, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+            // A round picture is an artist's: their photo is often padded with black bands.
+            val model = if (shape == CircleShape) {
+                ImageRequest.Builder(LocalContext.current).data(address).transformations(TrimBorders).build()
+            } else address
+            AsyncImage(model, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
         } else {
             Glyph(R.drawable.ic_music, null, Modifier.align(Alignment.Center), tint = LocalPalette.current.dim, size = size / 3)
         }

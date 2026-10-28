@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
@@ -24,6 +25,15 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.sp
+import java.time.LocalDate
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.LinearProgressIndicator
@@ -49,6 +59,9 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.darksavci.spotified.R
 import dev.darksavci.spotified.api.Artwork
+import dev.darksavci.spotified.api.Item
+import dev.darksavci.spotified.api.SearchFilter
+import dev.darksavci.spotified.api.LibraryKind
 import dev.darksavci.spotified.api.Stats
 import dev.darksavci.spotified.api.channelId
 import dev.darksavci.spotified.api.cover
@@ -132,7 +145,7 @@ private fun StatsBody(stats: Stats, actions: Actions) {
         }
         item { SectionTitle("Top artists") }
         items(stats.artists) { a ->
-            EntityRow(a.artist, "${plays(a.plays)} • ${hours(a.totalMs)}", artistPhoto(a.artistId) ?: cover(a.artwork), {
+            EntityRow(a.artist, "${plays(a.plays)} • ${hours(a.totalMs)}", artistPhoto(a.artistId, a.artist) ?: cover(a.artwork), {
                 channelId(a.artistId)?.let { actions.go(Routes.artist(it)) }
             }, round = true)
         }
@@ -168,28 +181,58 @@ fun RecapScreen() {
                 return@Loaded
             }
             val cards = buildList<Pair<String, @Composable () -> Unit>> {
-                add("You listened for ${hours(stats.summary.totalMs)}" to { Big(hours(stats.summary.totalMs), "of music this year, ${plays(stats.summary.plays)}") })
-                stats.tracks.firstOrNull()?.let { t -> add("My song of the year: ${t.title} by ${t.artist}" to { Feature(t.title, t.artist, cover(t.artwork), "Your song of the year, ${plays(t.plays)}") }) }
-                stats.artists.firstOrNull()?.let { a -> add("My artist of the year: ${a.artist}" to { Feature(a.artist, "", cover(a.artwork), "Your artist of the year, ${hours(a.totalMs)}") }) }
+                add("You listened for ${hours(stats.summary.totalMs)}" to { Big(hours(stats.summary.totalMs), "this year, across ${plays(stats.summary.plays)}.") })
+                stats.tracks.firstOrNull()?.let { t -> add("My song of the year: ${t.title} by ${t.artist}" to { Feature(t.title, "${t.artist} \u2022 ${plays(t.plays)}", cover(t.artwork), "Your song of the year") }) }
+                stats.artists.firstOrNull()?.let { a ->
+                    add("My artist of the year: ${a.artist}" to {
+                        Feature(a.artist, plays(a.plays), artistPhoto(a.artistId, a.artist) ?: cover(a.artwork), "Your artist of the year", round = true)
+                    })
+                }
                 add("My top songs: " + stats.tracks.take(5).joinToString("; ") { "${it.title} — ${it.artist}" } to {
-                    Column(Modifier.padding(24.dp)) {
-                        Text("Your top songs", style = Type.title, color = Color.White)
-                        Spacer(Modifier.height(16.dp))
+                    Column(Modifier.fillMaxSize().padding(horizontal = 24.dp), verticalArrangement = Arrangement.Center) {
+                        Text("Your top songs", style = Type.display, color = Color.White)
+                        Spacer(Modifier.height(24.dp))
                         stats.tracks.take(5).forEachIndexed { i, t ->
-                            Text("${i + 1}  ${t.title}", style = Type.heading, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            Text("    ${t.artist}", style = Type.body, color = Color.White.copy(alpha = 0.7f), maxLines = 1)
-                            Spacer(Modifier.height(8.dp))
+                            Row(Modifier.padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Text("${i + 1}", style = Type.display, color = Color.White.copy(alpha = 0.55f), modifier = Modifier.width(44.dp))
+                                Art(cover(t.artwork), 52.dp)
+                                Spacer(Modifier.width(14.dp))
+                                Column {
+                                    Text(t.title, style = Type.bodyStrong.copy(fontSize = 17.sp), color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Text(t.artist, style = Type.small, color = Color.White.copy(alpha = 0.75f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                }
+                            }
                         }
                     }
                 })
             }
             val pager = rememberPagerState { cards.size }
-            HorizontalPager(pager, Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(24.dp), pageSpacing = 16.dp) { page ->
+            HorizontalPager(pager, Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(horizontal = 24.dp, vertical = 12.dp), pageSpacing = 16.dp) { page ->
+                val (from, to) = RECAP_COLOURS[page % RECAP_COLOURS.size]
                 Box(
-                    Modifier.fillMaxSize().clip(RoundedCornerShape(16.dp))
-                        .background(listOf(Color(0xFF8C1932), Color(0xFF185A74), Color(0xFF477D95), Color(0xFF5A2A82))[page % 4]),
-                    contentAlignment = Alignment.Center,
-                ) { cards[page].second() }
+                    Modifier.fillMaxSize().clip(RoundedCornerShape(20.dp))
+                        .background(Brush.linearGradient(listOf(from, to)))
+                        // Big soft circles, Wrapped's way of making a card a poster.
+                        .drawBehind {
+                            drawCircle(Color.White.copy(alpha = 0.08f), radius = size.width * 0.75f, center = Offset(size.width * 1.05f, size.height * 0.12f))
+                            drawCircle(Color.Black.copy(alpha = 0.12f), radius = size.width * 0.6f, center = Offset(-size.width * 0.1f, size.height * 0.95f))
+                        },
+                ) {
+                    cards[page].second()
+                    Column(Modifier.fillMaxWidth().padding(16.dp)) {
+                        // Story bars: which card of how many.
+                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            repeat(cards.size) { i ->
+                                Box(
+                                    Modifier.weight(1f).height(3.dp).clip(RoundedCornerShape(2.dp))
+                                        .background(Color.White.copy(alpha = if (i <= page) 0.95f else 0.3f)),
+                                )
+                            }
+                        }
+                        Spacer(Modifier.height(12.dp))
+                        Text("YOUR ${LocalDate.now().year}", style = Type.label.copy(letterSpacing = 2.sp), color = Color.White.copy(alpha = 0.85f))
+                    }
+                }
             }
             Row(Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.Center) {
                 Pill("Share this card", {
@@ -200,23 +243,36 @@ fun RecapScreen() {
     }
 }
 
+/** Each card's two colours, run corner to corner. */
+private val RECAP_COLOURS = listOf(
+    Color(0xFFFF0033) to Color(0xFF5A0A2A),
+    Color(0xFF1DB9C3) to Color(0xFF16324F),
+    Color(0xFFFFB300) to Color(0xFFB3261E),
+    Color(0xFF8E44EC) to Color(0xFF1F1147),
+)
+
+/** One number as the whole card, poster-size. */
 @Composable
 private fun Big(value: String, caption: String) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(24.dp)) {
-        Text(value, style = Type.display, color = Color.White)
-        Text(caption, style = Type.body, color = Color.White.copy(alpha = 0.8f))
+    Column(Modifier.fillMaxSize().padding(horizontal = 24.dp), verticalArrangement = Arrangement.Center) {
+        Text("You listened for", style = Type.heading, color = Color.White.copy(alpha = 0.85f))
+        Text(value, style = Type.display.copy(fontSize = 64.sp, lineHeight = 68.sp, fontWeight = FontWeight.Black), color = Color.White)
+        Spacer(Modifier.height(8.dp))
+        Text(caption, style = Type.heading, color = Color.White.copy(alpha = 0.85f))
     }
 }
 
+/** A song or artist of the year: the picture large, the name under it. */
 @Composable
-private fun Feature(title: String, subtitle: String, artwork: List<Artwork>, caption: String) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(24.dp)) {
-        Text(caption, style = Type.label, color = Color.White.copy(alpha = 0.8f))
-        Spacer(Modifier.height(16.dp))
-        Art(artwork, 200.dp)
-        Spacer(Modifier.height(16.dp))
-        Text(title, style = Type.title, color = Color.White, maxLines = 2, overflow = TextOverflow.Ellipsis)
-        if (subtitle.isNotEmpty()) Text(subtitle, style = Type.body, color = Color.White.copy(alpha = 0.8f))
+private fun Feature(title: String, subtitle: String, artwork: List<Artwork>, caption: String, round: Boolean = false) {
+    Column(Modifier.fillMaxSize().padding(horizontal = 24.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(caption, style = Type.heading, color = Color.White, textAlign = TextAlign.Center)
+        Spacer(Modifier.height(24.dp))
+        val shape = if (round) CircleShape else RoundedCornerShape(8.dp)
+        Art(artwork, 220.dp, Modifier.shadow(24.dp, shape), shape = shape)
+        Spacer(Modifier.height(24.dp))
+        Text(title, style = Type.display, color = Color.White, maxLines = 2, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center)
+        if (subtitle.isNotEmpty()) Text(subtitle, style = Type.heading, color = Color.White.copy(alpha = 0.8f), textAlign = TextAlign.Center)
     }
 }
 
@@ -365,12 +421,19 @@ private val artistPhotos = mutableMapOf<String, List<Artwork>>()
 
 /** [artistId]'s photo from their page, once it has come; null until then or without an id. */
 @Composable
-private fun artistPhoto(artistId: String): List<Artwork>? {
+private fun artistPhoto(artistId: String, name: String): List<Artwork>? {
     val id = channelId(artistId) ?: return null
     val api = LocalActions.current.graph.api
     val photo by produceState(artistPhotos[id], id) {
         if (artistPhotos[id] != null) return@produceState
-        runCatching { api.artist(id).artwork }.getOrNull()?.takeIf { it.isNotEmpty() }?.let { artistPhotos[id] = it; value = it }
+        // The artist's square picture, as the library and search show it; the
+        // artist page's own pictures are banners, often with black borders in them.
+        val found = runCatching {
+            api.library().firstOrNull { it.kind == LibraryKind.Artist && channelId(it.id) == id }?.artwork?.takeIf { it.isNotEmpty() }
+                ?: api.search(name, SearchFilter.Artists).shelves.flatMap { it.items }
+                    .filterIsInstance<Item.ArtistItem>().firstOrNull { channelId(it.artist.id) == id }?.artwork
+        }.getOrNull()
+        found?.takeIf { it.isNotEmpty() }?.let { artistPhotos[id] = it; value = it }
     }
     return photo
 }
