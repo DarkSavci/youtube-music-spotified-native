@@ -9,6 +9,7 @@ import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.media.audiofx.Equalizer
+import android.media.session.MediaSession.Token as PlatformToken
 import android.net.Uri
 import android.os.Bundle
 import androidx.annotation.OptIn
@@ -39,6 +40,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.guava.future
 import kotlinx.coroutines.launch
@@ -120,6 +122,7 @@ class PlaybackService : MediaLibraryService() {
             // out, it shows the player's error instead, with a way to sign in.
             .setLibraryErrorReplicationMode(MediaLibrarySession.LIBRARY_ERROR_REPLICATION_MODE_FATAL)
             .build()
+        platformToken.value = session.platformToken
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaLibrarySession = session
@@ -138,6 +141,7 @@ class PlaybackService : MediaLibraryService() {
         focus.want(false)
         noisy(false)
         scope.cancel()
+        platformToken.value = null
         super.onDestroy()
     }
 
@@ -288,7 +292,8 @@ class PlaybackService : MediaLibraryService() {
 
         /**
          * What to play when a browser or the Assistant asks: a song chosen in
-         * a list plays the list from it; "play X" searches for X.
+         * a list plays the list from it, Shuffle play the list shuffled; "play
+         * X" searches for X.
          */
         override fun onSetMediaItems(
             mediaSession: MediaSession, controller: MediaSession.ControllerInfo,
@@ -299,6 +304,7 @@ class PlaybackService : MediaLibraryService() {
             val (tracks, at) = when {
                 first == null -> emptyList<Track>() to 0
                 !query.isNullOrBlank() -> runCatching { tree.songsFor(query) }.getOrDefault(emptyList()) to 0
+                tree.isShufflePlay(first.mediaId) -> tree.shuffled(first.mediaId).orEmpty() to 0
                 mediaItems.size == 1 && tree.resolve(first.mediaId) != null -> tree.resolve(first.mediaId)!!
                 else -> mediaItems.mapNotNull(CorePlayer::trackOf) to startIndex.coerceAtLeast(0)
             }
@@ -327,6 +333,9 @@ class PlaybackService : MediaLibraryService() {
 
     companion object {
         const val LIKE = "dev.darksavci.spotified.LIKE"
+
+        /** The running session's token, for the car's own screens to hand to Android Auto. */
+        val platformToken = MutableStateFlow<PlatformToken?>(null)
 
         /** What another app may do: play, pause, skip and seek, but neither read nor change the queue. */
         private val TRANSPORT_ONLY = Player.Commands.Builder().addAll(

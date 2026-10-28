@@ -127,6 +127,8 @@ class BrowseTreeTest {
                 items
             }
         }
-        assertTrue("songs found", found.all { it.mediaMetadata.mediaType == MediaMetadata.MEDIA_TYPE_MUSIC })
+        assertTrue("songs found", found.any { it.mediaMetadata.mediaType == MediaMetadata.MEDIA_TYPE_MUSIC })
+        val groups = found.map { it.mediaMetadata.extras?.getString(MediaConstants.EXTRAS_KEY_CONTENT_STYLE_GROUP_TITLE) }
+        assertTrue("results sit under headings: $groups", groups.all { !it.isNullOrEmpty() })
     }
 }

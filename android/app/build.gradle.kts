@@ -78,6 +78,8 @@ dependencies {
     implementation(libs.lifecycle.process)
     implementation(libs.media3.exoplayer)
     implementation(libs.media3.session)
+    implementation(libs.car.app)
+    implementation(libs.androidx.media)
     implementation(libs.media3.datasource.okhttp)
     implementation(libs.okhttp)
     implementation(libs.serialization.json)
