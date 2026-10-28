@@ -686,11 +686,8 @@ Checked on the emulator since:
   the Library (by kind, artists round) and Liked (with Shuffle); album,
   playlist, artist and podcast pages with Play and Shuffle, an artist's
   popular songs, albums, singles and the artists like them; Now Playing
-  from the session with Queue and Lyrics in its header (the car allows
-  two); lyrics that follow the song, the sung line marked between the one
-  before and the next few, the screen drawn again only when the line
-  changes; a radio from the playing song on the queue's Now playing row
-  and in each queued song's moves; and the queue,
+  from the session with Queue and Radio in its header (no lyrics in the
+  car); a radio from any queued song in its moves; and the queue,
   where a song jumps there and its button opens its moves (play now or
   next, up or down a place, to the end, out), and shuffle and repeat sit
   below. The media service's browse tree stays for Android

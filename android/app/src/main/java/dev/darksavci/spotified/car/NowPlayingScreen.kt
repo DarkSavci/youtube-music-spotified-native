@@ -17,8 +17,8 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
 /**
- * What plays, drawn by the car from the session, with the queue and the
- * lyrics in its header: the car allows two buttons there.
+ * What plays, drawn by the car from the session, with the queue and a radio
+ * from the song in its header.
  */
 class NowPlayingScreen(carContext: CarContext) : Page(carContext) {
     override fun onGetTemplate(): Template {
@@ -34,8 +34,8 @@ class NowPlayingScreen(carContext: CarContext) : Page(carContext) {
         if (current != null) {
             header.addEndHeaderAction(
                 Action.Builder()
-                    .setIcon(icon(R.drawable.ic_mic_vocal))
-                    .setOnClickListener { screenManager.push(LyricsScreen(carContext)) }
+                    .setIcon(icon(R.drawable.ic_radio))
+                    .setOnClickListener { graph.playback.startRadio(current) }
                     .build(),
             )
         }
@@ -74,8 +74,6 @@ class QueueScreen(carContext: CarContext) : Page(carContext) {
                         .setTitle(current.title)
                         .apply { if (current.artistNames.isNotEmpty()) addText(current.artistNames) }
                         .apply { art(current.artwork, 120)?.let { setImage(it, Row.IMAGE_TYPE_LARGE) } }
-                        // A radio from what plays: its button.
-                        .addAction(Action.Builder().setIcon(icon(R.drawable.ic_radio)).setOnClickListener { graph.playback.startRadio(current) }.build())
                         .setOnClickListener { showNowPlaying(screenManager, carContext) }
                         .build(),
                 )
