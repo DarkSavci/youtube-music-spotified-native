@@ -714,8 +714,23 @@ Checked on the emulator since:
   of it in a release build). Duman's "Aman Aman" with LRCLIB's line
   timings and each line's words spread across it lit word by word.
 
-Not yet checked: a car's own head unit, a watch, and a phone (only the
-emulator). Word-by-word lyrics are tested on both sides (the
+- a watch, as far as emulators go: a Wear OS 4 emulator paired with the
+  Android 14 one through the Wear OS app's "Pair with emulator" (the
+  phone's port 5601 forwarded to the host, and the watch's reversed to
+  it: the watch looks on its own 127.0.0.1:5601). The phone's Wear OS
+  app takes the app's media notification and hands it to the watch's
+  media controls rather than its notification list, as for any player;
+  the watch's media controls still say "Nothing playing", for Google's
+  own YouTube app as much as for this one, so the emulators' link does
+  not carry media and a real watch is what shows it.
+- a phone's day, on the emulator: forced into deep sleep with the screen
+  off, music played on and the next song began by itself; with Wi-Fi and
+  mobile data both cut, the song played on, and a skip played the next,
+  already fetched; a song that could not be fetched offline gave way to
+  one in the cache, and all came back with the network.
+
+Not yet checked: a car's own head unit, media on a real watch, and a real
+phone's Bluetooth (a headset coming and going). Word-by-word lyrics are tested on both sides (the
 core's parsers, the phone's lighting), but not seen on a real song: LRCLIB
 had none with word timings among the hundreds looked at.
 
