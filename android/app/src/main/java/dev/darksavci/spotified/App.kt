@@ -6,7 +6,6 @@ import dev.darksavci.spotified.api.Api
 import dev.darksavci.spotified.api.Session
 import dev.darksavci.spotified.core.Core
 import dev.darksavci.spotified.data.Downloads
-import dev.darksavci.spotified.data.LastFm
 import dev.darksavci.spotified.data.ReleasesWorker
 import dev.darksavci.spotified.data.Liked
 import dev.darksavci.spotified.data.SettingsStore
@@ -57,7 +56,6 @@ class Graph(context: Context) {
     val liked = Liked(api, scope)
     val sleep = SleepTimer(scope, playback)
     val downloads = Downloads(context, api, scope)
-    val lastFm = LastFm(context, http, settings, scope)
     val together = Together(scope, playback, settings, api, http).also { t ->
         playback.room = { command -> t.state.value.inRoom.also { if (it) t.press(command) } }
     }
@@ -75,7 +73,6 @@ class App : Application() {
         graph.scope.launch {
             runCatching { graph.core.running() }
             graph.playback.start()
-            graph.lastFm.follow(graph.playback)
             PlayerWidget.follow(this@App, graph.scope)
             ReleasesWorker.schedule(this@App)
             if (graph.downloads.syncedPlaylists.isNotEmpty()) Downloads.schedule(this@App, graph.settings.current().downloadOnWifiOnly)

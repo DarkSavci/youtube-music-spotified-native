@@ -43,12 +43,6 @@ data class Settings(
     val lyricsTranslate: Boolean = false,
     val lyricsRomanise: Boolean = false,
     val nowPlayingStyle: Int = 0,
-    val lastfmSession: String = "",
-    val lastfmUser: String = "",
-    val lastfmKey: String = "",
-    val lastfmSecret: String = "",
-    /** A token Last.fm handed out, waiting for the listener to allow the app. */
-    val lastfmToken: String = "",
     val newReleaseAlerts: Boolean = true,
     val sponsorBlock: Boolean = false,
     /** "high", "standard" or "low", on Wi-Fi and on mobile data. */
@@ -96,11 +90,6 @@ class SettingsStore(private val context: Context) {
         val translate = booleanPreferencesKey("lyricsTranslate")
         val romanise = booleanPreferencesKey("lyricsRomanise")
         val style = intPreferencesKey("nowPlayingStyle")
-        val lastfmSession = stringPreferencesKey("lastfmSession")
-        val lastfmUser = stringPreferencesKey("lastfmUser")
-        val lastfmKey = stringPreferencesKey("lastfmKey")
-        val lastfmSecret = stringPreferencesKey("lastfmSecret")
-        val lastfmToken = stringPreferencesKey("lastfmToken")
         val releaseAlerts = booleanPreferencesKey("newReleaseAlerts")
         val sponsorBlock = booleanPreferencesKey("sponsorBlock")
         val wifiQuality = stringPreferencesKey("wifiQuality")
@@ -140,11 +129,6 @@ class SettingsStore(private val context: Context) {
             lyricsTranslate = p[K.translate] ?: d.lyricsTranslate,
             lyricsRomanise = p[K.romanise] ?: d.lyricsRomanise,
             nowPlayingStyle = p[K.style] ?: d.nowPlayingStyle,
-            lastfmSession = p[K.lastfmSession] ?: d.lastfmSession,
-            lastfmUser = p[K.lastfmUser] ?: d.lastfmUser,
-            lastfmKey = p[K.lastfmKey] ?: d.lastfmKey,
-            lastfmSecret = p[K.lastfmSecret] ?: d.lastfmSecret,
-            lastfmToken = p[K.lastfmToken] ?: d.lastfmToken,
             newReleaseAlerts = p[K.releaseAlerts] ?: d.newReleaseAlerts,
             sponsorBlock = p[K.sponsorBlock] ?: d.sponsorBlock,
             wifiQuality = p[K.wifiQuality] ?: d.wifiQuality,
@@ -180,11 +164,6 @@ class SettingsStore(private val context: Context) {
             p[K.translate] = s.lyricsTranslate
             p[K.romanise] = s.lyricsRomanise
             p[K.style] = s.nowPlayingStyle
-            p[K.lastfmSession] = s.lastfmSession
-            p[K.lastfmUser] = s.lastfmUser
-            p[K.lastfmKey] = s.lastfmKey
-            p[K.lastfmSecret] = s.lastfmSecret
-            p[K.lastfmToken] = s.lastfmToken
             p[K.releaseAlerts] = s.newReleaseAlerts
             p[K.sponsorBlock] = s.sponsorBlock
             p[K.wifiQuality] = s.wifiQuality

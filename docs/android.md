@@ -29,8 +29,8 @@ Features at a glance:
   queue, timed lyrics, radios, history, stats, Listen Together.
 - **Beyond the desktop:** lyrics translation, romanisation, word-by-word
   timing, a timing offset and lyric cards; playlist import from Spotify,
-  Apple Music and Deezer; new release alerts; several accounts; Last.fm
-  scrobbling; a yearly recap; an all-black theme; Now Playing styles.
+  Apple Music and Deezer; new release alerts; several accounts; a yearly
+  recap; an all-black theme; Now Playing styles.
 - **Later:** Google Cast, Android Automotive OS, Auto's new media
   templates.
 
@@ -343,9 +343,6 @@ to.
   restarts the core.
 
 **Social.**
-- Last.fm scrobbling: sign-in through Last.fm's web auth, "now playing"
-  at the start of a song and a scrobble after half of it or four minutes,
-  from the core's position reports, queued while offline.
 - A yearly recap, Wrapped's shape: top songs, artists and albums, minutes
   played and the month of each, from the core's stats routes, as a story of
   cards that can be shared as images. In December, and on demand.
@@ -585,7 +582,7 @@ emulator, and battery and memory measured (section 10).
 - **A7: the rest.** Listen Together, stats, podcasts, moods, settings
   complete, updater, release build and signing, CI building the APK.
 - **A8: beyond the desktop.** In order of value against effort: skip
-  silence, Last.fm, lyrics translation and romanisation, the all-black
+  silence, lyrics translation and romanisation, the all-black
   theme, playlist import, the output picker, lyric cards and the
   offset; then local files, new release alerts, word-by-word lyrics, the
   yearly recap, Now Playing styles, more widgets, several accounts,
@@ -635,7 +632,7 @@ Built on 2026-10-28, as one Gradle module (`android/app`) in packages
 rather than the modules of section 2.2: `core` (the Go core and the Python
 bridge), `api` (the core's client, a port of `crates/client`), `playback`
 (the engine, `CorePlayer`, the service, the browse tree, artwork for Auto,
-the sleep timer), `data` (settings, likes, downloads, Last.fm, other
+the sleep timer), `data` (settings, likes, downloads, other
 services, import, local files, release alerts, the updater), `together`,
 `widget` and `ui`.
 
@@ -671,7 +668,7 @@ Checked on the emulator since:
 
 Not yet checked: Android Auto in a car or the Desktop Head Unit (it needs
 the Android Auto app, from the Play Store, on a phone), a watch, a phone
-(only the emulator), Last.fm with a real key, and Android's installer
+(only the emulator), and Android's installer
 finishing an update from a published release with an APK. Word-by-word lyrics are tested on both sides (the
 core's parsers, the phone's lighting), but not seen on a real song: LRCLIB
 had none with word timings among the hundreds looked at.

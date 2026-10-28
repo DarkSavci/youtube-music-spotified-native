@@ -28,7 +28,6 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
@@ -51,7 +50,6 @@ import dev.darksavci.spotified.BuildConfig
 import dev.darksavci.spotified.R
 import dev.darksavci.spotified.api.Account
 import dev.darksavci.spotified.api.CacheUsage
-import dev.darksavci.spotified.data.LastFm
 import dev.darksavci.spotified.data.Settings
 import dev.darksavci.spotified.data.Theme
 import dev.darksavci.spotified.data.Updater
@@ -165,7 +163,6 @@ fun SettingsScreen() {
         item { Action("Listening stats") { actions.go(Routes.STATS) } }
         item { Action("Your year") { actions.go(Routes.RECAP) } }
         item { Toggle("New releases", "Tell me when an artist I follow releases something", s.newReleaseAlerts) { v -> set { it.copy(newReleaseAlerts = v) } } }
-        item { LastFmSettings(s) }
         item { Action("Import playlists from Spotify, Apple Music or Deezer") { actions.go(Routes.IMPORT) } }
         item { Action("Listen Together") { actions.go(Routes.TOGETHER) } }
 
@@ -224,33 +221,6 @@ private fun AccountList() {
         list = accounts.list()
         actions.launch { actions.graph.core.restart() }
         actions.go(Routes.SIGN_IN)
-    }
-}
-
-/** Connecting Last.fm: the listener's own key and secret, then Last.fm's page to allow the app. */
-@Composable
-private fun LastFmSettings(s: Settings) {
-    val actions = LocalActions.current
-    val graph = actions.graph
-    val context = LocalContext.current
-    var key by remember(s.lastfmKey) { mutableStateOf(s.lastfmKey) }
-    var secret by remember(s.lastfmSecret) { mutableStateOf(s.lastfmSecret) }
-    when {
-        s.lastfmUser.isNotEmpty() -> {
-            Line("Last.fm", "Scrobbling as ${s.lastfmUser}")
-            Action("Disconnect Last.fm") { actions.launch { graph.settings.update { it.copy(lastfmSession = "", lastfmUser = "") } } }
-        }
-        s.lastfmToken.isNotEmpty() -> {
-            Line("Last.fm", "Allow the app on Last.fm's page, then come back here")
-            Action("I've allowed it") { actions.launch { actions.say("Connected as ${graph.lastFm.finish()}") } }
-        }
-        else -> {
-            Line("Last.fm", "Scrobble what you play. Last.fm gives each app a key of its own: make one, then enter it here.")
-            Action("Make a key on Last.fm") { LastFm.authorise(context) }
-            OutlinedTextField(key, { key = it }, Modifier.fillMaxWidth().padding(horizontal = 16.dp), label = { Text("API key") }, singleLine = true)
-            OutlinedTextField(secret, { secret = it }, Modifier.fillMaxWidth().padding(horizontal = 16.dp), label = { Text("Shared secret") }, singleLine = true)
-            Action("Connect") { actions.launch { graph.lastFm.start(key, secret) } }
-        }
     }
 }
 
