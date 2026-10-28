@@ -2,6 +2,20 @@ package dev.darksavci.spotified.ui.screens
 
 import dev.darksavci.spotified.ui.components.ThinSlider
 import android.annotation.SuppressLint
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.height
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.toMutableStateList
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
+import kotlin.math.abs
 import androidx.annotation.DrawableRes
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -305,6 +319,14 @@ private fun Action(title: String, subtitle: String? = null, @DrawableRes icon: I
 }
 
 @Composable
+private fun switchColors() = LocalPalette.current.let { p ->
+    SwitchDefaults.colors(
+        checkedTrackColor = p.accent, checkedThumbColor = Color.White, checkedBorderColor = Color.Transparent,
+        uncheckedTrackColor = p.surfaceActive, uncheckedThumbColor = p.secondary, uncheckedBorderColor = Color.Transparent,
+    )
+}
+
+@Composable
 private fun Toggle(title: String, subtitle: String, on: Boolean, onChange: (Boolean) -> Unit) {
     val p = LocalPalette.current
     Row(
@@ -315,13 +337,7 @@ private fun Toggle(title: String, subtitle: String, on: Boolean, onChange: (Bool
             Text(title, style = Type.body.copy(fontSize = 16.sp))
             Text(subtitle, style = Type.small, color = p.secondary)
         }
-        Switch(
-            on, onChange,
-            colors = SwitchDefaults.colors(
-                checkedTrackColor = p.accent, checkedThumbColor = Color.White, checkedBorderColor = Color.Transparent,
-                uncheckedTrackColor = p.surfaceActive, uncheckedThumbColor = p.secondary, uncheckedBorderColor = Color.Transparent,
-            ),
-        )
+        Switch(on, onChange, colors = switchColors())
     }
 }
 
@@ -447,6 +463,79 @@ private val PRESETS = mapOf(
     "Rock" to listOf(400, 200, -100, 200, 400),
 )
 
+/**
+ * The bands as a curve, Spotify's way: a point per band, dragged up or down,
+ * with the line through them and the area under it in the accent colour.
+ * The level is saved when the finger lifts.
+ */
+@Composable
+private fun EqualizerCurve(freqs: List<Int>, levels: List<Int>, range: Pair<Int, Int>, enabled: Boolean, onSet: (Int, Int) -> Unit) {
+    val p = LocalPalette.current
+    val live = remember(levels) { levels.toMutableStateList() }
+    val tint = if (enabled) p.accent else p.secondary
+    val (low, high) = range
+    Column(Modifier.padding(horizontal = 16.dp).fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(p.surface).padding(vertical = 16.dp)) {
+        BoxWithConstraints(Modifier.fillMaxWidth().height(220.dp)) {
+            val w = constraints.maxWidth.toFloat()
+            val h = constraints.maxHeight.toFloat()
+            val pad = with(LocalDensity.current) { 24.dp.toPx() }
+            // Each point over its label: the labels below share the width in equal columns.
+            val inner = w - 2 * with(LocalDensity.current) { 8.dp.toPx() }
+            val xOf = { i: Int -> (w - inner) / 2 + inner * (i + 0.5f) / freqs.size }
+            val yOf = { level: Int -> pad + (h - 2 * pad) * (1f - (level - low).toFloat() / (high - low).coerceAtLeast(1)) }
+            val levelOf = { y: Float -> (low + (1f - ((y - pad) / (h - 2 * pad)).coerceIn(0f, 1f)) * (high - low)).toInt() }
+            var dragging by remember { mutableIntStateOf(-1) }
+            Canvas(
+                Modifier.fillMaxSize().pointerInput(enabled, freqs.size) {
+                    if (!enabled) return@pointerInput
+                    detectDragGestures(
+                        onDragStart = { at -> dragging = freqs.indices.minByOrNull { abs(xOf(it) - at.x) } ?: -1 },
+                        onDragEnd = { if (dragging >= 0) onSet(dragging, live[dragging]); dragging = -1 },
+                        onDragCancel = { dragging = -1 },
+                    ) { change, _ ->
+                        change.consume()
+                        if (dragging >= 0) live[dragging] = levelOf(change.position.y)
+                    }
+                },
+            ) {
+                // The 0 dB line, faint.
+                val zero = yOf(0)
+                drawLine(p.outline, Offset(xOf(0), zero), Offset(xOf(freqs.size - 1), zero), strokeWidth = 2f)
+                val points = live.indices.map { Offset(xOf(it), yOf(live[it])) }
+                val line = Path().apply {
+                    moveTo(points.first().x, points.first().y)
+                    for (i in 1 until points.size) {
+                        val a = points[i - 1]
+                        val b = points[i]
+                        val mid = (a.x + b.x) / 2
+                        cubicTo(mid, a.y, mid, b.y, b.x, b.y)
+                    }
+                }
+                val area = Path().apply {
+                    addPath(line)
+                    lineTo(points.last().x, h - pad)
+                    lineTo(points.first().x, h - pad)
+                    close()
+                }
+                drawPath(area, Brush.verticalGradient(listOf(tint.copy(alpha = 0.35f), tint.copy(alpha = 0f)), startY = pad, endY = h - pad))
+                drawPath(line, tint, style = Stroke(width = 6f, cap = StrokeCap.Round))
+                points.forEachIndexed { i, pt ->
+                    drawCircle(Color.White, radius = if (i == dragging) 18f else 13f, center = pt)
+                    drawCircle(tint, radius = if (i == dragging) 11f else 7f, center = pt)
+                }
+            }
+        }
+        Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp)) {
+            freqs.forEachIndexed { i, f ->
+                Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(if (f >= 1000) "${f / 1000} kHz" else "$f Hz", style = Type.label, color = p.text)
+                    Text("%+.1f".format(live[i] / 100f), style = Type.tiny, color = p.secondary)
+                }
+            }
+        }
+    }
+}
+
 /** The phone's own equalizer, on the engine's audio session: its bands, as many as it has. */
 @Composable
 fun EqualizerScreen() {
@@ -471,7 +560,7 @@ fun EqualizerScreen() {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 GlyphButton(R.drawable.ic_chevron_left, "Back", { actions.nav.popBackStack() })
                 Text("Equalizer", style = Type.title, modifier = Modifier.weight(1f))
-                Switch(s.equalizerOn, { on -> scope.launch { graph.settings.update { it.copy(equalizerOn = on) } } }, colors = SwitchDefaults.colors(checkedTrackColor = p.accent))
+                Switch(s.equalizerOn, { on -> scope.launch { graph.settings.update { it.copy(equalizerOn = on) } } }, colors = switchColors())
                 Spacer(Modifier.width(16.dp))
             }
         }
@@ -480,28 +569,25 @@ fun EqualizerScreen() {
             return@LazyColumn
         }
         val (freqs, range) = bands
+        // A preset is lit while the bands are what it sets.
+        val presetLevels = { pre: List<Int> -> freqs.indices.map { pre.getOrElse(it * pre.size / freqs.size) { 0 } } }
+        val current = freqs.indices.map { levels.getOrElse(it) { 0 } }
         item {
             LazyRow(contentPadding = PaddingValues(16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(PRESETS.keys.toList()) { name ->
-                    Pill(name, { save(PRESETS.getValue(name).let { pre -> freqs.indices.map { pre.getOrElse(it * pre.size / freqs.size) { 0 } } }) })
+                    val levelsOf = presetLevels(PRESETS.getValue(name))
+                    Chip(name, s.equalizerOn && levelsOf == current, { save(levelsOf) })
                 }
             }
         }
-        items(freqs.indices.toList()) { b ->
-            val level = levels.getOrElse(b) { 0 }
-            var v by remember(level) { mutableFloatStateOf(level.toFloat()) }
-            Column(Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
-                Row {
-                    Text(if (freqs[b] >= 1000) "${freqs[b] / 1000} kHz" else "${freqs[b]} Hz", style = Type.body, modifier = Modifier.weight(1f))
-                    Text("%+.1f dB".format(v / 100f), style = Type.small, color = p.secondary)
-                }
-                ThinSlider(
-                    v, { v = it },
-                    { save(freqs.indices.map { i -> if (i == b) v.toInt() else levels.getOrElse(i) { 0 } }) },
-                    range.first.toFloat()..range.second.toFloat(),
-                    enabled = s.equalizerOn,
-                )
-            }
+        item {
+            EqualizerCurve(freqs, current, range, s.equalizerOn) { b, level -> save(current.mapIndexed { i, l -> if (i == b) level else l }) }
+        }
+        item {
+            Text(
+                if (s.equalizerOn) "Drag a point up or down to shape that band." else "Switch it on to shape the sound.",
+                style = Type.small, color = p.secondary, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+            )
         }
         item {
             Action("Open the system's equalizer") {
