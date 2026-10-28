@@ -85,6 +85,11 @@
                 <action android:name="androidx.media3.session.MediaLibraryService" />
                 <action android:name="android.media.browse.MediaBrowserService" />
             </intent-filter>
+            <!-- On Android Automotive, the car's own media screens show the
+                 library and what plays, although the app has a launcher. -->
+            <meta-data
+                android:name="androidx.car.app.launchable"
+                android:value="true" />
         </service>
 
         <!-- Carries playback on after a reboot, from the system's media controls. -->

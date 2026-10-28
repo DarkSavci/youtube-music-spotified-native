@@ -85,6 +85,7 @@ class MainActivity : ComponentActivity() {
             }
             Intent.ACTION_SEND -> intent.getStringExtra(Intent.EXTRA_TEXT)?.let { open(a, it) }
             Intent.ACTION_VIEW -> intent.data?.let { open(a, it.toString()) }
+            ACTION_SIGN_IN -> a.go(Routes.SIGN_IN)
         }
     }
 
@@ -115,5 +116,10 @@ class MainActivity : ComponentActivity() {
                 .flatMap { it.items }.filterIsInstance<Item.Song>().map { it.track }
         }.getOrDefault(emptyList())
         if (songs.isNotEmpty()) a.play(songs.take(25), 0, query) else a.say("Nothing was found for \"$query\".")
+    }
+
+    companion object {
+        /** Opens sign-in, as a car's "Sign in" asks when something needs an account. */
+        const val ACTION_SIGN_IN = "dev.darksavci.spotified.SIGN_IN"
     }
 }

@@ -29,7 +29,7 @@ class ArtworkProvider : ContentProvider() {
             .getOrNull() ?: throw FileNotFoundException()
         val host = Uri.parse(source).host.orEmpty()
         if (!source.startsWith("https://") || ALLOWED.none { host == it || host.endsWith(".$it") }) {
-            throw FileNotFoundException("not an artwork host")
+            throw FileNotFoundException("not an artwork host: $host")
         }
         val context = context ?: throw FileNotFoundException()
         val dir = File(context.cacheDir, "artwork").apply { mkdirs() }
@@ -65,7 +65,8 @@ class ArtworkProvider : ContentProvider() {
     companion object {
         const val AUTHORITY = "dev.darksavci.spotified.artwork"
         private const val KEEP = 400
-        private val ALLOWED = listOf("googleusercontent.com", "ytimg.com", "ggpht.com")
+        // gstatic.com holds the pictures of YouTube Music's own lists, such as Liked Music.
+        private val ALLOWED = listOf("googleusercontent.com", "ytimg.com", "ggpht.com", "gstatic.com")
 
         /** The content:// address that serves [url], or null for none. */
         fun uriFor(url: String?): Uri? {

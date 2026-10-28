@@ -18,6 +18,7 @@ import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.CommandButton
 import androidx.media3.session.LibraryResult
+import androidx.media3.session.MediaConstants
 import androidx.media3.session.MediaLibraryService
 import androidx.media3.session.MediaSession
 import androidx.media3.session.SessionCommand
@@ -55,6 +56,7 @@ class PlaybackService : MediaLibraryService() {
     private lateinit var player: CorePlayer
     private lateinit var session: MediaLibrarySession
     private lateinit var tree: BrowseTree
+    private lateinit var signIn: PendingIntent
     private lateinit var focus: Focus
     private var equalizer: Equalizer? = null
     private var noisyRegistered = false
@@ -107,9 +109,16 @@ class PlaybackService : MediaLibraryService() {
             this, 0, Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
+        signIn = PendingIntent.getActivity(
+            this, 1, Intent(this, MainActivity::class.java).setAction(MainActivity.ACTION_SIGN_IN).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
         session = MediaLibrarySession.Builder(this, player, Callback())
             .setSessionActivity(open)
             .setMediaButtonPreferences(buttons(false))
+            // A car shows a browse error only as "something went wrong"; signed
+            // out, it shows the player's error instead, with a way to sign in.
+            .setLibraryErrorReplicationMode(MediaLibrarySession.LIBRARY_ERROR_REPLICATION_MODE_FATAL)
             .build()
     }
 
@@ -239,7 +248,11 @@ class PlaybackService : MediaLibraryService() {
                 { e ->
                     // Signed out, the car says so and how to fix it, rather than that something failed.
                     if (e is ApiError.SignedOut) {
-                        LibraryResult.ofError(SessionError(SessionError.ERROR_SESSION_AUTHENTICATION_EXPIRED, "Sign in on your phone to see this."))
+                        val resolve = Bundle().apply {
+                            putString(MediaConstants.EXTRAS_KEY_ERROR_RESOLUTION_ACTION_LABEL_COMPAT, "Sign in")
+                            putParcelable(MediaConstants.EXTRAS_KEY_ERROR_RESOLUTION_ACTION_INTENT_COMPAT, signIn)
+                        }
+                        LibraryResult.ofError(SessionError(SessionError.ERROR_SESSION_AUTHENTICATION_EXPIRED, "Sign in to see this.", resolve))
                     } else {
                         LibraryResult.ofError(LibraryResult.RESULT_ERROR_IO)
                     }

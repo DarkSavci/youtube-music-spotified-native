@@ -8,9 +8,11 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.util.UnstableApi
 import dev.darksavci.spotified.api.Api
+import dev.darksavci.spotified.api.BrowsePage
 import dev.darksavci.spotified.api.Item
 import dev.darksavci.spotified.api.LibraryKind
 import dev.darksavci.spotified.api.SearchFilter
+import dev.darksavci.spotified.api.Shelf
 import dev.darksavci.spotified.api.Track
 import dev.darksavci.spotified.api.url
 import java.util.concurrent.ConcurrentHashMap
@@ -38,11 +40,13 @@ class BrowseTree(private val api: Api, private val artwork: (String?) -> Uri?) {
             folder(LIKED, "Liked"),
             folder(RECENT, "Recent"),
         )
-        parentId == HOME -> api.home().shelves.mapIndexedNotNull { i, shelf ->
-            folder("$SHELF$i", shelf.title.ifEmpty { "More" }, grid = true).takeIf { shelf.items.isNotEmpty() }
+        parentId == HOME -> loadHome().mapIndexedNotNull { i, shelf ->
+            // A shelf has no picture of its own; its first item's stands for it.
+            val art = shelf.items.firstNotNullOfOrNull { it.artwork.url(300) }
+            folder("$SHELF$i", shelf.title.ifEmpty { "More" }, art = art, grid = true).takeIf { shelf.items.isNotEmpty() }
         }
         parentId.startsWith(SHELF) -> {
-            val shelf = api.home().shelves.getOrNull(parentId.removePrefix(SHELF).toIntOrNull() ?: -1)
+            val shelf = (home ?: loadHome()).getOrNull(parentId.removePrefix(SHELF).toIntOrNull() ?: -1)
             itemsOf(parentId, shelf?.items.orEmpty())
         }
         parentId == LIBRARY -> api.library().sortedByDescending { it.pinned }.mapNotNull { item ->
@@ -64,6 +68,22 @@ class BrowseTree(private val api: Api, private val artwork: (String?) -> Uri?) {
         parentId.startsWith(ARTIST) -> songs(parentId, api.artist(parentId.removePrefix(ARTIST)).topTracks)
         parentId.startsWith(PODCAST) -> songs(parentId, api.podcast(parentId.removePrefix(PODCAST)).episodes)
         else -> emptyList()
+    }
+
+    /** Home's shelves as the car was last shown them, so a shelf's number finds the same one. */
+    @Volatile private var home: List<Shelf>? = null
+
+    /** Home's first pages: the first alone holds only a couple of shelves. */
+    private suspend fun loadHome(): List<Shelf> {
+        val first = api.home()
+        val shelves = first.shelves.toMutableList()
+        var page: BrowsePage? = first
+        for (i in 1 until HOME_PAGES) {
+            val next = page?.continuation.orEmpty().ifEmpty { break }
+            page = runCatching { api.homeMore(next) }.getOrNull()
+            shelves += page?.shelves.orEmpty()
+        }
+        return shelves.also { home = it }
     }
 
     /** Songs found for [query], as the car's search and voice ask. */
@@ -138,6 +158,7 @@ class BrowseTree(private val api: Api, private val artwork: (String?) -> Uri?) {
 
     companion object {
         const val ROOT = "root"
+        private const val HOME_PAGES = 3
         const val HOME = "home"
         const val LIBRARY = "library"
         const val LIKED = "liked"

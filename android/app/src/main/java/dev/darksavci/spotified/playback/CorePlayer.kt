@@ -186,7 +186,8 @@ class CorePlayer(private val playback: Playback, private val engine: Engine) :
                         .setTitle(track.title)
                         .setArtist(track.artistNames)
                         .setAlbumTitle(track.album?.name)
-                        .setArtworkUri(track.artwork.url(544)?.toUri())
+                        // Served by the app: a car's screen cannot fetch the web.
+                        .setArtworkUri(track.artwork.url(544).let { ArtworkProvider.uriFor(it) ?: it?.toUri() })
                         .setDurationMs(track.durationMs.takeIf { it > 0 })
                         .setIsPlayable(true)
                         .setIsBrowsable(browsable)

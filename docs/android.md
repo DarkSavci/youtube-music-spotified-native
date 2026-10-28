@@ -664,12 +664,21 @@ Checked on the emulator since:
   that it is up to date; and against a release with an APK, answered in
   the test, the APK is downloaded, checked against SHA256SUMS.txt and
   handed to Android's installer, or deleted when the sums differ;
-- signed out, Android Auto's library and recent lists say to sign in.
+- signed out, Android Auto's library and recent lists say to sign in;
+- the car's own screens, on the Android Automotive OS emulator (Android
+  13): Home, the library, liked songs and recent plays with their
+  artwork, search, a song played from a list and from a search, Now
+  Playing, the queue, next and pause. Signed out, the car shows "Sign in
+  to see this." with a Sign in button that opens the app's sign-in. It
+  took the service's `androidx.car.app.launchable` flag (without it a car
+  takes an app with a launcher for one that draws its own screens and
+  will not show it) and artwork served by the app for what plays too.
 
-Not yet checked: Android Auto in a car or the Desktop Head Unit (it needs
-the Android Auto app, from the Play Store, on a phone), a watch, a phone
-(only the emulator), and Android's installer
-finishing an update from a published release with an APK. Word-by-word lyrics are tested on both sides (the
+Not yet checked: Android Auto itself in a car or the Desktop Head Unit
+(the Play Store will not install Android Auto on an emulator, on Android
+14 or 16, so it needs a phone), a watch, a phone (only the emulator), and
+Android's installer finishing an update from a published release with an
+APK. Word-by-word lyrics are tested on both sides (the
 core's parsers, the phone's lighting), but not seen on a real song: LRCLIB
 had none with word timings among the hundreds looked at.
 

@@ -50,7 +50,7 @@ class BrowseTreeTest {
     private suspend fun signedOut(id: String): Boolean = withContext(Dispatchers.Main) {
         val result = browser.getChildren(id, 0, 200, null).await()
         val out = result.resultCode == SessionError.ERROR_SESSION_AUTHENTICATION_EXPIRED
-        if (out) assertEquals("Sign in on your phone to see this.", result.sessionError?.message)
+        if (out) assertEquals("Sign in to see this.", result.sessionError?.message)
         out
     }
 
