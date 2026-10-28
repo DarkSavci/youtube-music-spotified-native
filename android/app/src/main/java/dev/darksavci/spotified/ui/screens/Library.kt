@@ -48,6 +48,7 @@ import dev.darksavci.spotified.ui.LocalActions
 import dev.darksavci.spotified.ui.Routes
 import dev.darksavci.spotified.ui.components.Chip
 import dev.darksavci.spotified.ui.components.CoverCard
+import dev.darksavci.spotified.ui.components.Empty
 import dev.darksavci.spotified.ui.components.EntityRow
 import dev.darksavci.spotified.ui.components.Glyph
 import dev.darksavci.spotified.ui.components.GlyphButton
@@ -128,7 +129,15 @@ fun LibraryScreen() {
                             EntityRow(item.title, item.subtitle, item.artwork, open, round = item.kind == LibraryKind.Artist, pinned = item.pinned, onLongClick = menu)
                         }
                     }
-                    if (shown.isEmpty()) item(span = { GridItemSpan(maxLineSpan) }) { Problem("Nothing here yet.", null) }
+                    if (shown.isEmpty()) item(span = { GridItemSpan(maxLineSpan) }) { Empty(
+                        when (kind) {
+                            LibraryKind.Playlist -> "No playlists yet" to "Playlists you make or save show up here."
+                            LibraryKind.Album -> "No albums yet" to "Albums you save show up here."
+                            LibraryKind.Artist -> "No artists yet" to "Artists you follow show up here."
+                            LibraryKind.Podcast -> "No podcasts yet" to "Podcasts you follow show up here."
+                            null -> "Nothing here yet" to "What you save and follow shows up here."
+                        },
+                    ) }
                 }
             }
         }

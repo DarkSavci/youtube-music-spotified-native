@@ -469,6 +469,17 @@ fun Problem(message: String, onRetry: (() -> Unit)?, modifier: Modifier = Modifi
     }
 }
 
+/** Nothing to show, said plainly: a title and what would be here, no alarm. */
+@Composable
+fun Empty(text: Pair<String, String>, modifier: Modifier = Modifier) {
+    val p = LocalPalette.current
+    Column(modifier.fillMaxWidth().padding(horizontal = 32.dp, vertical = 48.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(text.first, style = Type.heading, textAlign = TextAlign.Center)
+        Spacer(Modifier.height(8.dp))
+        Text(text.second, style = Type.body, color = p.secondary, textAlign = TextAlign.Center)
+    }
+}
+
 // ---------- loading a page ----------
 
 sealed interface Load<out T> {
