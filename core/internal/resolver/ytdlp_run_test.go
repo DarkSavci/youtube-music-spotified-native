@@ -132,3 +132,17 @@ func TestYtdlpLeavesOutTheMusicClientOnceItRefused(t *testing.T) {
 		t.Errorf("the next track goes the default way only, got %v", asked)
 	}
 }
+
+// A lookup called off is a cancellation, not the track's failure: it must
+// stay recognisable as one, or it is remembered and the track refused.
+func TestYtdlpCancelledIsACancellation(t *testing.T) {
+	y := resolver.NewYtdlp("", "")
+	ctx, cancel := context.WithCancel(context.Background())
+	y.Run = func(context.Context, []string) ([]byte, []byte, error) {
+		cancel()
+		return nil, nil, errors.New("killed")
+	}
+	if _, _, err := y.Resolve(ctx, "abc"); !errors.Is(err, context.Canceled) {
+		t.Errorf("want context.Canceled, got %v", err)
+	}
+}

@@ -260,6 +260,11 @@ func (y *Ytdlp) resolveMedia(ctx context.Context, videoID string, extra []string
 	args = append(args, base+videoID)
 
 	stdout, stderr, err := y.runner()(ctx, args)
+	if err != nil && ctx.Err() != nil {
+		// Stopped, not failed: kept recognisable as a cancellation, so nothing
+		// remembers it as the track's failure.
+		return domain.Stream{}, Quality{}, fmt.Errorf("yt-dlp: %w", ctx.Err())
+	}
 	if err != nil {
 		return domain.Stream{}, Quality{}, classify(
 			fmt.Errorf("yt-dlp: %v: %s", err, said(stderr, stdout)))

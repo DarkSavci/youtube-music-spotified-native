@@ -201,6 +201,11 @@ func (s *Server) resolve(ctx context.Context, videoID string, speculative bool) 
 		s.pendingMu.Unlock()
 		select {
 		case <-f.done:
+			// The lookup joined was a guess, called off for another track;
+			// this asker still wants the track, so it asks again.
+			if errors.Is(f.err, context.Canceled) && ctx.Err() == nil {
+				return s.resolve(ctx, videoID, speculative)
+			}
 			return f.entry, f.err
 		case <-ctx.Done():
 			return resolvedEntry{}, ctx.Err()
@@ -514,6 +519,42 @@ func (s *Server) fetchUpstream(ctx context.Context, url, rng string) (*http.Resp
 	return resp, err
 }
 
+// errRefused is a track upstream will not serve, even freshly resolved.
+var errRefused = errors.New("upstream refused the track")
+
+/*
+A URL just issued is refused for its first moments.
+
+Measured on a phone: the first read of a URL fifty milliseconds after yt-dlp
+gave it was refused, and the same URL served four seconds later. Taking that
+refusal for a stale URL resolved the track again, and the new URL was just as
+young: every track cost two yt-dlp runs. So a young URL is retried after a
+pause, a little longer each time, before anything is resolved again.
+*/
+const (
+	freshRetries = 3
+	freshWait    = 700 * time.Millisecond
+)
+
+// freshFor is how long a URL counts as just issued. A variable so a test of
+// stale URLs can make every URL old at once.
+var freshFor = 15 * time.Second
+
+// young is whether e was resolved too recently for a refusal to mean it is stale.
+func young(e resolvedEntry) bool { return time.Since(e.at) < freshFor }
+
+// sleepCtx waits d, or until ctx is done.
+func sleepCtx(ctx context.Context, d time.Duration) error {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-t.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 // handleStream relays audio bytes to the UI process.
 func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 	if s.deps.Resolver == nil {
@@ -631,6 +672,7 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.net.Succeeded()
+	s.deps.Log.Debug("relayed a range", "video", videoID, "range", upstreamRange, "status", resp.StatusCode)
 	// The body is bound now, not read from resp when the function returns:
 	// the retry below reassigns resp, to nil when it cannot connect, and a
 	// deferred resp.Body then panicked on every such request.
@@ -649,6 +691,20 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 	 *
 	 * So re-resolve and retry here, once, where the client cannot see it.
 	 */
+	// A URL just issued is refused for its first moments, then served: it is
+	// waited for before anything is resolved again.
+	for try := 1; resp.StatusCode == http.StatusForbidden && young(e) && try <= freshRetries; try++ {
+		_ = resp.Body.Close()
+		if sleepCtx(r.Context(), time.Duration(try)*freshWait) != nil {
+			return
+		}
+		if resp, err = s.fetchUpstream(rctx, e.stream.URL, upstreamRange); err != nil {
+			s.deps.Log.Warn("stream fetch failed", "video", videoID, "err", err)
+			http.Error(w, "upstream unreachable", http.StatusBadGateway)
+			return
+		}
+		defer closeBody(resp.Body)
+	}
 	if resp.StatusCode == http.StatusForbidden {
 		_ = resp.Body.Close()
 		s.forgetResolution(videoID)
@@ -674,6 +730,9 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 		if resp.StatusCode == http.StatusForbidden {
 			s.forgetResolution(videoID)
 			s.deps.Log.Warn("stream still refused after re-resolve", "video", videoID)
+			// Remembered, so the preload and the retries that follow are
+			// answered at once instead of each running yt-dlp again.
+			s.failures.remember(videoID, errRefused, true)
 		}
 	}
 

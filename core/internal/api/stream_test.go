@@ -52,6 +52,7 @@ func (r *rotatingResolver) Resolve(_ context.Context, videoID string) (domain.St
 // A stale URL must be renewed behind the client's back. The browser gets audio,
 // never the refusal.
 func TestStreamRetriesOnceWhenUpstreamRefusesAStaleURL(t *testing.T) {
+	api.NoFreshGrace(t)
 	var mu sync.Mutex
 	var seen []string
 
@@ -139,6 +140,7 @@ func (a *alwaysForbiddenResolver) Resolve(_ context.Context, videoID string) (do
 // Retrying for ever would hang the player. One retry, then the failure is the
 // client's to handle.
 func TestStreamGivesUpAfterOneRetry(t *testing.T) {
+	api.NoFreshGrace(t)
 	var hits atomic.Int32
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		hits.Add(1)
@@ -318,5 +320,39 @@ func TestSignInDoesNotReuseASignedOutResolution(t *testing.T) {
 	resolve()
 	if n := res.calls.Load(); n != 2 {
 		t.Errorf("the signed-in resolution should be reused; resolved %d times", n)
+	}
+}
+
+// A URL just issued is refused for its first moments, then served: it is
+// retried after a pause, not resolved again.
+func TestStreamWaitsOutAYoungURLsRefusal(t *testing.T) {
+	var hits atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if hits.Add(1) == 1 {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		w.Header().Set("Content-Type", "audio/webm")
+		w.WriteHeader(http.StatusPartialContent)
+		_, _ = w.Write([]byte("\x1a\x45\xdf\xa3webm-bytes"))
+	}))
+	defer upstream.Close()
+
+	res := &alwaysForbiddenResolver{base: upstream.URL}
+	srv := httptest.NewServer(api.New(api.Deps{Recorder: obs.NewRecorder(), Resolver: res}))
+	defer srv.Close()
+
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/v1/stream/abc123", nil)
+	req.Header.Set("Range", "bytes=0-1023")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusPartialContent {
+		t.Fatalf("status = %d, want 206 once the young URL is served", resp.StatusCode)
+	}
+	if n := res.calls.Load(); n != 1 {
+		t.Fatalf("resolver calls = %d, want 1: a young URL's refusal is waited out", n)
 	}
 }

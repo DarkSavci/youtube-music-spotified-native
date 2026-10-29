@@ -120,8 +120,10 @@ func TestFirstPlayDownloadsTheTrackOnce(t *testing.T) {
 	if sent := u.sent.Load(); sent != int64(len(u.data)) {
 		t.Fatalf("upstream sent %d bytes for a %d-byte track", sent, len(u.data))
 	}
-	if n := u.requests.Load(); n != 1 {
-		t.Fatalf("%d upstream requests for one track", n)
+	// Signed out, as here, the download reads a window at a time, as
+	// playback does: one request a window, none repeated.
+	if n, want := u.requests.Load(), int32((len(u.data)+streamWindow-1)/streamWindow); n != want {
+		t.Fatalf("%d upstream requests for one track of %d windows", n, want)
 	}
 }
 

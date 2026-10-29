@@ -1,5 +1,6 @@
 package dev.darksavci.spotified.core
 
+import dev.darksavci.spotified.BuildConfig
 import android.content.Context
 import android.util.Log
 import com.chaquo.python.PyException
@@ -65,6 +66,7 @@ class Core(context: Context) {
         // yt-dlp, and the core's own resolver, run qjs as a program, from
         // where Android put it.
         cfg.jsRuntimes = "quickjs:${app.applicationInfo.nativeLibraryDir}/libqjs.so"
+        cfg.verbose = BuildConfig.DEBUG
         Mobile.setYtdlp(PythonYtdlp(app))
         val started = System.currentTimeMillis()
         val address = Mobile.start(cfg)

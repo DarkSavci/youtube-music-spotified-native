@@ -470,9 +470,26 @@ func (s *Server) fill(ctx context.Context, videoID string, limit int64, speculat
 			return nil
 		}
 		var status int
-		if windowed {
+		switch {
+		case !e.signedIn:
+			/*
+			 * Signed out, upstream refuses a whole file, and parallel windows
+			 * too, from a phone, while the bounded reads playback makes are
+			 * served. So the fill reads as playback does: one window at a
+			 * time. Asking the other ways first only earned a refusal, then a
+			 * second yt-dlp run for the same track.
+			 */
+			end := off + streamWindow - 1
+			if limit > 0 && end > limit-1 {
+				end = limit - 1
+			}
+			if size > 0 && end > size-1 {
+				end = size - 1
+			}
+			status, err = s.fillOnce(ctx, e.stream.URL, fmt.Sprintf("bytes=%d-%d", off, end), w)
+		case windowed:
 			status, err = s.fillWindows(ctx, e.stream.URL, w, limit)
-		} else {
+		default:
 			rng := fmt.Sprintf("bytes=%d-", off)
 			if limit > 0 {
 				rng = fmt.Sprintf("bytes=%d-%d", off, limit-1)
@@ -492,9 +509,17 @@ func (s *Server) fill(ctx context.Context, videoID string, limit int64, speculat
 			 * means stale.
 			 */
 			refusals++
+			// A URL just issued is refused for its first moments, then served:
+			// it is waited for, not resolved again.
+			if young(e) && refusals <= freshRetries {
+				if err := sleepCtx(ctx, time.Duration(refusals)*freshWait); err != nil {
+					return err
+				}
+				continue
+			}
 			switch {
-			case refusals > 3:
-				return errors.New("upstream refused the track")
+			case refusals > freshRetries+3:
+				return errRefused
 			case !windowed:
 				windowed = true
 			default:
@@ -584,6 +609,7 @@ func (s *Server) fillOnce(ctx context.Context, url, rng string, w *audiocache.Wr
 			}
 		}
 	default:
+		s.deps.Log.Debug("upstream refused a range", "range", rng, "status", resp.StatusCode)
 		return resp.StatusCode, nil
 	}
 	_, err = io.Copy(w, stallGuard(resp.Body, cancel))
