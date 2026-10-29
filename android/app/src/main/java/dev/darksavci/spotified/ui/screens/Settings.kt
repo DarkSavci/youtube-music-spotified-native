@@ -2,6 +2,8 @@ package dev.darksavci.spotified.ui.screens
 
 import dev.darksavci.spotified.ui.components.ThinSlider
 import android.annotation.SuppressLint
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -118,103 +120,115 @@ fun SettingsScreen() {
         }
     }
 
+    // Spotify's way: a short list of sections, each opening on its own.
+    var section by rememberSaveable { mutableStateOf<String?>(null) }
+    BackHandler(section != null) { section = null }
     LazyColumn(Modifier.windowInsetsPadding(WindowInsets.statusBars), contentPadding = PaddingValues(bottom = 40.dp)) {
         item {
             Row(Modifier.padding(end = 16.dp, top = 4.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                GlyphButton(R.drawable.ic_chevron_left, "Back", { actions.nav.popBackStack() })
-                Text("Settings", style = Type.bodyStrong.copy(fontSize = 17.sp))
+                GlyphButton(R.drawable.ic_chevron_left, "Back", { if (section != null) section = null else actions.nav.popBackStack() })
+                Text(section ?: "Settings", style = Type.bodyStrong.copy(fontSize = 17.sp))
             }
         }
-        item { ProfileCard(account) { actions.go(Routes.SIGN_IN) } }
-        item { AccountList() }
-
-        item { Heading("Appearance") }
-        item {
-            Choice("Theme", Theme.entries.map { it to it.name }, s.theme) { t -> set { it.copy(theme = t) } }
-        }
-        item {
-            Choice("Now Playing", listOf(0 to "Spotify", 1 to "Full art", 2 to "Lyrics first"), s.nowPlayingStyle) { i -> set { it.copy(nowPlayingStyle = i) } }
-        }
-
-        item { Heading("Playback") }
-        item { Toggle("Gapless", "Run each song into the next", s.gapless) { v -> set { it.copy(gapless = v) } } }
-        item {
-            SliderRow("Crossfade", if (s.crossfadeMs == 0L) "Off" else "${s.crossfadeMs / 1000} s", s.crossfadeMs / 1000f, 0f..12f) { v ->
-                set { it.copy(crossfadeMs = (v.toInt() * 1000).toLong()) }
-            }
-        }
-        item { Toggle("Even out loudness", "Turn loud songs down to the rest", s.normalise) { v -> set { it.copy(normalise = v) } } }
-        item { Toggle("Skip silence", "Leave out quiet stretches within a song or episode", s.skipSilence) { v -> set { it.copy(skipSilence = v) } } }
-        item { Toggle("SponsorBlock", "Skip the talk and intros listeners have marked in YouTube uploads", s.sponsorBlock) { v -> set { it.copy(sponsorBlock = v) } } }
-        item { Toggle("Autoplay", "Carry on with similar songs when the queue ends", s.autoplay) { v -> set { it.copy(autoplay = v) } } }
-        item { Toggle("Pick up where you left off", "Keep the queue for the next launch", s.resumeOnLaunch) { v -> set { it.copy(resumeOnLaunch = v) } } }
-        item { Toggle("Count plays on YouTube", "Add what you play to your YouTube history", s.reportToYouTube) { v -> set { it.copy(reportToYouTube = v) } } }
-        item { Action("Equalizer", "Shape the sound by band", R.drawable.ic_sliders_vertical) { actions.go(Routes.EQUALIZER) } }
-
-        item { Heading("Audio quality") }
-        item { Choice("On Wi-Fi", QUALITIES, s.wifiQuality) { q -> set { it.copy(wifiQuality = q) } } }
-        item { Choice("On mobile data", QUALITIES, s.mobileQuality) { q -> set { it.copy(mobileQuality = q) } } }
-
-        item { Heading("Downloads and storage") }
-        item { Toggle("Download on Wi-Fi only", "Kept playlists sync on Wi-Fi", s.downloadOnWifiOnly) { v -> set { it.copy(downloadOnWifiOnly = v) } } }
-        item {
-            val c = cache
-            SliderRow(
-                "Song cache", "${s.cacheMaxMb / 1024.0} GB".replace(".0 ", " "), s.cacheMaxMb / 512f, 1f..16f,
-                subtitle = if (c == null) "Counting\u2026" else "${c.tracks} songs, ${c.bytes / 1_048_576} MB used",
-            ) { v -> set { it.copy(cacheMaxMb = (v.toInt() * 512).toLong()) } }
-        }
-        item {
-            Action("Empty the cache", "Downloads are kept", R.drawable.ic_trash_2, chevron = false) {
-                actions.launch { cache = graph.api.clearCache(); actions.say("Emptied; downloads were kept") }
-            }
-        }
-
-        item { Heading("Lyrics") }
-        item { Toggle("Romanise", "Show lyrics in other scripts in Latin letters", s.lyricsRomanise) { v -> set { it.copy(lyricsRomanise = v) } } }
-        item { Toggle("Translate", "Show a translation into your language (sent to Google Translate)", s.lyricsTranslate) { v -> set { it.copy(lyricsTranslate = v) } } }
-
-        item { Heading("Your listening") }
-        item { Action("Listening stats", "Your top songs, artists and hours", R.drawable.ic_audio_lines) { actions.go(Routes.STATS) } }
-        item { Action("Your year", "Your year in music, as a story", R.drawable.ic_gift) { actions.go(Routes.RECAP) } }
-        item { Toggle("New releases", "Tell me when an artist I follow releases something", s.newReleaseAlerts) { v -> set { it.copy(newReleaseAlerts = v) } } }
-        item { Action("Import playlists", "From Spotify, Apple Music or Deezer", R.drawable.ic_list_plus) { actions.go(Routes.IMPORT) } }
-        item { Action("Listen Together", "Play in step with friends", R.drawable.ic_users) { actions.go(Routes.TOGETHER) } }
-
-        item { Heading("Battery") }
-        item {
-            val pm = context.getSystemService(Context.POWER_SERVICE) as PowerManager
-            val exempt = pm.isIgnoringBatteryOptimizations(context.packageName)
-            if (exempt) {
-                Line("Background playback", "Battery optimisation is off for this app, so music keeps playing")
-            } else {
-                Action("Let it play in the background", "Battery optimisation can stop music on some phones", R.drawable.ic_headphones) {
-                    @SuppressLint("BatteryLife")
-                    val intent = Intent(SystemSettings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:${context.packageName}"))
-                    runCatching { context.startActivity(intent) }
+        if (section == null) {
+            item { ProfileCard(account) { actions.go(Routes.SIGN_IN) } }
+            item { AccountList() }
+            item { Action("Appearance", "Theme \u2022 Now Playing style", R.drawable.ic_layout_grid) { section = "Appearance" } }
+            item { Action("Playback", "Gapless \u2022 Crossfade \u2022 Autoplay \u2022 Equalizer", R.drawable.ic_volume_2) { section = "Playback" } }
+            item { Action("Audio quality", "Wi-Fi \u2022 Mobile data", R.drawable.ic_audio_lines) { section = "Audio quality" } }
+            item { Action("Downloads and storage", "Wi-Fi only \u2022 Song cache", R.drawable.ic_archive) { section = "Downloads and storage" } }
+            item { Action("Lyrics", "Romanise \u2022 Translate", R.drawable.ic_mic_vocal) { section = "Lyrics" } }
+            item { Action("Your listening", "Stats \u2022 Your year \u2022 New releases \u2022 Import", R.drawable.ic_gift) { section = "Your listening" } }
+            item { Action("Battery", "Background playback", R.drawable.ic_headphones) { section = "Battery" } }
+            item { Action("About", "Version \u2022 Updates", R.drawable.ic_info) { section = "About" } }
+            if (account != null) {
+                item {
+                    Box(Modifier.fillMaxWidth().padding(top = 32.dp), contentAlignment = Alignment.Center) {
+                        Text(
+                            "Log out", style = Type.bodyStrong, color = LocalPalette.current.window,
+                            modifier = Modifier.clip(RoundedCornerShape(24.dp)).background(LocalPalette.current.text)
+                                .clickable(onClick = signOut).padding(horizontal = 32.dp, vertical = 12.dp),
+                        )
+                    }
                 }
             }
         }
-        item {
-            Action("Why music stops on some phones", "dontkillmyapp.com", R.drawable.ic_external_link) {
-                context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://dontkillmyapp.com")))
-            }
-        }
-
-        item { Heading("About") }
-        item { Line("Version", "${BuildConfig.VERSION_NAME}. Not affiliated with Spotify or YouTube.") }
-        item { Action("Check for updates", null, R.drawable.ic_refresh_cw) { actions.launch { Updater.check(context, graph.http, actions::say) } } }
-
-        if (account != null) {
+        if (section == "Appearance") {
             item {
-                Box(Modifier.fillMaxWidth().padding(top = 32.dp), contentAlignment = Alignment.Center) {
-                    Text(
-                        "Log out", style = Type.bodyStrong, color = LocalPalette.current.window,
-                        modifier = Modifier.clip(RoundedCornerShape(24.dp)).background(LocalPalette.current.text)
-                            .clickable(onClick = signOut).padding(horizontal = 32.dp, vertical = 12.dp),
-                    )
+                Choice("Theme", Theme.entries.map { it to it.name }, s.theme) { t -> set { it.copy(theme = t) } }
+            }
+            item {
+                Choice("Now Playing", listOf(0 to "Spotify", 1 to "Full art", 2 to "Lyrics first"), s.nowPlayingStyle) { i -> set { it.copy(nowPlayingStyle = i) } }
+            }
+        }
+        if (section == "Playback") {
+            item { Toggle("Gapless", "Run each song into the next", s.gapless) { v -> set { it.copy(gapless = v) } } }
+            item {
+                SliderRow("Crossfade", if (s.crossfadeMs == 0L) "Off" else "${s.crossfadeMs / 1000} s", s.crossfadeMs / 1000f, 0f..12f) { v ->
+                    set { it.copy(crossfadeMs = (v.toInt() * 1000).toLong()) }
                 }
             }
+            item { Toggle("Even out loudness", "Turn loud songs down to the rest", s.normalise) { v -> set { it.copy(normalise = v) } } }
+            item { Toggle("Skip silence", "Leave out quiet stretches within a song or episode", s.skipSilence) { v -> set { it.copy(skipSilence = v) } } }
+            item { Toggle("SponsorBlock", "Skip the talk and intros listeners have marked in YouTube uploads", s.sponsorBlock) { v -> set { it.copy(sponsorBlock = v) } } }
+            item { Toggle("Autoplay", "Carry on with similar songs when the queue ends", s.autoplay) { v -> set { it.copy(autoplay = v) } } }
+            item { Toggle("Pick up where you left off", "Keep the queue for the next launch", s.resumeOnLaunch) { v -> set { it.copy(resumeOnLaunch = v) } } }
+            item { Toggle("Count plays on YouTube", "Add what you play to your YouTube history", s.reportToYouTube) { v -> set { it.copy(reportToYouTube = v) } } }
+            item { Action("Equalizer", "Shape the sound by band", R.drawable.ic_sliders_vertical) { actions.go(Routes.EQUALIZER) } }
+        }
+        if (section == "Audio quality") {
+            item { Choice("On Wi-Fi", QUALITIES, s.wifiQuality) { q -> set { it.copy(wifiQuality = q) } } }
+            item { Choice("On mobile data", QUALITIES, s.mobileQuality) { q -> set { it.copy(mobileQuality = q) } } }
+        }
+        if (section == "Downloads and storage") {
+            item { Toggle("Download on Wi-Fi only", "Kept playlists sync on Wi-Fi", s.downloadOnWifiOnly) { v -> set { it.copy(downloadOnWifiOnly = v) } } }
+            item {
+                val c = cache
+                SliderRow(
+                    "Song cache", "${s.cacheMaxMb / 1024.0} GB".replace(".0 ", " "), s.cacheMaxMb / 512f, 1f..16f,
+                    subtitle = if (c == null) "Counting\u2026" else "${c.tracks} songs, ${c.bytes / 1_048_576} MB used",
+                ) { v -> set { it.copy(cacheMaxMb = (v.toInt() * 512).toLong()) } }
+            }
+            item {
+                Action("Empty the cache", "Downloads are kept", R.drawable.ic_trash_2, chevron = false) {
+                    actions.launch { cache = graph.api.clearCache(); actions.say("Emptied; downloads were kept") }
+                }
+            }
+        }
+        if (section == "Lyrics") {
+            item { Toggle("Romanise", "Show lyrics in other scripts in Latin letters", s.lyricsRomanise) { v -> set { it.copy(lyricsRomanise = v) } } }
+            item { Toggle("Translate", "Show a translation into your language (sent to Google Translate)", s.lyricsTranslate) { v -> set { it.copy(lyricsTranslate = v) } } }
+        }
+        if (section == "Your listening") {
+            item { Action("Listening stats", "Your top songs, artists and hours", R.drawable.ic_audio_lines) { actions.go(Routes.STATS) } }
+            item { Action("Your year", "Your year in music, as a story", R.drawable.ic_gift) { actions.go(Routes.RECAP) } }
+            item { Toggle("New releases", "Tell me when an artist I follow releases something", s.newReleaseAlerts) { v -> set { it.copy(newReleaseAlerts = v) } } }
+            item { Action("Import playlists", "From Spotify, Apple Music or Deezer", R.drawable.ic_list_plus) { actions.go(Routes.IMPORT) } }
+            item { Action("Listen Together", "Play in step with friends", R.drawable.ic_users) { actions.go(Routes.TOGETHER) } }
+        }
+        if (section == "Battery") {
+            item {
+                val pm = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+                val exempt = pm.isIgnoringBatteryOptimizations(context.packageName)
+                if (exempt) {
+                    Line("Background playback", "Battery optimisation is off for this app, so music keeps playing")
+                } else {
+                    Action("Let it play in the background", "Battery optimisation can stop music on some phones", R.drawable.ic_headphones) {
+                        @SuppressLint("BatteryLife")
+                        val intent = Intent(SystemSettings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:${context.packageName}"))
+                        runCatching { context.startActivity(intent) }
+                    }
+                }
+            }
+            item {
+                Action("Why music stops on some phones", "dontkillmyapp.com", R.drawable.ic_external_link) {
+                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://dontkillmyapp.com")))
+                }
+            }
+        }
+        if (section == "About") {
+            item { Line("Version", "${BuildConfig.VERSION_NAME}. Not affiliated with Spotify or YouTube.") }
+            item { Action("Check for updates", null, R.drawable.ic_refresh_cw) { actions.launch { Updater.check(context, graph.http, actions::say) } } }
         }
     }
 }
@@ -283,11 +297,6 @@ private fun AccountList() {
         actions.launch { actions.graph.core.restart() }
         actions.go(Routes.SIGN_IN)
     }
-}
-
-@Composable
-private fun Heading(text: String) {
-    Text(text, style = Type.bodyStrong.copy(fontSize = 19.sp), modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 28.dp, bottom = 6.dp))
 }
 
 @Composable
