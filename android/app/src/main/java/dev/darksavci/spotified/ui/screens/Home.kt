@@ -52,6 +52,8 @@ import dev.darksavci.spotified.ui.components.ShelfRow
 import dev.darksavci.spotified.ui.components.rememberLoader
 import dev.darksavci.spotified.ui.theme.LocalPalette
 import dev.darksavci.spotified.ui.theme.Type
+import androidx.compose.ui.platform.LocalConfiguration
+import dev.darksavci.spotified.ui.components.TrackRow
 import coil3.compose.AsyncImage
 import java.time.LocalTime
 
@@ -93,16 +95,25 @@ fun HomeScreen() {
             Load.Pending -> item { Loading() }
             is Load.Failed -> item { Problem(s.message, { page.reload() }) }
             is Load.Ready -> {
-                items(s.value.shelves.filter { it.items.isNotEmpty() }) { shelf ->
+                val shelves = s.value.shelves.filter { it.items.isNotEmpty() }
+                // One shelf of songs as rows breaks up the covers: Quick picks, as YouTube Music has it, or else the first.
+                val songShelves = shelves.filter { sh -> sh.items.size > 4 && sh.items.all { it is Item.Song } }
+                val asRows = songShelves.firstOrNull { it.title.equals("Quick picks", ignoreCase = true) } ?: songShelves.firstOrNull()
+                items(shelves) { shelf ->
                     SectionTitle(
                         shelf.title, action = if (shelf.showAllId.isNotEmpty()) "Show all" else null,
                         onAction = { actions.go(Routes.browse(shelf.showAllId, shelf.showAllParams, shelf.title)) },
                     )
-                    // Every shelf as covers; a song plays its shelf's songs from there.
                     val songs = shelf.items.filterIsInstance<Item.Song>().map { it.track }
-                    ShelfRow(shelf.items, { item ->
-                        if (item is Item.Song) actions.play(songs, songs.indexOf(item.track), shelf.title) else actions.open(item)
-                    }, actions::menuFor)
+                    if (shelf === asRows) {
+                        // A shelf of songs reads as rows, four to a column, swiped sideways: YouTube Music's quick picks.
+                        SongColumns(songs, shelf.title)
+                    } else {
+                        // The rest as covers; a song plays its shelf's songs from there.
+                        ShelfRow(shelf.items, { item ->
+                            if (item is Item.Song) actions.play(songs, songs.indexOf(item.track), shelf.title) else actions.open(item)
+                        }, actions::menuFor)
+                    }
                 }
                 if (s.value.shelves.isEmpty()) item { Problem("Nothing here yet.", null) }
             }
@@ -110,6 +121,22 @@ fun HomeScreen() {
         item { Spacer(Modifier.height(16.dp)) }
         item {
             Text("", style = Type.small, color = p.secondary)
+        }
+    }
+}
+
+/** Songs in columns of four rows, each column most of the screen wide so the next one shows at the edge. */
+@Composable
+private fun SongColumns(songs: List<Track>, origin: String) {
+    val actions = LocalActions.current
+    val width = LocalConfiguration.current.screenWidthDp.dp * 0.86f
+    LazyRow(contentPadding = PaddingValues(end = 16.dp)) {
+        items(songs.chunked(4)) { column ->
+            Column(Modifier.width(width)) {
+                column.forEach { t ->
+                    TrackRow(t, { actions.play(songs, songs.indexOf(t), origin) }, { actions.menuFor(t) })
+                }
+            }
         }
     }
 }

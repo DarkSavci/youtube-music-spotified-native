@@ -126,7 +126,7 @@ fun LibraryScreen() {
                         if (grid) {
                             CoverCard(item.title, item.subtitle, item.artwork, open, size = 104.dp, round = item.kind == LibraryKind.Artist, onLongClick = menu)
                         } else {
-                            EntityRow(item.title, item.subtitle, item.artwork, open, round = item.kind == LibraryKind.Artist, pinned = item.pinned, onLongClick = menu)
+                            EntityRow(item.title, kindLine(item), item.artwork, open, round = item.kind == LibraryKind.Artist, pinned = item.pinned, onLongClick = menu)
                         }
                     }
                     if (shown.isEmpty()) item(span = { GridItemSpan(maxLineSpan) }) { Empty(
@@ -175,4 +175,16 @@ private fun asItem(item: LibraryItem): Item = when (item.kind) {
     LibraryKind.Album -> Item.AlbumItem(Album(id = item.id, title = item.title, artwork = item.artwork))
     LibraryKind.Artist -> Item.ArtistItem(Artist(id = item.id, name = item.title, artwork = item.artwork))
     LibraryKind.Podcast -> Item.PodcastItem(Podcast(id = item.id, title = item.title, author = item.subtitle, artwork = item.artwork))
+}
+
+/** What a library item is, then what the core says of it: "Playlist • DarkSavci • 50 songs", as Spotify and YouTube Music write it. */
+private fun kindLine(item: LibraryItem): String {
+    val kind = when (item.kind) {
+        LibraryKind.Playlist -> "Playlist"
+        LibraryKind.Album -> "Album"
+        LibraryKind.Artist -> "Artist"
+        LibraryKind.Podcast -> "Podcast"
+    }
+    val rest = item.subtitle.split(" • ", " · ").map { it.trim() }.filter { it.isNotEmpty() && !it.equals(kind, ignoreCase = true) }
+    return (listOf(kind) + rest).joinToString(" • ")
 }
