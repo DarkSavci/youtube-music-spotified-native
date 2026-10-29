@@ -55,7 +55,6 @@ import dev.darksavci.spotified.ui.theme.Type
 import androidx.compose.ui.platform.LocalConfiguration
 import dev.darksavci.spotified.ui.components.TrackRow
 import coil3.compose.AsyncImage
-import java.time.LocalTime
 
 @Composable
 fun HomeScreen() {
@@ -70,21 +69,15 @@ fun HomeScreen() {
     val p = LocalPalette.current
 
     LazyColumn(Modifier.windowInsetsPadding(WindowInsets.statusBars), contentPadding = PaddingValues(bottom = 24.dp)) {
-        // The greeting with the way to history and settings, then the moods on a row of their own.
-        item {
-            Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp, top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                Avatar(account) { actions.go(Routes.SETTINGS) }
-                Spacer(Modifier.width(12.dp))
-                Text(greeting(), style = Type.title, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                GlyphButton(R.drawable.ic_clock, "History", { actions.go(Routes.HISTORY) })
-                GlyphButton(R.drawable.ic_settings, "Settings", { actions.go(Routes.SETTINGS) })
-            }
-        }
+        // Your picture, which opens the side menu, and the moods beside it, as Spotify's Home has them.
         item {
             val chips = (state as? Load.Ready<BrowsePage>)?.value?.chips.orEmpty()
-            LazyRow(contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                item { Chip("All", mood.isEmpty(), { mood = "" }) }
-                items(chips) { chip -> Chip(chip.title, chip.params == mood, { mood = if (mood == chip.params) "" else chip.params }) }
+            Row(Modifier.fillMaxWidth().padding(start = 16.dp, top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                Avatar(account) { actions.drawerOpen = true }
+                LazyRow(contentPadding = PaddingValues(start = 10.dp, end = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    item { Chip("All", mood.isEmpty(), { mood = "" }) }
+                    items(chips) { chip -> Chip(chip.title, chip.params == mood, { mood = if (mood == chip.params) "" else chip.params }) }
+                }
             }
         }
         val history = (recentState as? Load.Ready<List<Track>>)?.value.orEmpty()
@@ -139,13 +132,6 @@ private fun SongColumns(songs: List<Track>, origin: String) {
             }
         }
     }
-}
-
-/** Good morning, afternoon or evening, by the phone's clock. */
-private fun greeting(): String = when (LocalTime.now().hour) {
-    in 5..11 -> "Good morning"
-    in 12..17 -> "Good afternoon"
-    else -> "Good evening"
 }
 
 @Composable

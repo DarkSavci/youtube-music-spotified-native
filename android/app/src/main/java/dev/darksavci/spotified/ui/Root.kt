@@ -146,6 +146,9 @@ fun Root(onReady: (Actions) -> Unit) {
             BackHandler(actions.nowPlayingOpen) { actions.nowPlayingOpen = false }
             BackHandler(actions.nowPlayingOpen && actions.lyricsOpen) { actions.lyricsOpen = false }
 
+            SideMenu(actions)
+            BackHandler(actions.drawerOpen) { actions.drawerOpen = false }
+
             Menus()
 
             SnackbarHost(

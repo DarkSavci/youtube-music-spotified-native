@@ -66,6 +66,8 @@ class Actions(val graph: Graph, val nav: NavHostController, private val context:
     var menu by mutableStateOf<MenuTarget?>(null)
     var nowPlayingOpen by mutableStateOf(false)
     var lyricsOpen by mutableStateOf(false)
+    /** The side menu Home's picture opens. */
+    var drawerOpen by mutableStateOf(false)
 
     val playback get() = graph.playback
 
