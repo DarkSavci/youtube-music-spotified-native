@@ -5,6 +5,7 @@ import android.content.Context
 import dev.darksavci.spotified.api.Api
 import dev.darksavci.spotified.api.Session
 import dev.darksavci.spotified.core.Core
+import dev.darksavci.spotified.data.Crashes
 import dev.darksavci.spotified.data.Downloads
 import dev.darksavci.spotified.data.ReleasesWorker
 import dev.darksavci.spotified.data.Liked
@@ -68,6 +69,7 @@ class App : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        Crashes.install(this)
         graph = Graph(this)
         // The core starts at once, beside the first frame, and the session
         // connects as soon as it answers.
