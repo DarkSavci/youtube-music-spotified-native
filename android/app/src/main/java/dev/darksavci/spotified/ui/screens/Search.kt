@@ -54,6 +54,7 @@ import dev.darksavci.spotified.api.SearchFilter
 import dev.darksavci.spotified.api.SearchResults
 import dev.darksavci.spotified.data.Services
 import dev.darksavci.spotified.ui.LocalActions
+import dev.darksavci.spotified.ui.ProfileButton
 import dev.darksavci.spotified.ui.Routes
 import dev.darksavci.spotified.ui.components.Art
 import dev.darksavci.spotified.ui.components.Chip
@@ -88,7 +89,10 @@ fun SearchScreen(initial: String = "") {
     }
 
     Column(Modifier.windowInsetsPadding(WindowInsets.statusBars)) {
-        Text("Search", style = Type.title, modifier = Modifier.padding(start = 16.dp, top = 12.dp, bottom = 12.dp))
+        Row(Modifier.padding(start = 16.dp, top = 12.dp, bottom = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            ProfileButton(actions, Modifier.padding(end = 12.dp))
+            Text("Search", style = Type.title)
+        }
         Row(
             Modifier.padding(horizontal = 16.dp).fillMaxWidth().clip(RoundedCornerShape(6.dp))
                 .background(if (typed.isEmpty()) Color.White else p.surface).padding(horizontal = 12.dp, vertical = 10.dp),

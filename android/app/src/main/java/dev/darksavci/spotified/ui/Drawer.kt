@@ -107,3 +107,18 @@ private fun Item(@DrawableRes icon: Int, text: String, onClick: () -> Unit) {
         Text(text, style = Type.body.copy(fontSize = 17.sp))
     }
 }
+
+/** Your picture, as the tabs' titles carry it: it opens the side menu. */
+@Composable
+fun ProfileButton(actions: Actions, modifier: Modifier = Modifier) {
+    val p = LocalPalette.current
+    val account by produceState<Account?>(null) { value = runCatching { actions.graph.api.account() }.getOrNull() }
+    Box(
+        modifier.size(32.dp).clip(CircleShape).background(p.accent).clickable(onClickLabel = "Your account") { actions.drawerOpen = true },
+        contentAlignment = Alignment.Center,
+    ) {
+        val avatar = account?.avatarUrl.orEmpty()
+        if (avatar.isNotEmpty()) AsyncImage(avatar, null, Modifier.fillMaxSize())
+        else Text(account?.name?.take(1)?.uppercase() ?: "?", style = Type.label, color = p.onAccent)
+    }
+}

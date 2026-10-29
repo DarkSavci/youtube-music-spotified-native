@@ -35,11 +35,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.darksavci.spotified.R
-import dev.darksavci.spotified.api.Account
 import dev.darksavci.spotified.api.BrowsePage
 import dev.darksavci.spotified.api.Item
 import dev.darksavci.spotified.api.Track
 import dev.darksavci.spotified.ui.LocalActions
+import dev.darksavci.spotified.ui.ProfileButton
 import dev.darksavci.spotified.ui.Routes
 import dev.darksavci.spotified.ui.components.Art
 import dev.darksavci.spotified.ui.components.Chip
@@ -63,7 +63,6 @@ fun HomeScreen() {
     var mood by remember { mutableStateOf("") }
     val page = rememberLoader("home:$mood") { api.home(mood) }
     val recent = rememberLoader("home:recent") { runCatching { api.history() }.getOrDefault(emptyList()) }
-    val account by produceState<Account?>(null) { value = runCatching { api.account() }.getOrNull() }
     val state by page.state.collectAsStateWithLifecycle()
     val recentState by recent.state.collectAsStateWithLifecycle()
     val p = LocalPalette.current
@@ -73,7 +72,7 @@ fun HomeScreen() {
         item {
             val chips = (state as? Load.Ready<BrowsePage>)?.value?.chips.orEmpty()
             Row(Modifier.fillMaxWidth().padding(start = 16.dp, top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                Avatar(account) { actions.drawerOpen = true }
+                ProfileButton(actions)
                 LazyRow(contentPadding = PaddingValues(start = 10.dp, end = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     item { Chip("All", mood.isEmpty(), { mood = "" }) }
                     items(chips) { chip -> Chip(chip.title, chip.params == mood, { mood = if (mood == chip.params) "" else chip.params }) }
@@ -134,20 +133,6 @@ private fun SongColumns(songs: List<Track>, origin: String) {
     }
 }
 
-@Composable
-private fun Avatar(account: Account?, onClick: () -> Unit) {
-    val p = LocalPalette.current
-    Box(
-        Modifier.size(32.dp).clip(CircleShape).background(p.accent).clickable(onClickLabel = "Your account", onClick = onClick),
-        contentAlignment = Alignment.Center,
-    ) {
-        if (account?.avatarUrl?.isNotEmpty() == true) {
-            AsyncImage(account.avatarUrl, null, Modifier.size(32.dp).clip(CircleShape))
-        } else {
-            Text(account?.name?.take(1)?.uppercase() ?: "?", style = Type.label, color = p.onAccent)
-        }
-    }
-}
 
 /** Two columns of what was played lately, as Spotify's Home opens. */
 @Composable

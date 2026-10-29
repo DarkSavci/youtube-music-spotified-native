@@ -45,6 +45,7 @@ import dev.darksavci.spotified.api.Playlist
 import dev.darksavci.spotified.api.Podcast
 import dev.darksavci.spotified.ui.Actions
 import dev.darksavci.spotified.ui.LocalActions
+import dev.darksavci.spotified.ui.ProfileButton
 import dev.darksavci.spotified.ui.Routes
 import dev.darksavci.spotified.ui.components.Chip
 import dev.darksavci.spotified.ui.components.CoverCard
@@ -75,6 +76,7 @@ fun LibraryScreen() {
 
     Column(Modifier.windowInsetsPadding(WindowInsets.statusBars)) {
         Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp, top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            if (folder == null) ProfileButton(actions, Modifier.padding(end = 12.dp))
             Text(folders.firstOrNull { it.id == folder }?.name ?: "Your Library", style = Type.title, modifier = Modifier.weight(1f))
             GlyphButton(R.drawable.ic_search, "Search", { actions.go(Routes.SEARCH) })
             GlyphButton(R.drawable.ic_plus, "New playlist", { actions.addTo(emptyList()) })

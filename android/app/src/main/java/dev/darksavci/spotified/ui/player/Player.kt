@@ -283,6 +283,7 @@ private fun NowPlayingPage(onClose: () -> Unit) {
             }
             Spacer(Modifier.height(16.dp))
             if (style != STYLE_LYRICS_FIRST) LyricsCard(track, tint, onExpand = { actions.lyricsOpen = true })
+            PlayerCards(track, actions)
             Spacer(Modifier.height(32.dp))
         }
     }
