@@ -2,6 +2,22 @@
 
 Every release of Youtube Music Spotified Native, newest first.
 
+## 0.5.0 — 2026-10-29
+
+### New
+
+- An app for Android phones, released with this one: your library, search, the queue, lyrics, offline songs, the media notification and lock screen, Android Auto and watches. Install `spotified-0.5.0-android-arm64-v8a.apk` on a phone (`-universal` if that one will not install); it updates itself from here on
+
+### Faster
+
+- Songs start in about a fifth of a second for Premium accounts
+- Without Premium, songs start sooner: each song is looked up once, not two or three times
+
+### Fixed
+
+- A song whose link was brand new could be looked up again, and sometimes skipped, because YouTube refuses a new link for its first moments
+- A song skipped before it started could be counted as one that failed to play
+
 ## 0.4.9 — 2026-10-27
 
 ### New
