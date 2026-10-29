@@ -57,6 +57,10 @@ type resolvedEntry struct {
 	stream  domain.Stream
 	quality resolver.Quality
 	at      time.Time
+	// signedIn is whether it was resolved with the account. A URL resolved
+	// signed out is for the standard tiers, and reusing it after a sign-in
+	// kept a Premium listener on them until it expired, hours later.
+	signedIn bool
 }
 
 // storedEntry is resolvedEntry as it is written to disk.
@@ -64,6 +68,10 @@ type storedEntry struct {
 	Stream  domain.Stream    `json:"stream"`
 	Quality resolver.Quality `json:"quality"`
 	At      time.Time        `json:"at"`
+	// Absent from entries written before it existed, which were the
+	// signed-out kind as often as not; read as false, they are never
+	// reused signed in.
+	SignedIn bool `json:"signedIn"`
 }
 
 // URLStore keeps resolutions across restarts. The control store implements
@@ -134,10 +142,11 @@ func (s *Server) resolveSpeculative(ctx context.Context, videoID string) (resolv
 }
 
 func (s *Server) resolve(ctx context.Context, videoID string, speculative bool) (resolvedEntry, error) {
-	if e, ok := s.streams.get(videoID); ok {
+	signedIn := s.signedIn()
+	if e, ok := s.streams.get(videoID); ok && e.signedIn == signedIn {
 		return e, nil
 	}
-	if e, ok := s.storedResolution(ctx, videoID); ok {
+	if e, ok := s.storedResolution(ctx, videoID); ok && e.signedIn == signedIn {
 		s.streams.put(videoID, e)
 		return e, nil
 	}
@@ -192,6 +201,11 @@ func (s *Server) resolve(ctx context.Context, videoID string, speculative bool) 
 		s.pendingMu.Unlock()
 		select {
 		case <-f.done:
+			// The lookup joined was a guess, called off for another track;
+			// this asker still wants the track, so it asks again.
+			if errors.Is(f.err, context.Canceled) && ctx.Err() == nil {
+				return s.resolve(ctx, videoID, speculative)
+			}
 			return f.entry, f.err
 		case <-ctx.Done():
 			return resolvedEntry{}, ctx.Err()
@@ -234,7 +248,7 @@ func (s *Server) resolve(ctx context.Context, videoID string, speculative bool) 
 		"took", time.Since(started).Round(time.Millisecond), "err", err)
 
 	if err == nil {
-		f.entry = resolvedEntry{stream: stream, quality: quality, at: time.Now()}
+		f.entry = resolvedEntry{stream: stream, quality: quality, at: time.Now(), signedIn: signedIn}
 		s.streams.put(videoID, f.entry)
 		s.storeResolution(videoID, f.entry)
 		s.lastFailure.Delete(videoID)
@@ -253,6 +267,11 @@ func (s *Server) resolve(ctx context.Context, videoID string, speculative bool) 
 	return f.entry, f.err
 }
 
+// signedIn is whether resolutions made now are made with the account.
+func (s *Server) signedIn() bool {
+	return s.deps.Account != nil && s.deps.Account.SignedIn()
+}
+
 // storedResolution reads a resolution saved by an earlier run.
 func (s *Server) storedResolution(ctx context.Context, videoID string) (resolvedEntry, bool) {
 	if s.deps.URLs == nil {
@@ -266,7 +285,7 @@ func (s *Server) storedResolution(ctx context.Context, videoID string) (resolved
 	if json.Unmarshal(raw, &st) != nil {
 		return resolvedEntry{}, false
 	}
-	e := resolvedEntry{stream: st.Stream, quality: st.Quality, at: st.At}
+	e := resolvedEntry{stream: st.Stream, quality: st.Quality, at: st.At, signedIn: st.SignedIn}
 	return e, e.usable(time.Now())
 }
 
@@ -274,7 +293,7 @@ func (s *Server) storeResolution(videoID string, e resolvedEntry) {
 	if s.deps.URLs == nil || e.stream.ExpiresAt.IsZero() {
 		return
 	}
-	raw, err := json.Marshal(storedEntry{Stream: e.stream, Quality: e.quality, At: e.at})
+	raw, err := json.Marshal(storedEntry{Stream: e.stream, Quality: e.quality, At: e.at, SignedIn: e.signedIn})
 	if err != nil {
 		return
 	}
@@ -500,6 +519,42 @@ func (s *Server) fetchUpstream(ctx context.Context, url, rng string) (*http.Resp
 	return resp, err
 }
 
+// errRefused is a track upstream will not serve, even freshly resolved.
+var errRefused = errors.New("upstream refused the track")
+
+/*
+A URL just issued is refused for its first moments.
+
+Measured on a phone: the first read of a URL fifty milliseconds after yt-dlp
+gave it was refused, and the same URL served four seconds later. Taking that
+refusal for a stale URL resolved the track again, and the new URL was just as
+young: every track cost two yt-dlp runs. So a young URL is retried after a
+pause, a little longer each time, before anything is resolved again.
+*/
+const (
+	freshRetries = 3
+	freshWait    = 700 * time.Millisecond
+)
+
+// freshFor is how long a URL counts as just issued. A variable so a test of
+// stale URLs can make every URL old at once.
+var freshFor = 15 * time.Second
+
+// young is whether e was resolved too recently for a refusal to mean it is stale.
+func young(e resolvedEntry) bool { return time.Since(e.at) < freshFor }
+
+// sleepCtx waits d, or until ctx is done.
+func sleepCtx(ctx context.Context, d time.Duration) error {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-t.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 // handleStream relays audio bytes to the UI process.
 func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 	if s.deps.Resolver == nil {
@@ -617,6 +672,7 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.net.Succeeded()
+	s.deps.Log.Debug("relayed a range", "video", videoID, "range", upstreamRange, "status", resp.StatusCode)
 	// The body is bound now, not read from resp when the function returns:
 	// the retry below reassigns resp, to nil when it cannot connect, and a
 	// deferred resp.Body then panicked on every such request.
@@ -635,6 +691,20 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 	 *
 	 * So re-resolve and retry here, once, where the client cannot see it.
 	 */
+	// A URL just issued is refused for its first moments, then served: it is
+	// waited for before anything is resolved again.
+	for try := 1; resp.StatusCode == http.StatusForbidden && young(e) && try <= freshRetries; try++ {
+		_ = resp.Body.Close()
+		if sleepCtx(r.Context(), time.Duration(try)*freshWait) != nil {
+			return
+		}
+		if resp, err = s.fetchUpstream(rctx, e.stream.URL, upstreamRange); err != nil {
+			s.deps.Log.Warn("stream fetch failed", "video", videoID, "err", err)
+			http.Error(w, "upstream unreachable", http.StatusBadGateway)
+			return
+		}
+		defer closeBody(resp.Body)
+	}
 	if resp.StatusCode == http.StatusForbidden {
 		_ = resp.Body.Close()
 		s.forgetResolution(videoID)
@@ -660,6 +730,9 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 		if resp.StatusCode == http.StatusForbidden {
 			s.forgetResolution(videoID)
 			s.deps.Log.Warn("stream still refused after re-resolve", "video", videoID)
+			// Remembered, so the preload and the retries that follow are
+			// answered at once instead of each running yt-dlp again.
+			s.failures.remember(videoID, errRefused, true)
 		}
 	}
 

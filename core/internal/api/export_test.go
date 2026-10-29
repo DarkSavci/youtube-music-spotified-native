@@ -8,3 +8,11 @@ package api
 func BoundedRangeForTest(clientRange string, size int64) string {
 	return boundedRange(clientRange, size)
 }
+
+// NoFreshGrace makes every URL count as old for the rest of the test: a
+// refusal then means stale at once.
+func NoFreshGrace(t interface{ Cleanup(func()) }) {
+	old := freshFor
+	freshFor = 0
+	t.Cleanup(func() { freshFor = old })
+}

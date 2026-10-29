@@ -1,5 +1,15 @@
 # Notices
 
+- **yt-dlp-ejs** 0.8.0 (Unlicense), yt-dlp's challenge solver, in
+  `core/internal/jsc/ejs/`, unchanged from the PyPI wheel. Its `lib.min.js`
+  bundles **meriyah** 6.1.4 (ISC, Copyright (c) Kenny F. and contributors)
+  and **astring** 1.9.0 (MIT, Copyright (c) David Bonnet), whose notices
+  are kept in the file. https://github.com/yt-dlp/ejs
+- **QuickJS-NG** (MIT, Copyright (c) Fabrice Bellard, Charlie Gordon and
+  the QuickJS-NG contributors). The Android app runs its `qjs`, built from
+  the v0.17.0 source by `scripts/build-qjs-android.ps1`.
+  https://github.com/quickjs-ng/quickjs
+
 - **Spotifast** (MIT, Copyright (c) 2026 Carmine Paolino). The palette,
   layout measurements and several view idioms follow its `src/theme.rs` and
   `src/ui/`. The reader of Winamp skins in `crates/app/src/skin/` is its

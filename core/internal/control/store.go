@@ -18,8 +18,6 @@ import (
 	"regexp"
 	"strings"
 	"time"
-
-	_ "modernc.org/sqlite"
 )
 
 // DefaultUserID is used in local mode.
@@ -39,7 +37,7 @@ type Store struct {
 // The driver is pure Go, so the desktop build needs no cgo toolchain and
 // cross-compiles cleanly.
 func Open(ctx context.Context, path string) (*Store, error) {
-	db, err := sql.Open("sqlite", path+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)")
+	db, err := sql.Open(driverName, dsn(path, "_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)"))
 	if err != nil {
 		return nil, fmt.Errorf("control: open: %w", err)
 	}

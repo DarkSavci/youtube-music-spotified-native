@@ -8,8 +8,10 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"spotifier/internal/domain"
@@ -50,9 +52,75 @@ type Ytdlp struct {
 	// Empty leaves yt-dlp to find a runtime on PATH, which on most machines
 	// does not exist.
 	Deno string
+	// Run, when set, runs yt-dlp in place of a child process. On Android
+	// yt-dlp is Python inside the app, and there is no binary to start.
+	Run RunFunc
+	// JSRuntimes is given to yt-dlp as --js-runtimes when set, in place of
+	// Deno, for a runtime other than deno (QuickJS on Android).
+	JSRuntimes string
 
 	once    sync.Once
 	present bool
+
+	// musicFailedAt is when the YouTube Music client was last found refusing
+	// this listener: twice running it failed where the default way then
+	// worked, as it does every track for a listener without Premium. Until
+	// skipMusicClientFor has passed it is not asked again, so each track
+	// costs one lookup rather than two. One refusal alone is a track it
+	// cannot serve (a video, a podcast): the message is the same.
+	musicFailedAt atomic.Int64
+	musicRefusals atomic.Int32
+	// now is the clock; tests replace it.
+	now func() time.Time
+}
+
+// skipMusicClientFor is how long the YouTube Music client is left out after
+// it failed for this listener.
+const skipMusicClientFor = 10 * time.Minute
+
+func (y *Ytdlp) clock() time.Time {
+	if y.now != nil {
+		return y.now()
+	}
+	return time.Now()
+}
+
+// tryMusicClient is whether asking as YouTube Music is worth it: it serves a
+// signed-in listener's subscriber formats, and nothing at all without
+// cookies (measured signed out: it failed after 4.9 s, and the default way
+// then worked in 2.7 s), nor for a listener it has just refused.
+func (y *Ytdlp) tryMusicClient() bool {
+	if y.CookiePath == "" {
+		return false
+	}
+	if _, err := os.Stat(y.CookiePath); err != nil {
+		return false
+	}
+	at := y.musicFailedAt.Load()
+	return at == 0 || y.clock().Sub(time.Unix(0, at)) >= skipMusicClientFor
+}
+
+// RunFunc runs yt-dlp with args and returns what it printed. A non-nil
+// error means it failed, and stderr then says why.
+type RunFunc func(ctx context.Context, args []string) (stdout, stderr []byte, err error)
+
+// runProcess is RunFunc for the yt-dlp binary.
+func runProcess(bin string) RunFunc {
+	return func(ctx context.Context, args []string) ([]byte, []byte, error) {
+		var stdout, stderr bytes.Buffer
+		cmd := exec.CommandContext(ctx, bin, args...)
+		cmd.Stdout = &stdout
+		cmd.Stderr = &stderr
+		err := cmd.Run()
+		return stdout.Bytes(), stderr.Bytes(), err
+	}
+}
+
+func (y *Ytdlp) runner() RunFunc {
+	if y.Run != nil {
+		return y.Run
+	}
+	return runProcess(y.binary())
 }
 
 // NewYtdlp builds the adapter. It does not probe for the binary; Available
@@ -72,16 +140,22 @@ func (y *Ytdlp) binary() string {
 	return "yt-dlp"
 }
 
-// Available reports whether the binary can be run at all.
+// Available reports whether yt-dlp can be run at all.
 //
 // Probed once and cached: this is consulted when choosing a resolver at
 // startup, and a missing binary must degrade to the pure-Go adapter rather
 // than fail the process.
 func (y *Ytdlp) Available() bool {
+	// A runner the app supplies is there by construction; probing it would
+	// start yt-dlp (Python, on Android) at launch for nothing.
+	if y.Run != nil {
+		return true
+	}
 	y.once.Do(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		y.present = exec.CommandContext(ctx, y.binary(), "--version").Run() == nil
+		_, _, err := y.runner()(ctx, []string{"--version"})
+		y.present = err == nil
 	})
 	return y.present
 }
@@ -118,17 +192,39 @@ again the default way before the resolver gives up.
 */
 var musicClientArgs = []string{"--extractor-args", "youtube:player_client=web_music;player_skip=webpage,configs"}
 
+// videoIDChars is YouTube's id alphabet. The id comes from a request's path
+// and ends up in yt-dlp's arguments, so anything else is refused rather than
+// passed on.
+var videoIDChars = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+
 func (y *Ytdlp) Resolve(ctx context.Context, videoID string) (domain.Stream, Quality, error) {
+	if !videoIDChars.MatchString(videoID) {
+		return domain.Stream{}, Quality{}, ErrUnavailable
+	}
 	if y.Timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, y.Timeout)
 		defer cancel()
 	}
+	if !y.tryMusicClient() {
+		return y.resolveWith(ctx, videoID, nil, "https://www.youtube.com/watch?v=")
+	}
 	st, q, err := y.resolveWith(ctx, videoID, musicClientArgs, "https://music.youtube.com/watch?v=")
-	if err == nil || ctx.Err() != nil || errors.Is(err, ErrRateLimited) {
+	if err == nil {
+		y.musicRefusals.Store(0)
+		return st, q, nil
+	}
+	if ctx.Err() != nil || errors.Is(err, ErrRateLimited) {
 		return st, q, err
 	}
-	return y.resolveWith(ctx, videoID, nil, "https://www.youtube.com/watch?v=")
+	st, q, ferr := y.resolveWith(ctx, videoID, nil, "https://www.youtube.com/watch?v=")
+	// The default way worked where YouTube Music's did not, a second time
+	// running: this listener is not one it serves, so it is left out a while.
+	if ferr == nil && y.musicRefusals.Add(1) >= 2 {
+		y.musicRefusals.Store(0)
+		y.musicFailedAt.Store(y.clock().UnixNano())
+	}
+	return st, q, ferr
 }
 
 func (y *Ytdlp) resolveWith(ctx context.Context, videoID string, extra []string, base string) (domain.Stream, Quality, error) {
@@ -154,24 +250,28 @@ func (y *Ytdlp) resolveMedia(ctx context.Context, videoID string, extra []string
 			args = append(args, "--cookies", y.CookiePath)
 		}
 	}
-	if y.Deno != "" {
+	switch {
+	case y.JSRuntimes != "":
+		args = append(args, "--js-runtimes", y.JSRuntimes)
+	case y.Deno != "":
 		args = append(args, "--js-runtimes", "deno:"+y.Deno)
 	}
 	args = append(args, extra...)
 	args = append(args, base+videoID)
 
-	var stdout, stderr bytes.Buffer
-	cmd := exec.CommandContext(ctx, y.binary(), args...)
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
+	stdout, stderr, err := y.runner()(ctx, args)
+	if err != nil && ctx.Err() != nil {
+		// Stopped, not failed: kept recognisable as a cancellation, so nothing
+		// remembers it as the track's failure.
+		return domain.Stream{}, Quality{}, fmt.Errorf("yt-dlp: %w", ctx.Err())
+	}
+	if err != nil {
 		return domain.Stream{}, Quality{}, classify(
-			fmt.Errorf("yt-dlp: %v: %s", err, said(stderr.Bytes(), stdout.Bytes())))
+			fmt.Errorf("yt-dlp: %v: %s", err, said(stderr, stdout)))
 	}
 
 	var info ytdlpInfo
-	if err := json.Unmarshal(stdout.Bytes(), &info); err != nil {
+	if err := json.Unmarshal(stdout, &info); err != nil {
 		return domain.Stream{}, Quality{}, fmt.Errorf("yt-dlp: parse output: %w", err)
 	}
 
@@ -217,7 +317,8 @@ func (y *Ytdlp) resolveMedia(ctx context.Context, videoID string, extra []string
 
 // bestYtdlpAudio picks the highest-bitrate progressive audio-only format.
 func bestYtdlpAudio(formats []ytdlpFormat) *ytdlpFormat {
-	var best *ytdlpFormat
+	var best, lightest *ytdlpFormat
+	limit := float64(ceiling()) / 1000
 	for i := range formats {
 		f := &formats[i]
 		if f.URL == "" || f.ACodec == "" || f.ACodec == "none" {
@@ -229,9 +330,19 @@ func bestYtdlpAudio(formats []ytdlpFormat) *ytdlpFormat {
 		if !strings.HasPrefix(f.Protocol, "http") {
 			continue // a manifest the relay cannot serve
 		}
+		if lightest == nil || rate(f) < rate(lightest) {
+			lightest = f
+		}
+		if limit > 0 && rate(f) > limit {
+			continue
+		}
 		if best == nil || rate(f) > rate(best) {
 			best = f
 		}
+	}
+	// Nothing under the ceiling: the lightest there is.
+	if best == nil {
+		return lightest
 	}
 	return best
 }
@@ -301,6 +412,9 @@ func (y *Ytdlp) ResolveVideo(ctx context.Context, id string) (domain.Stream, err
 
 // ResolveVideoAs is ResolveVideo for a client that cannot play every codec.
 func (y *Ytdlp) ResolveVideoAs(ctx context.Context, id string, pick VideoPick) (domain.Stream, error) {
+	if !videoIDChars.MatchString(id) {
+		return domain.Stream{}, ErrUnavailable
+	}
 	if y.Timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, y.Timeout)

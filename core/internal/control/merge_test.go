@@ -164,7 +164,7 @@ func listing(t *testing.T, dir string) string {
 func TestMergeTakesAnOlderSchema(t *testing.T) {
 	dir := t.TempDir()
 	oldPath := filepath.Join(dir, "old.db")
-	raw, err := sql.Open("sqlite", oldPath)
+	raw, err := sql.Open(control.DriverName, oldPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -216,7 +216,7 @@ func TestMergeTakesAnOlderSchema(t *testing.T) {
 		t.Fatalf("inspect: %+v", seen)
 	}
 	// The original still has the shape it came with.
-	raw, err = sql.Open("sqlite", oldPath)
+	raw, err = sql.Open(control.DriverName, oldPath)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="search"
+        android:enabled="true"
+        android:icon="@drawable/shortcut_search"
+        android:shortcutShortLabel="@string/shortcut_search">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:data="spotified://search"
+            android:targetPackage="dev.darksavci.spotified"
+            android:targetClass="dev.darksavci.spotified.ui.MainActivity" />
+    </shortcut>
+    <shortcut
+        android:shortcutId="liked"
+        android:enabled="true"
+        android:icon="@drawable/shortcut_liked"
+        android:shortcutShortLabel="@string/shortcut_liked">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:data="spotified://liked"
+            android:targetPackage="dev.darksavci.spotified"
+            android:targetClass="dev.darksavci.spotified.ui.MainActivity" />
+    </shortcut>
+    <shortcut
+        android:shortcutId="shuffle"
+        android:enabled="true"
+        android:icon="@drawable/shortcut_shuffle"
+        android:shortcutShortLabel="@string/shortcut_shuffle">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:data="spotified://shuffle-liked"
+            android:targetPackage="dev.darksavci.spotified"
+            android:targetClass="dev.darksavci.spotified.ui.MainActivity" />
+    </shortcut>
+</shortcuts>

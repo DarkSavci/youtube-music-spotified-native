@@ -5,11 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
 	"time"
+
+	"gopkg.in/yaml.v3"
 
 	"spotifier/internal/domain"
 )
@@ -54,6 +57,9 @@ type lrclibResponse struct {
 	PlainLyrics  string  `json:"plainLyrics"`
 	SyncedLyrics string  `json:"syncedLyrics"`
 	Instrumental bool    `json:"instrumental"`
+	// HasWordSync says Lyricsfile times the words, not only the lines.
+	HasWordSync bool   `json:"hasWordSync"`
+	Lyricsfile  string `json:"lyricsfile"`
 }
 
 func (l *LRCLib) Lyrics(ctx context.Context, track domain.Track) (domain.Lyrics, error) {
@@ -98,7 +104,7 @@ func (l *LRCLib) Lyrics(ctx context.Context, track domain.Track) (domain.Lyrics,
 	}
 
 	var body lrclibResponse
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxResponse)).Decode(&body); err != nil {
 		return domain.Lyrics{}, fmt.Errorf("lyrics: lrclib: decode: %w", err)
 	}
 	if body.Instrumental {
@@ -109,6 +115,11 @@ func (l *LRCLib) Lyrics(ctx context.Context, track domain.Track) (domain.Lyrics,
 	if lines := ParseLRC(body.SyncedLyrics); len(lines) > 0 {
 		out.Lines = lines
 	}
+	if body.HasWordSync {
+		if lines := ParseLyricsfile(body.Lyricsfile); hasWords(lines) {
+			out.Lines = lines
+		}
+	}
 	if out.Plain == "" && len(out.Lines) == 0 {
 		return domain.Lyrics{}, ErrNotFound
 	}
@@ -118,6 +129,156 @@ func (l *LRCLib) Lyrics(ctx context.Context, track domain.Track) (domain.Lyrics,
 var errBadTimestamp = errors.New("bad timestamp")
 
 /*
+Bounds on what one answer may hold. A song's lyrics are a few kilobytes and a
+few hundred words; these are far above that, and keep a broken or hostile
+answer from costing the phone its memory.
+*/
+const (
+	maxResponse = 2 << 20 // bytes of one answer
+	maxStamps   = 64      // timestamps on one LRC line
+	maxWords    = 20_000  // words in the whole song
+)
+
+// lyricsfile is the part of LRCLIB's YAML lyrics file that is read: its
+// lines, and each line's words. The format is LRCGET's (LYRICSFILE_CONCEPT.md).
+type lyricsfile struct {
+	Lines []struct {
+		Text    string `yaml:"text"`
+		StartMs int64  `yaml:"start_ms"`
+		Words   []struct {
+			Text    string `yaml:"text"`
+			StartMs int64  `yaml:"start_ms"`
+		} `yaml:"words"`
+	} `yaml:"lines"`
+}
+
+/*
+ParseLyricsfile reads LRCLIB's YAML lyrics file into timed lines, with their
+words when it times them. A file that does not parse gives nothing, and the
+caller keeps the LRC lines it already had.
+*/
+func ParseLyricsfile(s string) []domain.LyricLine {
+	if strings.TrimSpace(s) == "" {
+		return nil
+	}
+	// Anchors and aliases have no place in a lyrics file, and an alias
+	// repeated inside another can make a small file decode into a huge one.
+	var doc yaml.Node
+	if err := yaml.Unmarshal([]byte(s), &doc); err != nil || hasAliases(&doc) {
+		return nil
+	}
+	var f lyricsfile
+	if err := doc.Decode(&f); err != nil {
+		return nil
+	}
+	out := make([]domain.LyricLine, 0, len(f.Lines))
+	words := 0
+	for _, l := range f.Lines {
+		line := domain.LyricLine{AtMs: l.StartMs, Text: strings.TrimSpace(l.Text)}
+		if words += len(l.Words); words <= maxWords {
+			for _, w := range l.Words {
+				line.Words = append(line.Words, domain.LyricWord{AtMs: w.StartMs, Text: w.Text})
+			}
+		}
+		out = append(out, line)
+	}
+	sortLines(out)
+	return out
+}
+
+// hasAliases reports whether a YAML document uses anchors or aliases.
+func hasAliases(n *yaml.Node) bool {
+	if n.Kind == yaml.AliasNode || n.Anchor != "" {
+		return true
+	}
+	for _, c := range n.Content {
+		if hasAliases(c) {
+			return true
+		}
+	}
+	return false
+}
+
+// hasWords reports whether any line is timed word by word.
+func hasWords(lines []domain.LyricLine) bool {
+	for _, l := range lines {
+		if len(l.Words) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// stripWordTags removes the well-formed "<mm:ss.xx>" tags from a line whose
+// words could not all be read, so its text is not shown with timestamps in it.
+func stripWordTags(s string) string {
+	if !strings.Contains(s, "<") {
+		return s
+	}
+	var b strings.Builder
+	for s != "" {
+		start := strings.IndexByte(s, '<')
+		if start < 0 {
+			b.WriteString(s)
+			break
+		}
+		end := strings.IndexByte(s[start:], '>')
+		if end < 0 {
+			b.WriteString(s)
+			break
+		}
+		b.WriteString(s[:start])
+		if _, err := parseLRCTimestamp(s[start+1 : start+end]); err != nil {
+			b.WriteString(s[start : start+end+1])
+		}
+		s = s[start+end+1:]
+	}
+	return b.String()
+}
+
+/*
+parseWords reads enhanced LRC's "<mm:ss.xx>word" tags from the text of one
+line. It returns nil when the line has none, or when one does not parse: a
+line half-timed is shown as a plain line rather than with words that light up
+at the wrong moments. A closing tag with no word after it ends the last word
+and is dropped.
+*/
+func parseWords(s string) []domain.LyricWord {
+	if !strings.Contains(s, "<") {
+		return nil
+	}
+	var words []domain.LyricWord
+	rest := strings.TrimLeft(s, " ")
+	for rest != "" {
+		if rest[0] != '<' {
+			return nil
+		}
+		end := strings.IndexByte(rest, '>')
+		if end < 0 {
+			return nil
+		}
+		ms, err := parseLRCTimestamp(rest[1:end])
+		if err != nil {
+			return nil
+		}
+		rest = rest[end+1:]
+		next := strings.IndexByte(rest, '<')
+		if next < 0 {
+			next = len(rest)
+		}
+		if word := rest[:next]; strings.TrimSpace(word) != "" {
+			words = append(words, domain.LyricWord{AtMs: ms, Text: word})
+		}
+		rest = rest[next:]
+	}
+	if len(words) == 0 {
+		return nil
+	}
+	words[len(words)-1].Text = strings.TrimRight(words[len(words)-1].Text, " ")
+	return words
+}
+
+/*
 ParseLRC reads the LRC format into timed lines.
 
 The format is one "[mm:ss.xx] text" per line, and real files are untidy: blank
@@ -125,12 +286,16 @@ lines, metadata tags like "[ar:...]", repeated timestamps on one line, and
 two- or three-digit fractions. Anything that does not parse is skipped rather
 than failing the whole set, because one malformed line should not cost the
 listener the other sixty.
+
+Enhanced LRC times each word too, "[00:12.00]<00:12.00>Hello <00:12.50>world",
+and those times become the line's Words rather than staying in its text.
 */
 func ParseLRC(s string) []domain.LyricLine {
 	if strings.TrimSpace(s) == "" {
 		return nil
 	}
 	var out []domain.LyricLine
+	wordCount := 0
 
 	for _, raw := range strings.Split(s, "\n") {
 		line := strings.TrimRight(raw, "\r")
@@ -153,11 +318,38 @@ func ParseLRC(s string) []domain.LyricLine {
 			continue
 		}
 
-		text := strings.TrimSpace(line)
+		if len(stamps) > maxStamps {
+			stamps = stamps[:maxStamps]
+		}
+		words := parseWords(line)
+		if words != nil {
+			wordCount += len(words) * len(stamps)
+			if wordCount > maxWords {
+				words = nil
+			}
+		}
+		text := strings.TrimSpace(stripWordTags(line))
+		if words != nil {
+			var b strings.Builder
+			for _, w := range words {
+				b.WriteString(w.Text)
+			}
+			text = strings.TrimSpace(b.String())
+		}
 		for _, at := range stamps {
 			// An empty line is kept: it is a real pause in the song, and
 			// dropping it makes the view jump ahead of the music.
-			out = append(out, domain.LyricLine{AtMs: at, Text: text})
+			l := domain.LyricLine{AtMs: at, Text: text}
+			if words != nil {
+				// Word times are written for the first stamp; a chorus
+				// repeated at another stamp is sung the same, later.
+				shift := at - stamps[0]
+				l.Words = make([]domain.LyricWord, len(words))
+				for i, w := range words {
+					l.Words[i] = domain.LyricWord{AtMs: w.AtMs + shift, Text: w.Text}
+				}
+			}
+			out = append(out, l)
 		}
 	}
 
