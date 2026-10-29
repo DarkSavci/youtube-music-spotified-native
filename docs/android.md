@@ -535,6 +535,24 @@ x86_64 for the emulator) signed with one release key, plus a
 `PackageInstaller` with `REQUEST_INSTALL_PACKAGES`. It is also listed for
 Obtainium. Not the Play Store (section 1).
 
+**Releasing.** Push a tag `android-v<version>`, such as
+`android-v0.5.0-beta.2`; the Android release workflow builds the core, qjs
+and the app on Windows, signs the APKs, and publishes them with their
+checksums. A version with a suffix (`-beta.2`) is a pre-release, which
+neither updater offers; one without is a release, never marked latest, so
+the desktop's updater keeps reading its own. The phone's updater reads the
+release list for the newest published `android-v` one. Run by hand, the
+workflow builds and keeps the APKs as an artifact, publishing nothing.
+
+**The key.** One release key signs every version: Android installs an
+update only over an app signed with the same key. It lives outside the
+repository, in `%USERPROFILE%\.spotified-signing` (`release.jks`, and
+`keystore.properties` with its password, which `android/keystore.properties`
+copies for a local release build), and in the repository's secrets
+`ANDROID_KEYSTORE_BASE64` and `ANDROID_KEYSTORE_PASSWORD` for the workflow.
+Keep a copy of that folder somewhere safe: lost, it means no update can
+reach anyone who installed the app, ever.
+
 ## 9. Milestones
 
 Each ends with: the Go tests, Kotlin unit tests (`reconcile`, the
