@@ -232,6 +232,7 @@ fun EntityRow(
     round: Boolean = false,
     pinned: Boolean = false,
     onLongClick: (() -> Unit)? = null,
+    artSize: Dp = 64.dp,
 ) {
     val p = LocalPalette.current
     @OptIn(ExperimentalFoundationApi::class)
@@ -242,7 +243,7 @@ fun EntityRow(
             .padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Art(artwork, 64.dp, shape = if (round) CircleShape else RoundedCornerShape(4.dp))
+        Art(artwork, artSize, shape = if (round) CircleShape else RoundedCornerShape(4.dp))
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Text(title, style = Type.bodyStrong, maxLines = 1, overflow = TextOverflow.Ellipsis)

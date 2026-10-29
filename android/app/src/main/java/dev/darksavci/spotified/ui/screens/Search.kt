@@ -44,9 +44,11 @@ import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.darksavci.spotified.R
+import dev.darksavci.spotified.api.ArtistRef
 import dev.darksavci.spotified.api.Artwork
 import dev.darksavci.spotified.api.Item
 import dev.darksavci.spotified.api.MoodChip
@@ -111,7 +113,7 @@ fun SearchScreen(initial: String = "") {
                     modifier = Modifier.fillMaxWidth(),
                 )
             }
-            if (typed.isNotEmpty()) GlyphButton(R.drawable.ic_ban, "Clear", { typed = ""; query = "" }, tint = p.secondary, size = 18.dp)
+            if (typed.isNotEmpty()) GlyphButton(R.drawable.ic_x, "Clear", { typed = ""; query = "" }, tint = p.secondary, size = 18.dp)
         }
         if (query.isEmpty()) {
             MoodWall()
@@ -140,8 +142,15 @@ private fun Results(results: SearchResults) {
     LazyColumn(contentPadding = PaddingValues(bottom = 24.dp)) {
         results.topResult?.let { top ->
             item { SectionTitle("Top result") }
-            item { ItemRow(top) }
-            items(results.topResultItems.take(4)) { ItemRow(it) }
+            item { ItemRow(top, artSize = 64.dp) }
+            // Songs under an artist often come without the artist's name: it is the top result's.
+            val by = (top as? Item.ArtistItem)?.artist
+            items(results.topResultItems.take(4)) { item ->
+                val filled = if (item is Item.Song && item.track.artists.isEmpty() && by != null) {
+                    Item.Song(item.track.copy(artists = listOf(ArtistRef(by.id, by.name))))
+                } else item
+                ItemRow(filled)
+            }
         }
         for (shelf in results.shelves.filter { it.items.isNotEmpty() }) {
             item { SectionTitle(shelf.title) }
@@ -161,14 +170,14 @@ private fun Results(results: SearchResults) {
 }
 
 @Composable
-fun ItemRow(item: Item) {
+fun ItemRow(item: Item, artSize: Dp = 48.dp) {
     val actions = LocalActions.current
     when (item) {
         is Item.Song -> TrackRow(item.track, { actions.open(item) }, { actions.menuFor(item) })
         is Item.Episode -> TrackRow(item.track, { actions.open(item) }, { actions.menuFor(item) })
         else -> EntityRow(
             item.title, subtitleOf(item), item.artwork, { actions.open(item) },
-            round = item is Item.ArtistItem, onLongClick = { actions.menuFor(item) },
+            round = item is Item.ArtistItem, onLongClick = { actions.menuFor(item) }, artSize = artSize,
         )
     }
 }

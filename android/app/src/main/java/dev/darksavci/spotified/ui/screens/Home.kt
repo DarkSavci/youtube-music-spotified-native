@@ -67,7 +67,7 @@ fun HomeScreen() {
     val podcasts by produceState(false) { value = runCatching { api.browse(PODCASTS_PAGE).shelves.isNotEmpty() }.getOrDefault(false) }
     // Home's moods, kept while the podcasts page, which has none, shows.
     var moods by remember { mutableStateOf(emptyList<HomeChip>()) }
-    val page = rememberLoader("home:$mood") { if (mood == PODCASTS) api.browse(PODCASTS_PAGE) else api.home(mood) }
+    val page = rememberLoader("home:$mood") { if (mood == PODCASTS) api.browse(PODCASTS_PAGE) else api.homeWithMore(mood) }
     val recent = rememberLoader("home:recent") { runCatching { api.history() }.getOrDefault(emptyList()) }
     val state by page.state.collectAsStateWithLifecycle()
     val recentState by recent.state.collectAsStateWithLifecycle()

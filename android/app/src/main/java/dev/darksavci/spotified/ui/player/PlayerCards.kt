@@ -29,7 +29,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.platform.LocalContext
 import coil3.compose.AsyncImage
+import coil3.request.ImageRequest
+import coil3.request.transformations
 import dev.darksavci.spotified.api.Artist
 import dev.darksavci.spotified.api.Artwork
 import dev.darksavci.spotified.api.Track
@@ -37,6 +40,7 @@ import dev.darksavci.spotified.api.url
 import dev.darksavci.spotified.ui.Actions
 import dev.darksavci.spotified.ui.Routes
 import dev.darksavci.spotified.ui.components.Art
+import dev.darksavci.spotified.ui.components.TrimBorders
 import dev.darksavci.spotified.ui.theme.Type
 
 /** What plays, past the lyrics, as Spotify's player scrolls on: more of the artist, then the artist. */
@@ -102,9 +106,10 @@ private fun AboutArtist(artist: Artist, actions: Actions) {
             },
     ) {
         Box(Modifier.fillMaxWidth().height(200.dp)) {
+            // The banner, its black padding trimmed off, so the photo fills the card.
             AsyncImage(
-                artist.artwork.maxByOrNull { it.width }?.url, null, Modifier.fillMaxSize(),
-                contentScale = ContentScale.Crop, alignment = Alignment.TopCenter,
+                ImageRequest.Builder(LocalContext.current).data(artist.artwork.maxByOrNull { it.width }?.url).transformations(TrimBorders).build(),
+                null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop, alignment = Alignment.TopCenter,
             )
             Text("About the artist", style = Type.bodyStrong, color = Color.White, modifier = Modifier.padding(16.dp))
         }

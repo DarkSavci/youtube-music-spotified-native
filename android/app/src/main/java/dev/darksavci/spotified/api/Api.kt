@@ -70,6 +70,20 @@ class Api(private val http: OkHttpClient, private val origin: suspend () -> Http
     suspend fun homeMore(continuation: String): BrowsePage =
         get(BrowsePage.serializer(), "home") { addQueryParameter("continuation", continuation) }
 
+    /** Home, with its next [pages] - 1 pages of shelves joined on: the first alone holds only a couple. */
+    suspend fun homeWithMore(mood: String = "", pages: Int = 4): BrowsePage {
+        val first = home(mood)
+        val shelves = first.shelves.toMutableList()
+        var next = first.continuation
+        for (i in 1 until pages) {
+            if (next.isEmpty()) break
+            val page = runCatching { homeMore(next) }.getOrNull() ?: break
+            shelves += page.shelves
+            next = page.continuation
+        }
+        return first.copy(shelves = shelves, continuation = next)
+    }
+
     /** Home's first [pages] pages of shelves: the first alone holds only a couple. */
     suspend fun homeShelves(pages: Int = 3): List<Shelf> {
         val first = home()
