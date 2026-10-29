@@ -19,6 +19,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.windowInsetsTopHeight
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.size
@@ -212,9 +214,7 @@ private fun NowPlayingPage(onClose: () -> Unit) {
             )
         }
         Column(
-            // Clipped below the status bar: scrolled up, the page goes under it, not over it.
-            // The status bar's height read directly: the screens around have already used the insets up.
-            Modifier.fillMaxSize().padding(WindowInsets.systemBars.asPaddingValues()).clipToBounds().verticalScroll(rememberScrollState()),
+            Modifier.fillMaxSize().padding(WindowInsets.systemBars.asPaddingValues()).verticalScroll(rememberScrollState()),
         ) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 GlyphButton(R.drawable.ic_chevron_down, "Close the player", onClose)
@@ -291,6 +291,11 @@ private fun NowPlayingPage(onClose: () -> Unit) {
             PlayerCards(track, actions)
             Spacer(Modifier.height(32.dp))
         }
+        // Behind the status bar, in the page's own top colour: scrolled up, the page passes under it.
+        Box(
+            Modifier.fillMaxWidth().windowInsetsTopHeight(WindowInsets.statusBars)
+                .background(if (style == STYLE_FULL_ART) Color.Black.copy(alpha = 0.45f) else tint.darkened(0.25f)),
+        )
     }
 }
 
