@@ -535,14 +535,17 @@ x86_64 for the emulator) signed with one release key, plus a
 `PackageInstaller` with `REQUEST_INSTALL_PACKAGES`. It is also listed for
 Obtainium. Not the Play Store (section 1).
 
-**Releasing.** Push a tag `android-v<version>`, such as
-`android-v0.5.0-beta.2`; the Android release workflow builds the core, qjs
-and the app on Windows, signs the APKs, and publishes them with their
-checksums. A version with a suffix (`-beta.2`) is a pre-release, which
-neither updater offers; one without is a release, never marked latest, so
-the desktop's updater keeps reading its own. The phone's updater reads the
-release list for the newest published `android-v` one. Run by hand, the
-workflow builds and keeps the APKs as an artifact, publishing nothing.
+**Releasing.** The phone app is released with the desktop's, as one
+release of the same version: bump `Cargo.toml`, write its section of
+`CHANGELOG.md`, and push a tag `v<version>`. The release workflow builds the
+desktop's installer and zip and, beside them on Windows, the core, qjs and
+the phone app, signs the APKs, and publishes every file under that tag with
+one `SHA256SUMS.txt`. Both updaters read the repository's latest release
+and pick their own files from it. A version with a suffix (`-beta.2`) is a
+pre-release, which neither updater offers; the phone's version code is made
+from the version, so each release is higher than the last. Run by hand,
+the workflow builds both and keeps the files as artifacts, publishing
+nothing.
 
 **The key.** One release key signs every version: Android installs an
 update only over an app signed with the same key. It lives outside the

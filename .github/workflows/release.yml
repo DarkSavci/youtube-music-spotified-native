@@ -1,17 +1,21 @@
 name: Release
 
-# Pushing a tag like v0.3.2 builds that version and publishes it: the
-# installer, the portable zip, and the checksums the app's own updater
-# checks a download against.
+# Pushing a tag like v0.5.0 builds that version for Windows and Android and
+# publishes them as one release: the installer, the portable zip, the
+# phone's signed APKs, and the checksums both apps' updaters check a
+# download against. A version with a suffix (v0.5.0-beta.2) is a
+# pre-release, which neither updater offers. Run by hand, it builds both
+# and keeps the files as artifacts, publishing nothing.
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
-  release:
+  desktop:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -26,16 +30,16 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       # A tag that disagrees with Cargo.toml would publish files named for
-      # one version under a release named for another, and the updater
-      # compares against the tag.
+      # one version under a release named for another, and the updaters
+      # compare against the tag.
       - name: Check the tag is the version
+        if: github.ref_type == 'tag'
         shell: pwsh
         run: |
           $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
           if ("v$version" -ne $env:GITHUB_REF_NAME) {
             throw "the tag is $env:GITHUB_REF_NAME but Cargo.toml says $version"
           }
-          "VERSION=$version" >> $env:GITHUB_ENV
 
       - name: Test
         run: cargo test --workspace
@@ -44,13 +48,129 @@ jobs:
         shell: pwsh
         run: scripts/package.ps1
 
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop
+          path: |
+            dist/*-setup.exe
+            dist/*-windows-x64.zip
+          if-no-files-found: error
+
+  android:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: core/go.mod
+          cache-dependency-path: core/go.sum
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      # Chaquopy builds yt-dlp into the app with a Python of the same version.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+
+      # The phone app is the same version as the desktop's. Android needs each
+      # update's code higher than the last: 0.5.0-beta.2 is 50002, 0.5.0 is
+      # 50099, 0.5.1 is 50199.
+      - name: Version
+        id: version
+        shell: pwsh
+        run: |
+          $name = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
+          if ($name -notmatch '^(\d+)\.(\d+)\.(\d+)(?:-[a-z]+\.(\d+))?$') { throw "cannot make a version code of $name" }
+          $pre = if ($Matches[4]) { [int]$Matches[4] } else { 99 }
+          $code = [int]$Matches[1] * 1000000 + [int]$Matches[2] * 10000 + [int]$Matches[3] * 100 + $pre
+          "name=$name" >> $env:GITHUB_OUTPUT
+          "code=$code" >> $env:GITHUB_OUTPUT
+
+      - name: Go core
+        shell: pwsh
+        run: |
+          go install golang.org/x/mobile/cmd/gomobile@v0.0.0-20261011034528-197770444867
+          $env:PATH = "$env:PATH;$(go env GOPATH)\bin"
+          gomobile init
+          ./scripts/build-core-android.ps1
+
+      - name: QuickJS
+        shell: pwsh
+        run: ./scripts/build-qjs-android.ps1
+
+      # The key never enters the repository: it comes from the repository's
+      # secrets, and the files written here are gone with the runner.
+      - name: Signing key
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          if (-not $env:KEYSTORE_BASE64) { throw 'ANDROID_KEYSTORE_BASE64 is not set' }
+          $jks = Join-Path $env:RUNNER_TEMP 'release.jks'
+          [IO.File]::WriteAllBytes($jks, [Convert]::FromBase64String($env:KEYSTORE_BASE64))
+          @(
+            "storeFile=$($jks -replace '\\', '/')"
+            "storePassword=$env:KEYSTORE_PASSWORD"
+            'keyAlias=spotified'
+            "keyPassword=$env:KEYSTORE_PASSWORD"
+          ) | Set-Content android/keystore.properties
+
+      - name: Build
+        shell: pwsh
+        working-directory: android
+        run: |
+          ./gradlew.bat :app:assembleRelease "-PversionName=${{ steps.version.outputs.name }}" "-PversionCode=${{ steps.version.outputs.code }}" --no-daemon
+          if ($LASTEXITCODE -ne 0) { throw 'gradle failed' }
+
+      - name: Name the files
+        shell: pwsh
+        run: |
+          $out = New-Item -ItemType Directory -Force dist
+          $v = '${{ steps.version.outputs.name }}'
+          foreach ($abi in 'arm64-v8a', 'x86_64', 'universal') {
+            Copy-Item "android/app/build/outputs/apk/release/app-$abi-release.apk" "$out/spotified-$v-android-$abi.apk"
+          }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android
+          path: dist/*.apk
+          if-no-files-found: error
+
+  publish:
+    needs: [desktop, android]
+    if: github.ref_type == 'tag'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      # One list for every file, which each updater reads its own line from.
+      - name: Checksums
+        shell: pwsh
+        run: |
+          Get-ChildItem dist -File | Sort-Object Name | ForEach-Object {
+            "$((Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower())  $($_.Name)"
+          } | Set-Content dist/SHA256SUMS.txt -Encoding ascii
+
       # The release's notes are that version's section of the changelog.
       - name: Release notes
         shell: pwsh
         run: |
+          $version = $env:GITHUB_REF_NAME -replace '^v', ''
           $lines = Get-Content CHANGELOG.md
-          $start = ($lines | Select-String -Pattern "^## $([regex]::Escape($env:VERSION)) " | Select-Object -First 1).LineNumber
-          if (-not $start) { throw "CHANGELOG.md has no section for $env:VERSION" }
+          $start = ($lines | Select-String -Pattern "^## $([regex]::Escape($version)) " | Select-Object -First 1).LineNumber
+          if (-not $start) { throw "CHANGELOG.md has no section for $version" }
           $rest = $lines[$start..($lines.Count - 1)]
           $next = ($rest | Select-String -Pattern '^## ' | Select-Object -First 1).LineNumber
           $notes = if ($next) { $rest[0..($next - 2)] } else { $rest }
@@ -61,12 +181,5 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $files = @(
-            "dist/youtube-music-spotified-native-$env:VERSION-setup.exe",
-            "dist/youtube-music-spotified-native-$env:VERSION-windows-x64.zip",
-            "dist/SHA256SUMS.txt"
-          )
-          foreach ($file in $files) {
-            if (-not (Test-Path $file)) { throw "$file was not built" }
-          }
-          gh release create $env:GITHUB_REF_NAME @files --title $env:GITHUB_REF_NAME --notes-file notes.md
+          $pre = if ($env:GITHUB_REF_NAME -match '-') { @('--prerelease') } else { @() }
+          gh release create $env:GITHUB_REF_NAME (Get-ChildItem dist -File).FullName @pre --title $env:GITHUB_REF_NAME --notes-file notes.md

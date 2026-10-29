@@ -260,22 +260,26 @@ fn offer_in(body: &str, current: &str) -> Option<Offer> {
     })
 }
 
-/// Whether `candidate` is a later version than `current`, part by part.
+/// Whether `candidate` is a later version than `current`, part by part;
+/// a pre-release (`0.5.0-beta.2`) comes before its release (`0.5.0`).
 /// Anything that is not a number counts as zero.
 fn newer(candidate: &str, current: &str) -> bool {
     let parts = |version: &str| -> Vec<u64> {
-        version
+        let (release, pre) = version.split_once('-').unwrap_or((version, ""));
+        let mut parts: Vec<u64> = release
             .split('.')
             .map(|part| part.parse().unwrap_or(0))
-            .collect()
+            .collect();
+        parts.resize(parts.len().max(3), 0);
+        // A release outranks every pre-release of it.
+        parts.push(if pre.is_empty() {
+            u64::MAX
+        } else {
+            pre.rsplit('.').next().and_then(|n| n.parse().ok()).unwrap_or(0)
+        });
+        parts
     };
-    let (candidate, current) = (parts(candidate), parts(current));
-    let length = candidate.len().max(current.len());
-    let at = |parts: &[u64], index: usize| parts.get(index).copied().unwrap_or(0);
-    (0..length)
-        .map(|index| at(&candidate, index).cmp(&at(&current, index)))
-        .find(|order| order.is_ne())
-        .is_some_and(|order| order.is_gt())
+    parts(candidate) > parts(current)
 }
 
 /// The hash `sha256sum` wrote for `name`: `<hex>  <name>`, or `<hex> *<name>`.
@@ -314,6 +318,10 @@ mod tests {
         assert!(newer("0.2.1", "0.2"));
         assert!(!newer("0.2.0", "0.2.0"));
         assert!(!newer("0.1.9", "0.2.0"));
+        assert!(newer("0.5.0", "0.5.0-beta.2"));
+        assert!(newer("0.5.0-beta.3", "0.5.0-beta.2"));
+        assert!(!newer("0.5.0-beta.2", "0.5.0"));
+        assert!(!newer("0.4.9", "0.5.0-beta.1"));
     }
 
     #[test]

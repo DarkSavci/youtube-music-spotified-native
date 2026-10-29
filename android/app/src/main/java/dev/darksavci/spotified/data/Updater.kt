@@ -12,7 +12,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import okhttp3.OkHttpClient
@@ -37,14 +36,14 @@ object Updater {
             .execute().use { r ->
                 if (r.code == 404) return@withContext say("There are no releases yet.")
                 if (!r.isSuccessful) error("GitHub answered ${r.code}")
-                phoneRelease(Json.parseToJsonElement(r.body.string()))
-            } ?: return@withContext say("There are no releases for the phone yet.")
-        val tag = (release["tag_name"] as? JsonPrimitive)?.content.orEmpty().removePrefix("android-").removePrefix("v")
+                Json.parseToJsonElement(r.body.string()) as? JsonObject
+            } ?: error("GitHub's answer was not a release")
+        val tag = (release["tag_name"] as? JsonPrimitive)?.content.orEmpty().removePrefix("v")
         if (!newer(tag, current)) return@withContext say("This is the newest version ($current).")
         val assets = (release["assets"] as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }
         fun asset(name: (String) -> Boolean) = assets.firstOrNull { name((it["name"] as? JsonPrimitive)?.content.orEmpty()) }
         val abi = Build.SUPPORTED_ABIS.firstOrNull().orEmpty()
-        val apk = asset { it.endsWith(".apk") && abi in it } ?: asset { it.endsWith(".apk") }
+        val apk = asset { it.endsWith(".apk") && abi in it } ?: asset { it.endsWith("-universal.apk") }
             ?: return@withContext say("Version $tag has no APK for this phone.")
         val sums = asset { it == "SHA256SUMS.txt" } ?: return@withContext say("Version $tag has no checksums; it was not installed.")
         val apkName = (apk["name"] as JsonPrimitive).content
@@ -110,34 +109,24 @@ object Updater {
         }
     }
 
-    /**
-     * The newest published release for the phone. The desktop's releases share
-     * the repository and its "latest", so the list is read for the newest
-     * android-v tag; a single release object (a test's) is taken as it is.
-     */
-    private fun phoneRelease(answer: JsonElement): JsonObject? = when (answer) {
-        is JsonObject -> answer
-        is JsonArray -> answer.mapNotNull { it as? JsonObject }.firstOrNull { r ->
-            val tag = (r["tag_name"] as? JsonPrimitive)?.content.orEmpty()
-            val flag = { key: String -> (r[key] as? JsonPrimitive)?.content == "true" }
-            tag.startsWith("android-v") && !flag("draft") && !flag("prerelease")
-        }
-        else -> null
-    }
-
     private fun url(asset: JsonObject) = (asset["browser_download_url"] as JsonPrimitive).content
 
     private fun text(http: OkHttpClient, url: String) =
         http.newCall(Request.Builder().url(url).build()).execute().use { it.body.string() }
 
-    /** Whether version [a] is newer than [b], comparing their numbers in order. */
+    /**
+     * Whether version [a] is newer than [b], comparing their numbers in order;
+     * a pre-release (0.5.0-beta.2) comes before its release (0.5.0).
+     */
     fun newer(a: String, b: String): Boolean {
-        val x = a.split('.', '-').map { it.toIntOrNull() ?: 0 }
-        val y = b.split('.', '-').map { it.toIntOrNull() ?: 0 }
+        fun parts(v: String) = v.substringBefore('-').split('.').map { it.toIntOrNull() ?: 0 }
+        fun pre(v: String) = if ('-' in v) v.substringAfterLast('.').toIntOrNull() ?: 0 else Int.MAX_VALUE
+        val x = parts(a)
+        val y = parts(b)
         for (i in 0 until maxOf(x.size, y.size)) {
             val d = x.getOrElse(i) { 0 } - y.getOrElse(i) { 0 }
             if (d != 0) return d > 0
         }
-        return false
+        return pre(a) > pre(b)
     }
 }
