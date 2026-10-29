@@ -275,7 +275,10 @@ fn newer(candidate: &str, current: &str) -> bool {
         parts.push(if pre.is_empty() {
             u64::MAX
         } else {
-            pre.rsplit('.').next().and_then(|n| n.parse().ok()).unwrap_or(0)
+            pre.rsplit('.')
+                .next()
+                .and_then(|n| n.parse().ok())
+                .unwrap_or(0)
         });
         parts
     };
