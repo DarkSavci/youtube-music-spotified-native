@@ -12,6 +12,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import okhttp3.OkHttpClient
@@ -36,9 +37,9 @@ object Updater {
             .execute().use { r ->
                 if (r.code == 404) return@withContext say("There are no releases yet.")
                 if (!r.isSuccessful) error("GitHub answered ${r.code}")
-                Json.parseToJsonElement(r.body.string()) as JsonObject
-            }
-        val tag = (release["tag_name"] as? JsonPrimitive)?.content.orEmpty().removePrefix("v")
+                phoneRelease(Json.parseToJsonElement(r.body.string()))
+            } ?: return@withContext say("There are no releases for the phone yet.")
+        val tag = (release["tag_name"] as? JsonPrimitive)?.content.orEmpty().removePrefix("android-").removePrefix("v")
         if (!newer(tag, current)) return@withContext say("This is the newest version ($current).")
         val assets = (release["assets"] as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }
         fun asset(name: (String) -> Boolean) = assets.firstOrNull { name((it["name"] as? JsonPrimitive)?.content.orEmpty()) }
@@ -107,6 +108,21 @@ object Updater {
                 else -> say("The update was not installed: ${intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE) ?: "Android refused it"}.")
             }
         }
+    }
+
+    /**
+     * The newest published release for the phone. The desktop's releases share
+     * the repository and its "latest", so the list is read for the newest
+     * android-v tag; a single release object (a test's) is taken as it is.
+     */
+    private fun phoneRelease(answer: JsonElement): JsonObject? = when (answer) {
+        is JsonObject -> answer
+        is JsonArray -> answer.mapNotNull { it as? JsonObject }.firstOrNull { r ->
+            val tag = (r["tag_name"] as? JsonPrimitive)?.content.orEmpty()
+            val flag = { key: String -> (r[key] as? JsonPrimitive)?.content == "true" }
+            tag.startsWith("android-v") && !flag("draft") && !flag("prerelease")
+        }
+        else -> null
     }
 
     private fun url(asset: JsonObject) = (asset["browser_download_url"] as JsonPrimitive).content

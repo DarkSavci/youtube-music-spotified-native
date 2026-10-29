@@ -18,7 +18,8 @@ val keystore = Properties().apply {
 // only. -Pabis=arm64-v8a builds the phone's alone.
 val abis = (findProperty("abis") as String?)?.split(",") ?: listOf("arm64-v8a", "x86_64")
 
-val RELEASES = "https://api.github.com/repos/DarkSavci/youtube-music-spotified-native/releases/latest"
+// The project's releases, newest first; the phone app's are the android-v ones.
+val RELEASES = "https://api.github.com/repos/DarkSavci/youtube-music-spotified-native/releases?per_page=30"
 
 android {
     namespace = "dev.darksavci.spotified"
