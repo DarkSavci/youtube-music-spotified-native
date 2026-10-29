@@ -36,6 +36,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.darksavci.spotified.R
 import dev.darksavci.spotified.api.BrowsePage
+import dev.darksavci.spotified.api.HomeChip
 import dev.darksavci.spotified.api.Item
 import dev.darksavci.spotified.api.Track
 import dev.darksavci.spotified.ui.LocalActions
@@ -61,7 +62,12 @@ fun HomeScreen() {
     val actions = LocalActions.current
     val api = actions.graph.api
     var mood by remember { mutableStateOf("") }
-    val page = rememberLoader("home:$mood") { api.home(mood) }
+    // Podcasts, as Spotify's Home has them beside All: YouTube Music's own podcasts page.
+    // YouTube Music has a podcasts page in some countries only; the chip shows where it does.
+    val podcasts by produceState(false) { value = runCatching { api.browse(PODCASTS_PAGE).shelves.isNotEmpty() }.getOrDefault(false) }
+    // Home's moods, kept while the podcasts page, which has none, shows.
+    var moods by remember { mutableStateOf(emptyList<HomeChip>()) }
+    val page = rememberLoader("home:$mood") { if (mood == PODCASTS) api.browse(PODCASTS_PAGE) else api.home(mood) }
     val recent = rememberLoader("home:recent") { runCatching { api.history() }.getOrDefault(emptyList()) }
     val state by page.state.collectAsStateWithLifecycle()
     val recentState by recent.state.collectAsStateWithLifecycle()
@@ -70,11 +76,13 @@ fun HomeScreen() {
     LazyColumn(Modifier.windowInsetsPadding(WindowInsets.statusBars), contentPadding = PaddingValues(bottom = 24.dp)) {
         // Your picture, which opens the side menu, and the moods beside it, as Spotify's Home has them.
         item {
-            val chips = (state as? Load.Ready<BrowsePage>)?.value?.chips.orEmpty()
+            (state as? Load.Ready<BrowsePage>)?.value?.chips?.takeIf { it.isNotEmpty() }?.let { moods = it }
+            val chips = moods
             Row(Modifier.fillMaxWidth().padding(start = 16.dp, top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                 ProfileButton(actions)
                 LazyRow(contentPadding = PaddingValues(start = 10.dp, end = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     item { Chip("All", mood.isEmpty(), { mood = "" }) }
+                    if (podcasts) item { Chip("Podcasts", mood == PODCASTS, { mood = if (mood == PODCASTS) "" else PODCASTS }) }
                     items(chips) { chip -> Chip(chip.title, chip.params == mood, { mood = if (mood == chip.params) "" else chip.params }) }
                 }
             }
@@ -160,3 +168,7 @@ private fun RecentGrid(tracks: List<Track>) {
         }
     }
 }
+
+/** The chip that turns Home to podcasts; not a mood YouTube Music gives. */
+private const val PODCASTS = "podcasts"
+private const val PODCASTS_PAGE = "FEmusic_non_music_audio"
