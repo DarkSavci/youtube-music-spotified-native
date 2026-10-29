@@ -56,6 +56,8 @@ sealed interface MenuTarget {
     object SleepTimer : MenuTarget
     object Speed : MenuTarget
     object Queue : MenuTarget
+    /** The Create tab's choices. */
+    object Create : MenuTarget
 }
 
 /**

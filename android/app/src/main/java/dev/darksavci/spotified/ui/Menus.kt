@@ -80,6 +80,7 @@ fun Menus() {
                 MenuTarget.SleepTimer -> SleepMenu(actions)
                 MenuTarget.Speed -> SpeedMenu(actions)
                 MenuTarget.Queue -> QueueSheet(actions)
+                MenuTarget.Create -> CreateMenu(actions)
             }
         }
     }
@@ -99,14 +100,20 @@ private fun Header(title: String, subtitle: String, artwork: List<Artwork>) {
 }
 
 @Composable
-private fun Entry(icon: Int, label: String, onClick: () -> Unit) {
+private fun Entry(icon: Int, label: String, onClick: () -> Unit) = Entry(icon, label, null, onClick)
+
+@Composable
+private fun Entry(icon: Int, label: String, detail: String?, onClick: () -> Unit) {
     Row(
         Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 20.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Glyph(icon, null, tint = LocalPalette.current.secondary)
         Spacer(Modifier.width(18.dp))
-        Text(label, style = Type.body)
+        Column {
+            Text(label, style = Type.body)
+            if (detail != null) Text(detail, style = Type.small, color = LocalPalette.current.secondary)
+        }
     }
 }
 
@@ -246,6 +253,15 @@ private fun AddToPlaylist(actions: Actions, tracks: List<Track>) {
             }
         }
     }
+}
+
+/** What the Create tab makes: a playlist, or one brought over from elsewhere. */
+@Composable
+private fun CreateMenu(actions: Actions) {
+    Text("Create", style = Type.heading, modifier = Modifier.padding(16.dp))
+    Entry(R.drawable.ic_list_music, "Playlist", "Build a playlist with songs") { actions.addTo(emptyList()) }
+    Entry(R.drawable.ic_list_plus, "Import a playlist", "From Spotify, Apple Music or Deezer") { actions.menu = null; actions.go(Routes.IMPORT) }
+    Entry(R.drawable.ic_users, "Listen Together", "Play in step with friends") { actions.menu = null; actions.go(Routes.TOGETHER) }
 }
 
 @Composable

@@ -170,6 +170,7 @@ private fun BottomBar(actions: Actions) {
         Tab(R.drawable.ic_house, "Home", route == Routes.HOME) { tabTo(actions, Routes.HOME) }
         Tab(R.drawable.ic_search, "Search", route == Routes.SEARCH_ROUTE) { tabTo(actions, Routes.SEARCH) }
         Tab(R.drawable.ic_library, "Your Library", route == Routes.LIBRARY) { tabTo(actions, Routes.LIBRARY) }
+        Tab(R.drawable.ic_plus, "Create", false) { actions.menu = MenuTarget.Create }
     }
 }
 
