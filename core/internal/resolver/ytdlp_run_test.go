@@ -3,7 +3,10 @@ package resolver_test
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"spotifier/internal/resolver"
@@ -68,5 +71,64 @@ func TestYtdlpInProcessFailureIsClassified(t *testing.T) {
 	// start Python at launch for nothing.
 	if !y.Available() {
 		t.Error("a supplied runner counts as available")
+	}
+}
+
+const oneFormat = `{"duration": 200, "formats": [
+	{"format_id": "251", "url": "https://x/251", "ext": "webm", "acodec": "opus", "vcodec": "none", "abr": 130, "protocol": "https"}
+]}`
+
+// Signed out, YouTube Music's client serves nothing, so it is not asked: one
+// run per track, the default way.
+func TestYtdlpSignedOutAsksOnceTheDefaultWay(t *testing.T) {
+	var asked []string
+	y := resolver.NewYtdlp("", "")
+	y.Run = func(_ context.Context, args []string) ([]byte, []byte, error) {
+		asked = append(asked, args[len(args)-1])
+		return []byte(oneFormat), nil, nil
+	}
+	if _, _, err := y.Resolve(context.Background(), "abc"); err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if len(asked) != 1 || asked[0] != "https://www.youtube.com/watch?v=abc" {
+		t.Errorf("want one run the default way, got %v", asked)
+	}
+}
+
+// A listener YouTube Music's client refuses (signed in without Premium) has it
+// tried twice; once it has failed twice running where the default worked, the
+// next track goes the default way at once.
+func TestYtdlpLeavesOutTheMusicClientOnceItRefused(t *testing.T) {
+	cookies := filepath.Join(t.TempDir(), "cookies.txt")
+	if err := os.WriteFile(cookies, []byte("# Netscape HTTP Cookie File\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var asked []string
+	y := resolver.NewYtdlp("", cookies)
+	y.Run = func(_ context.Context, args []string) ([]byte, []byte, error) {
+		url := args[len(args)-1]
+		asked = append(asked, url)
+		if strings.HasPrefix(url, "https://music.youtube.com/") {
+			return nil, []byte("ERROR: [youtube] abc: Requested format is not available"), errors.New("exit 1")
+		}
+		return []byte(oneFormat), nil, nil
+	}
+	// Twice refused, as every track is for this listener; once alone would be
+	// a track it cannot serve.
+	for _, id := range []string{"abc", "def"} {
+		asked = nil
+		if _, _, err := y.Resolve(context.Background(), id); err != nil {
+			t.Fatalf("%s: %v", id, err)
+		}
+		if len(asked) != 2 {
+			t.Fatalf("%s tries YouTube Music, then the default: %v", id, asked)
+		}
+	}
+	asked = nil
+	if _, _, err := y.Resolve(context.Background(), "ghi"); err != nil {
+		t.Fatalf("third: %v", err)
+	}
+	if len(asked) != 1 || !strings.HasPrefix(asked[0], "https://www.youtube.com/") {
+		t.Errorf("the next track goes the default way only, got %v", asked)
 	}
 }

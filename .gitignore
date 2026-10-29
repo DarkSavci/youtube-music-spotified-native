@@ -35,3 +35,8 @@ core/testdata/fixtures/history.json
 core/testdata/fixtures/library_*.json
 core/testdata/fixtures/account.json
 core/testdata/fixtures/player.json
+
+# The release signing key and its passwords never go in the repository.
+android/keystore.properties
+*.jks
+*.keystore

@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"spotifier/internal/domain"
@@ -60,6 +61,43 @@ type Ytdlp struct {
 
 	once    sync.Once
 	present bool
+
+	// musicFailedAt is when the YouTube Music client was last found refusing
+	// this listener: twice running it failed where the default way then
+	// worked, as it does every track for a listener without Premium. Until
+	// skipMusicClientFor has passed it is not asked again, so each track
+	// costs one lookup rather than two. One refusal alone is a track it
+	// cannot serve (a video, a podcast): the message is the same.
+	musicFailedAt atomic.Int64
+	musicRefusals atomic.Int32
+	// now is the clock; tests replace it.
+	now func() time.Time
+}
+
+// skipMusicClientFor is how long the YouTube Music client is left out after
+// it failed for this listener.
+const skipMusicClientFor = 10 * time.Minute
+
+func (y *Ytdlp) clock() time.Time {
+	if y.now != nil {
+		return y.now()
+	}
+	return time.Now()
+}
+
+// tryMusicClient is whether asking as YouTube Music is worth it: it serves a
+// signed-in listener's subscriber formats, and nothing at all without
+// cookies (measured signed out: it failed after 4.9 s, and the default way
+// then worked in 2.7 s), nor for a listener it has just refused.
+func (y *Ytdlp) tryMusicClient() bool {
+	if y.CookiePath == "" {
+		return false
+	}
+	if _, err := os.Stat(y.CookiePath); err != nil {
+		return false
+	}
+	at := y.musicFailedAt.Load()
+	return at == 0 || y.clock().Sub(time.Unix(0, at)) >= skipMusicClientFor
 }
 
 // RunFunc runs yt-dlp with args and returns what it printed. A non-nil
@@ -168,11 +206,25 @@ func (y *Ytdlp) Resolve(ctx context.Context, videoID string) (domain.Stream, Qua
 		ctx, cancel = context.WithTimeout(ctx, y.Timeout)
 		defer cancel()
 	}
+	if !y.tryMusicClient() {
+		return y.resolveWith(ctx, videoID, nil, "https://www.youtube.com/watch?v=")
+	}
 	st, q, err := y.resolveWith(ctx, videoID, musicClientArgs, "https://music.youtube.com/watch?v=")
-	if err == nil || ctx.Err() != nil || errors.Is(err, ErrRateLimited) {
+	if err == nil {
+		y.musicRefusals.Store(0)
+		return st, q, nil
+	}
+	if ctx.Err() != nil || errors.Is(err, ErrRateLimited) {
 		return st, q, err
 	}
-	return y.resolveWith(ctx, videoID, nil, "https://www.youtube.com/watch?v=")
+	st, q, ferr := y.resolveWith(ctx, videoID, nil, "https://www.youtube.com/watch?v=")
+	// The default way worked where YouTube Music's did not, a second time
+	// running: this listener is not one it serves, so it is left out a while.
+	if ferr == nil && y.musicRefusals.Add(1) >= 2 {
+		y.musicRefusals.Store(0)
+		y.musicFailedAt.Store(y.clock().UnixNano())
+	}
+	return st, q, ferr
 }
 
 func (y *Ytdlp) resolveWith(ctx context.Context, videoID string, extra []string, base string) (domain.Stream, Quality, error) {

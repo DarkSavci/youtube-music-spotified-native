@@ -1,9 +1,22 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.chaquopy)
 }
+
+// The release key, from android/keystore.properties, which never enters the
+// repository; without it a release build is signed with the debug key, for a
+// local build only.
+val keystore = Properties().apply {
+    rootProject.file("keystore.properties").takeIf { it.isFile }?.inputStream()?.use { load(it) }
+}
+
+// Phones, and x86_64 for emulators; the core and qjs are built for these two
+// only. -Pabis=arm64-v8a builds the phone's alone.
+val abis = (findProperty("abis") as String?)?.split(",") ?: listOf("arm64-v8a", "x86_64")
 
 val RELEASES = "https://api.github.com/repos/DarkSavci/youtube-music-spotified-native/releases/latest"
 
@@ -19,10 +32,6 @@ android {
         versionCode = (findProperty("versionCode") as String?)?.toInt() ?: 1
         versionName = (findProperty("versionName") as String?) ?: "0.5.0"
         buildConfigField("String", "RELEASES_URL", "\"$RELEASES\"")
-        // Phones, and x86_64 for emulators; the core and qjs are built for
-        // these two only. -Pabis=arm64-v8a builds the phone's alone.
-        val abis = (findProperty("abis") as String?)?.split(",")
-            ?: listOf("arm64-v8a", "x86_64")
         ndk { abiFilters += abis }
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -30,6 +39,27 @@ android {
     buildFeatures {
         compose = true
         buildConfig = true
+    }
+
+    signingConfigs {
+        if (keystore.isNotEmpty()) {
+            create("release") {
+                storeFile = file(keystore.getProperty("storeFile"))
+                storePassword = keystore.getProperty("storePassword")
+                keyAlias = keystore.getProperty("keyAlias")
+                keyPassword = keystore.getProperty("keyPassword")
+            }
+        }
+    }
+
+    // One APK for each kind of phone, plus one that holds both, for whoever is unsure.
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include(*abis.toTypedArray())
+            isUniversalApk = true
+        }
     }
 
     buildTypes {
@@ -44,7 +74,7 @@ android {
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             // Signed with the release key when one is configured
             // (keystore.properties); otherwise the debug key, for a local build.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
         }
     }
 
