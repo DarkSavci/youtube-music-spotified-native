@@ -2,6 +2,46 @@
 
 Every release of Youtube Music Spotified Native, newest first.
 
+## 0.6.0 — 2026-10-30
+
+### Fixed on Android
+
+- Songs no longer start again about six seconds in after a crossfade
+- Music plays at full volume: every song was ten decibels too quiet
+- Removing the song that is playing starts the next from its beginning, not at the same point
+- Sideways swipes across a row no longer count as a tap
+- A tap on the home screen widget plays when the app is closed, and the Recently played widget plays the song you chose
+- A call, an unplugged headset or the sleep timer now pauses only this phone in a Listen Together room, and the room carries on
+- A song that failed to load, or a core that restarted, no longer leaves the player showing "playing" in silence
+- Lyrics stay readable on pale covers
+
+### New on Android
+
+- Now Playing is a sheet that follows your finger: swipe down to close it, and swipe covers to change songs
+- The queue: drag by the handle, swipe to remove with Undo, Clear, and what has played
+- Pull to refresh, and a second tap on a tab goes back to its top
+- Copy a song, album or artist's link for YouTube Music, Spotify, Apple Music or Deezer
+- Block songs, artists and albums; folders; Unpin; save albums and playlists to your library; select several songs at once; rename playlists
+- Search suggestions and recent searches, and a search within your library
+- Volume level, volume boost and bass; a visualizer; choose where the sound plays
+- Lyrics highlight only what is being sung, have their own controls, and stop following while you scroll them
+- Downloads show progress, can be paused and retried, and wait for Wi-Fi if you ask
+- Settings have a search, and a problem report or log can be sent with private details removed
+- Listen Together invite links, a simpler start page and pictures beside queued songs
+- A playlist widget, resizable widgets, and shortcuts to your last playlists
+- Landscape layouts, a yearly recap shared as images, and a new look for the search field and the downloaded mark
+
+### Changed on Android
+
+- Audio quality on mobile data now starts at Highest
+- Music videos are left out of shelves, as on the desktop. A chip on Search brings them back
+
+### Fixed on the desktop and Android
+
+- A seek is only made when asked for, so a late position report cannot pull a song back
+- A Listen Together listener a little over a second out of step is now put right
+- Writes to your library can no longer be sent from a web page
+
 ## 0.5.0 — 2026-10-29
 
 ### New
