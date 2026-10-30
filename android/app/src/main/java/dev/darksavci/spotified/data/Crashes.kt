@@ -39,9 +39,10 @@ object Crashes {
 
     /** Opens a new GitHub issue with the report in it, for the listener to read and post. */
     fun send(context: Context, report: String) {
-        val title = report.lineSequence().firstOrNull { it.startsWith("Exception:") }
+        val title = Redact.text(report).lineSequence().firstOrNull { it.startsWith("Exception:") }
             ?.removePrefix("Exception:")?.trim()?.take(80) ?: "Crash"
-        val body = "**What I was doing:**\n\n\n**Report:**\n```\n${report.take(MAX_STACK)}\n```\n"
+        // An exception's message can quote an address or a header; it is scrubbed before it can be posted.
+        val body = "**What I was doing:**\n\n\n**Report:**\n```\n${Redact.text(report).take(MAX_STACK)}\n```\n"
         val url = Uri.parse(ISSUES).buildUpon()
             .appendQueryParameter("title", "Android crash: $title")
             .appendQueryParameter("body", body)

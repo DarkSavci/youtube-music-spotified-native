@@ -16,7 +16,7 @@ import kotlinx.serialization.json.put
  */
 
 /** How far this player may be from the room before it is brought back. */
-private const val DRIFT_MS = 1000L
+const val DRIFT_MS = 1000L
 
 /** How long after one correction the next may come, so a slow player is not sought over and over. */
 private const val BETWEEN_CORRECTIONS_MS = 4000L
@@ -35,6 +35,8 @@ data class Local(
     val playing: Boolean,
     /** Neither loading nor stalled: its position can be trusted. */
     val settled: Boolean,
+    /** This phone is kept quiet while the room carries on: it stays where it is until it rejoins. */
+    val held: Boolean = false,
 )
 
 /**
@@ -51,7 +53,7 @@ fun follow(room: Room, serverNow: Double, local: Local, appliedEntry: String?, s
     val positionMs = room.positionAt(serverNow)
     val anotherSong = appliedEntry != entry.id || local.current != entry.track.id
     val anotherQueue = local.queue != room.queue.map { it.track.id }
-    val adrift = local.settled &&
+    val adrift = !local.held && local.settled &&
         abs(local.positionMs - positionMs) > DRIFT_MS &&
         (sinceCorrectionMs == null || sinceCorrectionMs >= BETWEEN_CORRECTIONS_MS)
     val wanted = !local.following || anotherSong || anotherQueue || local.playing != room.playing || adrift
@@ -69,6 +71,9 @@ enum class Standing(val label: String) {
     InSync("In sync"),
     Paused("Paused together"),
 
+    /** The room plays on, and this phone was told to be quiet: a call, a headset unplugged. */
+    Held("Paused on this phone"),
+
     /** The room's song cannot be played here: YouTube refuses this device for now, or will not give this song at all. */
     Unavailable("Track unavailable");
 
@@ -76,6 +81,7 @@ enum class Standing(val label: String) {
     fun wire(roomPlaying: Boolean): String = when (this) {
         Buffering -> "buffering"
         CatchingUp -> "catching up"
+        Held -> "paused"
         // The relay moves the room on when everyone says so of the same song.
         Unavailable -> "unavailable"
         else -> if (roomPlaying) "listening" else "paused"
@@ -85,6 +91,7 @@ enum class Standing(val label: String) {
         fun of(room: Room, serverNow: Double, local: Local, endedHere: Boolean): Standing {
             val adrift = abs(local.positionMs - room.positionAt(serverNow)) > DRIFT_MS
             return when {
+                local.held -> Held
                 endedHere && room.playing -> WaitingForNext
                 !local.settled -> Buffering
                 adrift && room.playing -> CatchingUp

@@ -1,6 +1,7 @@
 package dev.darksavci.spotified.api
 
 import java.io.IOException
+import kotlin.coroutines.CoroutineContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.KSerializer
@@ -34,6 +35,18 @@ sealed class ApiError(message: String) : Exception(message) {
         val detail = cause
     }
 }
+
+/**
+ * Asks the core past its kept answers for the calls made under it, as a pull to
+ * refresh does: the core keeps a page for as long as half an hour or a week, and
+ * would otherwise show the same one again. What it kept still covers a failure.
+ */
+object FreshRead : CoroutineContext.Element, CoroutineContext.Key<FreshRead> {
+    override val key: CoroutineContext.Key<*> get() = this
+}
+
+@Serializable
+data class Channel(val id: String = "", val name: String = "", val handle: String = "", val avatarUrl: String = "")
 
 @Serializable
 private data class Me(val account: Account? = null)
@@ -159,9 +172,14 @@ class Api(private val http: OkHttpClient, private val origin: suspend () -> Http
 
     suspend fun library(): List<LibraryItem> = getList(LibraryItem.serializer(), "me", "library")
 
+    /** The channels the signed-in account can act as; the account's own has an empty id. */
+    suspend fun channels(): List<Channel> = getList(Channel.serializer(), "me", "channels")
+
     suspend fun folders(): List<Folder> = getList(Folder.serializer(), "me", "folders")
 
-    suspend fun createFolder(name: String) = post("me", "folders", body = buildJsonObject { put("name", name) })
+    /** Makes a folder and returns its id. */
+    suspend fun createFolder(name: String): String =
+        call(Created.serializer(), "POST", buildJsonObject { put("name", name) }, "me", "folders").id
 
     suspend fun deleteFolder(id: String) = call<Unit>(null, "DELETE", null, "me", "folders", id)
 
@@ -198,6 +216,21 @@ class Api(private val http: OkHttpClient, private val origin: suspend () -> Http
     suspend fun addToPlaylist(playlistId: String, trackIds: List<String>) =
         post("me", "playlists", playlistId, "tracks", body = buildJsonObject {
             putJsonArray("trackIds") { trackIds.forEach { add(JsonPrimitive(it)) } }
+        })
+
+    /** Renames a playlist or changes its description; null leaves that as it is. */
+    suspend fun editPlaylist(playlistId: String, title: String? = null, description: String? = null) =
+        post("me", "playlists", playlistId, body = buildJsonObject {
+            title?.let { put("title", it) }
+            description?.let { put("description", it) }
+        })
+
+    /** Saves an album or someone else's playlist to the library, or takes it out. */
+    suspend fun setSaved(kind: LibraryKind, itemId: String, saved: Boolean) =
+        post("me", "library", "saved", body = buildJsonObject {
+            put("kind", kind.wire)
+            put("itemId", itemId)
+            put("saved", saved)
         })
 
     suspend fun deletePlaylist(playlistId: String) = call<Unit>(null, "DELETE", null, "me", "playlists", playlistId)
@@ -239,18 +272,37 @@ class Api(private val http: OkHttpClient, private val origin: suspend () -> Http
 
     // ---------- your listening ----------
 
-    suspend fun stats(days: Int): Stats {
-        fun top(what: String, limit: Int): HttpUrl.Builder.() -> Unit = {
-            addQueryParameter("days", days.toString()); addQueryParameter("limit", limit.toString())
+    suspend fun stats(days: Int): Stats = statsOf { addQueryParameter("days", days.toString()) }
+
+    /**
+     * The totals and top lists of an exact span, in Unix seconds, such as a
+     * calendar year. A core older than the from and to parameters goes by [days].
+     */
+    suspend fun statsBetween(from: Long, to: Long, days: Int): Stats = statsOf {
+        addQueryParameter("days", days.toString())
+        addQueryParameter("from", from.toString())
+        addQueryParameter("to", to.toString())
+    }
+
+    private suspend fun statsOf(period: HttpUrl.Builder.() -> Unit): Stats {
+        fun top(limit: Int): HttpUrl.Builder.() -> Unit = {
+            period()
+            addQueryParameter("limit", limit.toString())
         }
         return Stats(
-            summary = get(Summary.serializer(), "me", "stats", "summary") { addQueryParameter("days", days.toString()) },
-            tracks = getList(TrackStat.serializer(), "me", "stats", "tracks", query = top("tracks", 50)),
-            artists = getList(ArtistStat.serializer(), "me", "stats", "artists", query = top("artists", 20)),
-            albums = getList(AlbumStat.serializer(), "me", "stats", "albums", query = top("albums", 20)),
+            summary = get(Summary.serializer(), "me", "stats", "summary", query = period),
+            tracks = getList(TrackStat.serializer(), "me", "stats", "tracks", query = top(50)),
+            artists = getList(ArtistStat.serializer(), "me", "stats", "artists", query = top(20)),
+            albums = getList(AlbumStat.serializer(), "me", "stats", "albums", query = top(20)),
             onRepeat = getList(TrackStat.serializer(), "me", "stats", "on-repeat") { addQueryParameter("limit", "20") },
         )
     }
+
+    /** The listener's own history searched by name, across all of it. */
+    suspend fun statsLookup(text: String): LookupResults =
+        get(LookupResults.serializer(), "me", "stats", "lookup") {
+            addQueryParameter("q", text); addQueryParameter("limit", "6")
+        }
 
     suspend fun statDetail(kind: String, id: String): StatDetail =
         get(StatDetail.serializer(), "me", "stats", "detail") {
@@ -286,12 +338,14 @@ class Api(private val http: OkHttpClient, private val origin: suspend () -> Http
         vararg path: String,
         query: HttpUrl.Builder.() -> Unit = {},
     ): T = withContext(Dispatchers.IO) {
+        val fresh = coroutineContext[FreshRead] != null
         val url = origin().newBuilder().addPathSegment("v1").apply {
             path.forEach { addPathSegment(it) }
             query()
         }.build()
         val requestBody = body?.let { CoreJson.encodeToString(JsonElement.serializer(), it).toRequestBody(JSON) }
-        val request = Request.Builder().url(url).method(method, requestBody).build()
+        val request = Request.Builder().url(url).method(method, requestBody)
+            .apply { if (fresh) header("Cache-Control", "no-cache") }.build()
         val (code, text) = try {
             http.newCall(request).execute().use { it.code to it.body.string() }
         } catch (e: IOException) {

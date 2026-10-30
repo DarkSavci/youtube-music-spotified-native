@@ -379,6 +379,47 @@ func TestMoveKeepsPlayingTrack(t *testing.T) {
 	}
 }
 
+func TestRemovingThePlayingTrackStartsTheNextFromItsBeginning(t *testing.T) {
+	c, _ := newCore(t)
+	playN(t, c, 3)
+	c.HandleEngine(EngineEvent{Kind: EvPosition, Epoch: c.State().Epoch, PositionMs: 90_000})
+	before := c.Target()
+
+	c.Apply(Command{Kind: CmdRemove, At: 0})
+
+	target := c.Target()
+	if target.VideoID != "b" || target.StartAtMs != 0 {
+		t.Fatalf("target = %q at %d ms, want b from the start", target.VideoID, target.StartAtMs)
+	}
+	if target.Epoch == before.Epoch {
+		t.Fatal("reports from the removed track would still be taken")
+	}
+}
+
+func TestRemovingThePlayingTrackWhilePausedStaysPaused(t *testing.T) {
+	c, _ := newCore(t)
+	playN(t, c, 3)
+	c.Apply(Command{Kind: CmdToggle})
+
+	c.Apply(Command{Kind: CmdRemove, At: 0})
+
+	if c.State().State != domain.StatePaused {
+		t.Fatalf("state = %v, want paused", c.State().State)
+	}
+}
+
+func TestRemovingTheOnlyTrackLeavesNothingToPlay(t *testing.T) {
+	c, _ := newCore(t)
+	playN(t, c, 1)
+	c.HandleEngine(EngineEvent{Kind: EvPosition, Epoch: c.State().Epoch, PositionMs: 90_000})
+
+	c.Apply(Command{Kind: CmdRemove, At: 0})
+
+	if got := c.Target(); got.VideoID != "" || c.State().PositionMs != 0 {
+		t.Fatalf("target %q, position %d, want nothing at 0", got.VideoID, c.State().PositionMs)
+	}
+}
+
 func TestRemoveCurrentSlidesNextIntoPlace(t *testing.T) {
 	c, _ := newCore(t)
 	playN(t, c, 3)

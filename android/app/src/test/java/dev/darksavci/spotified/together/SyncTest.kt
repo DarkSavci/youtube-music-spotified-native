@@ -208,4 +208,33 @@ class SyncTest {
         assertEquals(false, lengthWorthTelling(200_000, 260_000))
         assertEquals(false, lengthWorthTelling(200_000, 0))
     }
+    @Test
+    fun aPlayerAdriftIsActuallyMovedByTheCorrectionItIsSent() {
+        // 1.2 s out: past the room's drift, and it was under the deck's tolerance.
+        val command = follow(room(), 1000.0, withTheRoom(31_200), "e2", null)
+        assertNotNull(command)
+        val before = dev.darksavci.spotified.api.Target(epoch = 1, videoId = "two", seekSeq = 1, seekToMs = 30_000)
+        val after = before.copy(seekSeq = 2, seekToMs = command!!.positionMs)
+        val ops = dev.darksavci.spotified.playback.reconcile(dev.darksavci.spotified.playback.Decks(current = "two", positionMs = 31_200), before, after)
+        assertEquals(1, ops.size)
+        assertTrue(dev.darksavci.spotified.playback.SEEK_TOLERANCE_MS < DRIFT_MS)
+    }
+
+    @Test
+    fun aHeldPlayerIsNotBroughtBackForBeingBehind() {
+        assertNull(follow(room(), 1000.0, withTheRoom(10_000).copy(held = true), "e2", null))
+    }
+
+    @Test
+    fun aHeldPlayerStillFollowsTheRoomToItsNextSong() {
+        val moved = room().copy(current = "e3")
+        assertEquals("e3", follow(moved, 1000.0, withTheRoom(10_000).copy(held = true), "e2", null)?.entry)
+    }
+
+    @Test
+    fun aHeldPlayerSaysSoAndTheRoomHearsItIsPaused() {
+        val standing = Standing.of(room(), 1000.0, withTheRoom(10_000).copy(held = true), endedHere = false)
+        assertEquals(Standing.Held, standing)
+        assertEquals("paused", standing.wire(roomPlaying = true))
+    }
 }

@@ -22,7 +22,7 @@ use crate::tap::Tap;
 
 /// How far the engine may be from the target's position before it seeks.
 /// Less than this is ordinary drift between two clocks, not a request.
-const SEEK_TOLERANCE_MS: u64 = 1500;
+const SEEK_TOLERANCE_MS: u64 = 900;
 
 /// What playback should be, as the core states it.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -32,6 +32,15 @@ pub struct Target {
     /// Empty when nothing is to play.
     pub video_id: String,
     pub start_at_ms: u64,
+    /// Changes each time the core moves the position on purpose. On a track
+    /// the deck already holds, a seek happens only when this has changed:
+    /// `start_at_ms` also echoes the engine's own reports, and following an
+    /// echo pulled songs back.
+    pub seek_seq: u64,
+    /// Where the move `seek_seq` last counted went: what a seek goes to, since
+    /// a report in flight can have overwritten `start_at_ms` by the time the
+    /// seek is seen.
+    pub seek_to_ms: u64,
     pub playing: bool,
     /// The track after this one, to have ready. Empty when there is none.
     pub preload_video_id: String,
@@ -127,9 +136,10 @@ pub fn reconcile(decks: Decks<'_>, previous: &Target, target: &Target) -> Vec<Op
         // The same track under a new epoch, after it ended, is the core
         // starting it again: repeat one.
         let restarted = decks.ended && target.epoch != previous.epoch;
-        let moved = decks.position_ms.abs_diff(target.start_at_ms) > SEEK_TOLERANCE_MS;
-        if restarted || moved {
-            ops.push(Op::Seek(target.start_at_ms));
+        let asked = target.seek_seq != previous.seek_seq
+            && decks.position_ms.abs_diff(target.seek_to_ms) > SEEK_TOLERANCE_MS;
+        if restarted || asked {
+            ops.push(Op::Seek(target.seek_to_ms));
         }
     }
     // Otherwise the deck already plays a track the core has only now named:

@@ -2,13 +2,14 @@ package dev.darksavci.spotified.core
 
 import dev.darksavci.spotified.BuildConfig
 import android.content.Context
-import android.util.Log
 import com.chaquo.python.PyException
 import com.chaquo.python.PyObject
 import com.chaquo.python.Python
 import com.chaquo.python.android.AndroidPlatform
+import dev.darksavci.spotified.core.mobile.LogSink
 import dev.darksavci.spotified.core.mobile.Mobile
 import dev.darksavci.spotified.core.mobile.YtdlpRunner
+import dev.darksavci.spotified.data.Logs
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -68,9 +69,11 @@ class Core(context: Context) {
         cfg.jsRuntimes = "quickjs:${app.applicationInfo.nativeLibraryDir}/libqjs.so"
         cfg.verbose = BuildConfig.DEBUG
         Mobile.setYtdlp(PythonYtdlp(app))
+        // The core's lines at their own levels, and into the log file.
+        Mobile.setLogSink(LogSink { priority, line -> Logs.fromCore(priority, line) })
         val started = System.currentTimeMillis()
         val address = Mobile.start(cfg)
-        Log.i(TAG, "core on $address in ${System.currentTimeMillis() - started} ms")
+        Logs.i(TAG, "core on $address in ${System.currentTimeMillis() - started} ms")
         return Running(address, Mobile.token())
     }
 

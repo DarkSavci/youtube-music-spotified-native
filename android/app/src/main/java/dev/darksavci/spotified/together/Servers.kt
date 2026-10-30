@@ -32,7 +32,7 @@ const val CHECKING = "Checking…"
 const val CHECKED = "Ready for v2 rooms"
 
 /** The host of a checked address, which names a server that was given no name. */
-private fun host(address: String): String = address.substringAfter("://").substringBefore('/')
+internal fun hostOf(address: String): String = address.substringAfter("://").substringBefore('/')
 
 /** An id no saved server has yet. */
 private fun freshId(servers: List<SavedServer>): String {
@@ -49,7 +49,7 @@ private fun freshId(servers: List<SavedServer>): String {
  */
 fun save(servers: List<SavedServer>, form: ServerForm): Result<Pair<List<SavedServer>, String>> {
     val url = checkedAddress(form.url).getOrElse { return Result.failure(it) }
-    val name = form.name.trim().ifEmpty { host(url) }
+    val name = form.name.trim().ifEmpty { hostOf(url) }
     val id = form.editing ?: freshId(servers)
     val saved = servers.filter { it.id != id } + SavedServer(id, name, url)
     return Result.success(saved to id)

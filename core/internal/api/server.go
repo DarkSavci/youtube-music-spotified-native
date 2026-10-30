@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"spotifier/internal/account"
@@ -151,6 +152,9 @@ type Server struct {
 	// Separate client from the API one: audio transfers are long-lived and
 	// must not be cut short by a timeout sized for JSON requests.
 	streamClient *http.Client
+	// upstreamBytes is all the audio read from upstream since the core started,
+	// whatever became of it: what a phone's data use is to be measured against.
+	upstreamBytes atomic.Int64
 	// net is whether YouTube can be reached; see network.go.
 	net *network
 }
@@ -252,14 +256,15 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /v1/me/liked", s.handleLiked)
 	s.mux.HandleFunc("GET /v1/me/history", s.handleHistory)
 	s.mux.HandleFunc("GET /v1/me/search-history", s.handleSearchHistory)
-	s.mux.HandleFunc("POST /v1/me/search-history/forget", s.handleForgetSearches)
+	s.mux.HandleFunc("POST /v1/me/search-history/forget", s.ownClient(s.handleForgetSearches))
 	s.mux.HandleFunc("GET /v1/me/remote-queue", s.handleRemoteQueue)
-	s.mux.HandleFunc("POST /v1/me/tracks/{id}/rating", s.handleRate)
-	s.mux.HandleFunc("POST /v1/me/artists/{id}/follow", s.handleFollow)
-	s.mux.HandleFunc("POST /v1/me/playlists", s.handleCreatePlaylist)
-	s.mux.HandleFunc("DELETE /v1/me/playlists/{id}", s.handleDeletePlaylist)
-	s.mux.HandleFunc("POST /v1/me/playlists/{id}/tracks", s.handleAddToPlaylist)
-	s.mux.HandleFunc("DELETE /v1/me/playlists/{id}/tracks", s.handleRemoveFromPlaylist)
+	s.mux.HandleFunc("POST /v1/me/tracks/{id}/rating", s.ownClient(s.handleRate))
+	s.mux.HandleFunc("POST /v1/me/artists/{id}/follow", s.ownClient(s.handleFollow))
+	s.mux.HandleFunc("POST /v1/me/playlists", s.ownClient(s.handleCreatePlaylist))
+	s.mux.HandleFunc("POST /v1/me/playlists/{id}", s.ownClient(s.handleEditPlaylist))
+	s.mux.HandleFunc("DELETE /v1/me/playlists/{id}", s.ownClient(s.handleDeletePlaylist))
+	s.mux.HandleFunc("POST /v1/me/playlists/{id}/tracks", s.ownClient(s.handleAddToPlaylist))
+	s.mux.HandleFunc("DELETE /v1/me/playlists/{id}/tracks", s.ownClient(s.handleRemoveFromPlaylist))
 	// The shell calls this after a sign-in writes new credentials. Without it
 	// the file changes and nothing reads it again until a restart, which is
 	// exactly what made signing in look like it did nothing.
@@ -280,7 +285,7 @@ func (s *Server) routes() {
 
 	// Control plane — ours, not YouTube's. No credentials involved, which is
 	// why these could later be served centrally.
-	s.mux.HandleFunc("POST /v1/me/plays", s.handleRecordPlays)
+	s.mux.HandleFunc("POST /v1/me/plays", s.ownClient(s.handleRecordPlays))
 	s.mux.HandleFunc("GET /v1/me/stats/tracks", s.handleTopTracks)
 	s.mux.HandleFunc("GET /v1/me/stats/artists", s.handleTopArtists)
 	s.mux.HandleFunc("GET /v1/me/stats/on-repeat", s.handleOnRepeat)
@@ -291,9 +296,10 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /v1/artists/{id}/affinity", s.handleAffinity)
 	s.mux.HandleFunc("GET /v1/me/mixes", s.handleMixes)
 	s.mux.HandleFunc("GET /v1/me/folders", s.handleFolders)
-	s.mux.HandleFunc("POST /v1/me/folders", s.handleCreateFolder)
-	s.mux.HandleFunc("DELETE /v1/me/folders/{id}", s.handleDeleteFolder)
-	s.mux.HandleFunc("POST /v1/me/library/organise", s.handleOrganise)
+	s.mux.HandleFunc("POST /v1/me/folders", s.ownClient(s.handleCreateFolder))
+	s.mux.HandleFunc("DELETE /v1/me/folders/{id}", s.ownClient(s.handleDeleteFolder))
+	s.mux.HandleFunc("POST /v1/me/library/organise", s.ownClient(s.handleOrganise))
+	s.mux.HandleFunc("POST /v1/me/library/saved", s.ownClient(s.handleSaveToLibrary))
 	s.mux.HandleFunc("POST /v1/migrate/history", s.handleMigrateHistory)
 	s.mux.HandleFunc("POST /v1/migrate/cache", s.handleMigrateCache)
 
@@ -312,6 +318,17 @@ func (s *Server) routes() {
 }
 
 // ---------- helpers ----------
+
+// ownClient keeps web pages out of a route that writes to the account. A page
+// can POST text/plain to the loopback address without a preflight, and the CORS
+// headers above would let the other methods through anyway.
+func (s *Server) ownClient(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if s.allowVideoRequest(w, r) {
+			next(w, r)
+		}
+	}
+}
 
 func (s *Server) write(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -393,12 +410,23 @@ func (s *Server) fail(w http.ResponseWriter, r *http.Request, err error) {
 			RateLimited: true,
 			RetryAfter:  int(math.Ceil(wait.Seconds())),
 		})
+	case upstreamHasNoSuchPage(err):
+		// An answer, not a failure: some pages exist only in some countries,
+		// and asking whether one does is a normal thing to do.
+		s.deps.Log.Debug("no such page upstream", "path", r.URL.Path)
+		s.write(w, http.StatusNotFound, apiError{Error: "YouTube Music has no such page"})
 	default:
 		// A lost connection is noticed from any request, not only a stream.
 		s.net.Failed(err)
 		s.deps.Log.Warn("request failed", "path", r.URL.Path, "err", err)
 		s.write(w, http.StatusBadGateway, apiError{Error: withoutQueries(err.Error())})
 	}
+}
+
+// upstreamHasNoSuchPage is YouTube answering 404, which a page read can get.
+func upstreamHasNoSuchPage(err error) bool {
+	var upstream *innertube.HTTPError
+	return errors.As(err, &upstream) && upstream.Status == http.StatusNotFound
 }
 
 // errText is an error as the log may hold it: without the query strings of
@@ -789,6 +817,7 @@ func (s *Server) handleLibrary(w http.ResponseWriter, r *http.Request) {
 	// and still merges, enriches and sorts on every request.
 	if _, isService := lib.(*library.Service); isService && s.deps.Responses != nil {
 		if id := s.account().Identity; id != nil {
+			s.readFresh(r, "lib|")
 			lib = library.New(keptLibrary{Identity: id, s: s}, s.libraryMeta())
 		}
 	}

@@ -8,9 +8,11 @@ import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
+import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
 import androidx.media3.common.SimpleBasePlayer
 import androidx.media3.common.util.UnstableApi
+import com.google.common.collect.ImmutableList
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import dev.darksavci.spotified.api.Command
@@ -33,28 +35,93 @@ class CorePlayer(private val playback: Playback, private val engine: Engine) :
 
     private var projection = Projection()
 
-    /** Called on the main thread with each projection, and when the engine changes. */
+    /** What the session was last told. */
+    private var published: Shown? = null
+    private var reportedSeeks = 0L
+
+    /** The queue as the session has it, and the media items made for its tracks. */
+    private var playlistOf: List<Track> = emptyList()
+    private var playlist: ImmutableList<MediaItemData> = ImmutableList.of()
+    private var mediaItems: Map<Track, MediaItem> = emptyMap()
+
+    /**
+     * What the system's surfaces can see change. The position is not in it: a
+     * projection arrives every second for a playing track, and the surfaces
+     * move their seek bars on by themselves from the last position and speed.
+     * A jump is a seek, and that is here.
+     */
+    private data class Shown(
+        val items: List<Track>,
+        val index: Int,
+        val playbackState: Int,
+        val playWhenReady: Boolean,
+        val shuffle: Boolean,
+        val repeat: Repeat,
+        val speed: Float,
+        val seeks: Long,
+    )
+
+    /** Called on the main thread with each projection. */
     fun update(next: Projection) {
         projection = next
-        invalidateState()
+        refresh()
     }
 
-    fun refresh() = invalidateState()
+    /** Tells the session of anything it should show differently, and of nothing else. */
+    fun refresh() {
+        val now = shown()
+        if (now != published) {
+            published = now
+            invalidateState()
+        }
+    }
 
-    override fun getState(): State {
+    private fun shown(): Shown {
         val s = projection.state
-        val items = s.queue.items
-        val index = s.queue.index.coerceIn(0, (items.size - 1).coerceAtLeast(0))
-        val current = items.getOrNull(index)
+        val index = indexIn(s.queue.items)
+        return Shown(
+            s.queue.items, index, playbackState(s.queue.items.getOrNull(index)), projection.target.playing,
+            s.shuffle, s.repeat, engine.speed, engine.seeks,
+        )
+    }
+
+    private fun indexIn(items: List<Track>) = projection.state.queue.index.coerceIn(0, (items.size - 1).coerceAtLeast(0))
+
+    private fun playbackState(current: Track?): Int {
         val ours = current != null && engine.currentId == current.id
-        val playbackState = when {
-            items.isEmpty() -> Player.STATE_IDLE
-            s.state == PlayState.Loading || s.state == PlayState.Stalled -> Player.STATE_BUFFERING
+        return when {
+            current == null -> Player.STATE_IDLE
+            projection.state.state == PlayState.Loading || projection.state.state == PlayState.Stalled -> Player.STATE_BUFFERING
             ours && engine.isBuffering -> Player.STATE_BUFFERING
             ours -> Player.STATE_READY
             projection.target.playing -> Player.STATE_BUFFERING
             else -> Player.STATE_READY
         }
+    }
+
+    /** The queue's items, made again only when it has changed, and then only for tracks not seen before. */
+    private fun playlistFor(items: List<Track>): ImmutableList<MediaItemData> {
+        if (items == playlistOf) return playlist
+        val made = HashMap<Track, MediaItem>(items.size)
+        val list = ImmutableList.builder<MediaItemData>()
+        items.forEachIndexed { i, track ->
+            val item = mediaItems[track] ?: mediaItemOf(track)
+            made[track] = item
+            list.add(itemData(i, track, item))
+        }
+        playlistOf = items
+        mediaItems = made
+        playlist = list.build()
+        return playlist
+    }
+
+    override fun getState(): State {
+        val s = projection.state
+        val items = s.queue.items
+        val index = indexIn(items)
+        val current = items.getOrNull(index)
+        val playbackState = playbackState(current)
+        val ours = { engine.currentId == current?.id }
         val builder = State.Builder()
             .setAvailableCommands(COMMANDS)
             .setPlayWhenReady(projection.target.playing, Player.PLAY_WHEN_READY_CHANGE_REASON_USER_REQUEST)
@@ -68,25 +135,32 @@ class CorePlayer(private val playback: Playback, private val engine: Engine) :
                 },
             )
             .setAudioAttributes(AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MUSIC).build())
+            .setPlaybackParameters(PlaybackParameters(engine.speed))
         if (items.isNotEmpty()) {
-            builder.setPlaylist(items.mapIndexed { i, t -> itemData(i, t) })
+            // Read live, as they may be long after this state was made.
+            builder.setPlaylist(playlistFor(items))
                 .setCurrentMediaItemIndex(index)
-                .setContentPositionMs {
-                    if (engine.currentId == current?.id) engine.positionMs else s.positionMs
-                }
+                .setContentPositionMs { if (ours()) engine.positionMs else projection.state.positionMs }
+                .setContentBufferedPositionMs { if (ours()) engine.bufferedPositionMs else projection.state.positionMs }
+                .setTotalBufferedDurationMs { if (ours()) (engine.bufferedPositionMs - engine.positionMs).coerceAtLeast(0) else 0 }
                 .setIsLoading(playbackState == Player.STATE_BUFFERING)
+            if (engine.seeks != reportedSeeks && ours()) {
+                builder.setPositionDiscontinuity(Player.DISCONTINUITY_REASON_SEEK, engine.positionMs)
+            }
+            reportedSeeks = engine.seeks
         }
         return builder.build()
     }
 
-    private fun itemData(index: Int, track: Track): MediaItemData =
+    private fun itemData(index: Int, track: Track, item: MediaItem): MediaItemData =
         MediaItemData.Builder("$index:${track.id}")
-            .setMediaItem(mediaItemOf(track))
+            .setMediaItem(item)
             .setDurationUs(if (track.durationMs > 0) track.durationMs * 1000 else C.TIME_UNSET)
             .build()
 
     override fun handleSetPlayWhenReady(playWhenReady: Boolean): ListenableFuture<*> {
-        if (playWhenReady != projection.target.playing) playback.toggle()
+        // Not a toggle: this often follows what handleSetMediaItems just sent, whose answer is not in yet.
+        if (playWhenReady) playback.resume() else playback.pressPause()
         return Futures.immediateVoidFuture()
     }
 
@@ -123,7 +197,19 @@ class CorePlayer(private val playback: Playback, private val engine: Engine) :
         val tracks = mediaItems.mapNotNull(::trackOf)
         if (tracks.isNotEmpty()) {
             val at = if (startIndex == C.INDEX_UNSET) 0 else startIndex.coerceIn(0, tracks.size - 1)
-            playback.play(tracks, at, mediaItems.firstOrNull()?.mediaMetadata?.albumTitle?.toString().orEmpty())
+            val origin = mediaItems.firstOrNull()?.mediaMetadata?.albumTitle?.toString().orEmpty()
+            val start = startPositionMs.takeIf { it != C.TIME_UNSET && it > 0 }
+            // The newest projection, not this player's: on a cold start it may be a step behind.
+            val state = playback.projection.value.state
+            when (val what = handed(state.queue.items.map { it.id }, state.queue.index, state.positionMs, tracks.map { it.id }, at, start)) {
+                // Nothing is started here: what plays it is the play that follows, if one does.
+                is Handed.SameQueue -> {
+                    what.jumpTo?.let(playback::jump)
+                    what.seekTo?.let(playback::seek)
+                }
+                Handed.NewQueue ->
+                    if (start != null) playback.playFrom(tracks, at, origin, start) else playback.play(tracks, at, origin)
+            }
         }
         return Futures.immediateVoidFuture()
     }

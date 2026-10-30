@@ -12,6 +12,7 @@ import (
 	"spotifier/internal/domain"
 	"spotifier/internal/lyrics"
 	"spotifier/internal/resolver"
+	"strings"
 	"testing"
 	"time"
 )
@@ -289,5 +290,54 @@ func TestVideoStreamHonoursTheCodecAClientAsksFor(t *testing.T) {
 	plain.ServeHTTP(w, httptest.NewRequest("GET", "/v1/video-stream/abcdefghijk?codec=h264", nil))
 	if w.Code != 502 {
 		t.Fatalf("a resolver with no codec choice answered %d", w.Code)
+	}
+}
+
+// A web page can POST text/plain to the loopback address without a preflight,
+// so what writes to the account has to look at who is asking.
+func TestAccountWritesKeepWebPagesOut(t *testing.T) {
+	routes := []struct{ method, path string }{
+		{http.MethodPost, "/v1/me/search-history/forget"},
+		{http.MethodPost, "/v1/me/tracks/abc/rating"},
+		{http.MethodPost, "/v1/me/artists/abc/follow"},
+		{http.MethodPost, "/v1/me/playlists"},
+		{http.MethodPost, "/v1/me/playlists/abc"},
+		{http.MethodDelete, "/v1/me/playlists/abc"},
+		{http.MethodPost, "/v1/me/playlists/abc/tracks"},
+		{http.MethodDelete, "/v1/me/playlists/abc/tracks"},
+		{http.MethodPost, "/v1/me/plays"},
+		{http.MethodPost, "/v1/me/folders"},
+		{http.MethodDelete, "/v1/me/folders/abc"},
+		{http.MethodPost, "/v1/me/library/organise"},
+		{http.MethodPost, "/v1/me/library/saved"},
+	}
+	ask := func(srv http.Handler, method, path string, header map[string]string) int {
+		req := httptest.NewRequest(method, path, strings.NewReader("{}"))
+		req.Header.Set("Content-Type", "text/plain")
+		for k, v := range header {
+			req.Header.Set(k, v)
+		}
+		w := httptest.NewRecorder()
+		srv.ServeHTTP(w, req)
+		return w.Code
+	}
+	open := api.New(api.Deps{})
+	withToken := api.New(api.Deps{ClientToken: "secret"})
+	for _, r := range routes {
+		for name, origin := range map[string]string{"another site": "https://evil.example", "a sandboxed frame": "null"} {
+			if got := ask(open, r.method, r.path, map[string]string{"Origin": origin}); got != http.StatusForbidden {
+				t.Errorf("%s %s from %s = %d, want 403", r.method, r.path, name, got)
+			}
+		}
+		// The desktop client sends no Origin and no token, as a non-browser does.
+		if got := ask(open, r.method, r.path, nil); got == http.StatusForbidden {
+			t.Errorf("%s %s from the desktop client = 403", r.method, r.path)
+		}
+		if got := ask(withToken, r.method, r.path, nil); got != http.StatusForbidden {
+			t.Errorf("%s %s without the token = %d, want 403", r.method, r.path, got)
+		}
+		if got := ask(withToken, r.method, r.path, map[string]string{api.ClientTokenHeader: "secret"}); got == http.StatusForbidden {
+			t.Errorf("%s %s with the token = 403", r.method, r.path)
+		}
 	}
 }

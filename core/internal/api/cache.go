@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"spotifier/internal/audiocache"
+	"spotifier/internal/domain"
 	"spotifier/internal/ratelimit"
 	"spotifier/internal/resolver"
 )
@@ -74,6 +75,10 @@ type prefetcher struct {
 	// waiting counts streams someone is listening for that still need
 	// resolving. Speculative work holds off while any are.
 	waiting atomic.Int32
+
+	// metered is whether the network costs the listener money. Only what is
+	// about to sound is fetched then; see QueueToFetch.
+	metered atomic.Bool
 
 	// guesses are the speculative prefetches not yet finished, oldest first.
 	// Hovering along a list used to queue one per row, each waiting up to
@@ -210,6 +215,48 @@ func (p *prefetcher) backOff(d time.Duration) {
 	p.mu.Unlock()
 }
 
+// How many tracks of the queue are kept downloading, the playing one among
+// them: on a connection that costs nothing, and on one that does. On the latter
+// that is the playing track and the one a gapless or crossfaded change needs.
+const (
+	queueAhead        = 4
+	meteredQueueAhead = 2
+)
+
+// SetMetered says whether the network the core is on costs the listener money.
+func (s *Server) SetMetered(on bool) { s.prefetch.metered.Store(on) }
+
+/*
+QueueToFetch is the part of the queue worth having on disk now: what
+PrefetchQueue is to be given.
+
+Everything fetched ahead that is then skipped is paid for and never heard, and
+restoring the queue at launch would fetch it all for someone who only opened
+the app. So on a metered network nothing is fetched ahead while nothing is
+meant to sound, and only the next track while something is. The player's own
+requests are not limited by this: what it asks for still comes.
+*/
+func (s *Server) QueueToFetch(st domain.Session) []string {
+	items, at := st.Queue.Items, st.Queue.Index
+	if at < 0 || at >= len(items) {
+		return nil
+	}
+	ahead := queueAhead
+	if s.prefetch.metered.Load() {
+		switch st.State {
+		case domain.StatePlaying, domain.StateLoading, domain.StateStalled:
+			ahead = meteredQueueAhead
+		default:
+			return nil
+		}
+	}
+	ids := make([]string, 0, ahead)
+	for i := at; i < len(items) && len(ids) < ahead; i++ {
+		ids = append(ids, items[i].ID)
+	}
+	return ids
+}
+
 // Prefetch readies a track in the background: its opening, or all of it.
 // Safe to call freely; repeats and a busy or rate-limited upstream are
 // absorbed here.
@@ -223,7 +270,8 @@ and stops what is no longer coming up.
 
 A track that left the queue — skipped past, removed, a different album
 started — used to go on downloading for up to five minutes, holding one of
-the few download slots the tracks that are coming up needed.
+the few download slots the tracks that are coming up needed. A track the
+listener asked to keep is not the queue's to stop.
 */
 func (s *Server) PrefetchQueue(ids []string) {
 	// Offline every guess fails, and each failure holds its track back for
@@ -238,7 +286,7 @@ func (s *Server) PrefetchQueue(ids []string) {
 	s.prefetch.mu.Lock()
 	s.prefetch.wanted = wanted
 	for id, cancel := range s.prefetch.queued {
-		if !wanted[id] {
+		if !wanted[id] && !s.deps.Audio.IsKept(id) {
 			cancel()
 			delete(s.prefetch.queued, id)
 			// Worth fetching again if it comes back.
@@ -256,6 +304,10 @@ func (s *Server) PrefetchQueue(ids []string) {
 // and short-lived; see prefetcher.guesses.
 func (s *Server) prefetchTrack(videoID string, whole, forQueue bool, guessReason string) {
 	if s.deps.Audio == nil || s.deps.Resolver == nil || videoID == "" {
+		return
+	}
+	// A hover or a page's first rows is a guess, and not one to pay for.
+	if guessReason != "" && s.prefetch.metered.Load() {
 		return
 	}
 	limit := int64(prefixBytes)
@@ -277,7 +329,10 @@ func (s *Server) prefetchTrack(videoID string, whole, forQueue bool, guessReason
 	// catches a dead one.
 	deadline, reason := 30*time.Minute, "queue"
 	if !forQueue {
-		reason = "playing"
+		reason = "preload"
+	}
+	if s.deps.Audio.IsKept(videoID) {
+		reason = "download"
 	}
 	if guessReason != "" {
 		deadline, reason = guessDeadline, guessReason
@@ -392,7 +447,8 @@ func (s *Server) retryIfStillQueued(videoID string, whole, forQueue bool) {
 		s.prefetch.mu.Lock()
 		still := s.prefetch.wanted[videoID]
 		s.prefetch.mu.Unlock()
-		if still {
+		// A download stays wanted whatever the queue has become.
+		if still || s.deps.Audio.IsKept(videoID) {
 			s.prefetchTrack(videoID, whole, true, "")
 		}
 	})
@@ -422,7 +478,7 @@ func (s *Server) fillPlaying(videoID string) {
 	done := s.startFill(videoID)
 	go func() {
 		defer done()
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+		ctx, cancel := context.WithTimeout(withReason(context.Background(), "play"), 30*time.Minute)
 		defer cancel()
 		if err := s.fill(ctx, videoID, 0, false); err != nil {
 			s.deps.Log.Debug("filling the playing track stopped", "video", videoID, "err", err)
@@ -456,6 +512,17 @@ func (s *Server) fill(ctx context.Context, videoID string, limit int64, speculat
 		return err
 	}
 	defer func() { _ = w.Close() }()
+
+	// Why it was fetched and how much of it came, for telling what a phone's
+	// mobile data went on: the track someone played, or a guess about the next.
+	from, began := w.Offset(), time.Now()
+	defer func() {
+		if got := w.Offset() - from; got > 0 {
+			s.deps.Log.Info("audio fetched", "video", videoID, "reason", resolveReason(ctx, speculative),
+				"bytes", got, "of", w.Size(), "took", time.Since(began).Round(time.Millisecond),
+				"upstreamTotal", s.upstreamBytes.Load())
+		}
+	}()
 
 	refusals, failures := 0, 0
 	windowed := false
@@ -849,6 +916,10 @@ func (s *Server) relayRest(ctx context.Context, w io.Writer, videoID string, pos
 		args = append([]any{"video", videoID, "at", pos, "end", end}, args...)
 		s.deps.Log.Warn("stream ended short: "+why, args...)
 	}
+	from := pos
+	defer func() {
+		s.deps.Log.Info("audio relayed", "video", videoID, "bytes", pos-from, "upstreamTotal", s.upstreamBytes.Load())
+	}()
 	retried := false
 	for pos <= end {
 		if s.net.Offline() {
@@ -987,9 +1058,32 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if keep {
+		// A failed attempt is held back from being repeated by guesswork, but
+		// this is the listener asking, perhaps with Retry.
+		if !s.fillActive(id) {
+			s.prefetch.unclaim(id + ":whole")
+		}
 		s.prefetchTrack(id, true, true, "")
+	} else {
+		s.stopDownload(id)
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// stopDownload ends a whole-track transfer the listener let go of, leaving what
+// has arrived in the cache as any other track's. One the queue still wants goes
+// on, as it would have without the download.
+func (s *Server) stopDownload(id string) {
+	s.prefetch.mu.Lock()
+	defer s.prefetch.mu.Unlock()
+	if s.prefetch.wanted[id] {
+		return
+	}
+	if cancel, ok := s.prefetch.queued[id]; ok {
+		cancel()
+		delete(s.prefetch.queued, id)
+		delete(s.prefetch.recent, id+":whole")
+	}
 }
 
 // handleCache reports the cache's size, and clears it on DELETE.

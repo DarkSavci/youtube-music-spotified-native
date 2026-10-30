@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A filled circle with a down arrow cut out of it, drawn for this app in the size of the Lucide set. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:fillType="evenOdd"
+        android:pathData="M12 0.5a11.5 11.5 0 1 1 0 23a11.5 11.5 0 1 1 0-23ZM10.4 5.5v6.1H7L12 18.5l5-6.9h-3.4V5.5Z" />
+</vector>

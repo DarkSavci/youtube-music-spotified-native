@@ -494,6 +494,9 @@ Projections say what is playing and where; this turns that into the cadence
 YouTube's own players use. The position is read from the projection rather
 than interpolated, so a paused player reports the same figure and the reporter
 drops it — pausing stops the reporting without needing to be told.
+
+A pause reports once at that moment, or everything since the last tick would
+go unreported for as long as the pause lasts, and for good if it is the last.
 */
 func watchAndReport(ctx context.Context, hub *session.Hub, rep *report.Reporter, log *slog.Logger) {
 	updates, cancel := hub.Subscribe()
@@ -512,6 +515,7 @@ func watchAndReport(ctx context.Context, hub *session.Hub, rep *report.Reporter,
 			if !ok {
 				return
 			}
+			paused := latest.State == domain.StatePlaying && p.State.State == domain.StatePaused
 			latest = p.State
 			// A track change needs its tracking URLs before anything can be
 			// reported against it, so fetch them as soon as it changes.
@@ -521,6 +525,9 @@ func watchAndReport(ctx context.Context, hub *session.Hub, rep *report.Reporter,
 			if t := current(latest); t != "" {
 				if err := rep.Track(ctx, t); err != nil {
 					log.Debug("report: could not prepare", "err", err)
+				}
+				if paused {
+					rep.Progress(ctx, t, latest.PositionMs)
 				}
 			}
 
@@ -553,14 +560,10 @@ func prefetchQueue(ctx context.Context, hub *session.Hub, srv *api.Server) {
 	// coming up is worth acting on.
 	last := ""
 	handle := func(s domain.Session, offline bool) {
-		items, at := s.Queue.Items, s.Queue.Index
-		if at < 0 || at >= len(items) {
+		if s.Queue.Index < 0 || s.Queue.Index >= len(s.Queue.Items) {
 			return
 		}
-		ids := make([]string, 0, 4)
-		for i := at; i < len(items) && len(ids) < 4; i++ {
-			ids = append(ids, items[i].ID)
-		}
+		ids := srv.QueueToFetch(s)
 		// Coming back online asks again: nothing could be fetched meanwhile.
 		key := strings.Join(ids, ",") + fmt.Sprint(offline)
 		if key == last {

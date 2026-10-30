@@ -247,6 +247,8 @@ fn engine_target(target: &Target, duration_ms: u64) -> engine::Target {
         epoch: target.epoch,
         video_id: target.video_id.clone(),
         start_at_ms: target.start_at_ms,
+        seek_seq: target.seek_seq,
+        seek_to_ms: target.seek_position_ms(),
         playing: target.playing,
         preload_video_id: target.preload_video_id.clone(),
         volume: target.volume,

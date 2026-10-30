@@ -4,6 +4,7 @@ import dev.darksavci.spotified.api.Api
 import dev.darksavci.spotified.api.Item
 import dev.darksavci.spotified.api.SearchFilter
 import dev.darksavci.spotified.api.Track
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -41,12 +42,27 @@ object Importer {
 
     private const val UA = "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0 Mobile Safari/537.36"
 
-    suspend fun match(http: OkHttpClient, api: Api, input: String): Result {
+    /** [onProgress] is told how many of how many have been looked for, from whichever thread looked. */
+    suspend fun match(http: OkHttpClient, api: Api, input: String, onProgress: (Int, Int) -> Unit = { _, _ -> }): Result {
         val (name, songs) = read(http, input.trim())
+        return matchSongs(api, name, songs, onProgress)
+    }
+
+    /** The songs of an exported file, already read; see [ExportFile]. */
+    suspend fun matchSongs(api: Api, name: String, songs: List<Wanted>, onProgress: (Int, Int) -> Unit = { _, _ -> }): Result {
         if (songs.isEmpty()) error("No songs were found in that.")
         val gate = Semaphore(4)
+        val looked = AtomicInteger()
         val matched = coroutineScope {
-            songs.map { w -> async { gate.withPermit { w to runCatching { find(api, w) }.getOrNull() } } }.awaitAll()
+            songs.map { w ->
+                async {
+                    gate.withPermit {
+                        val hit = runCatching { find(api, w) }.getOrNull()
+                        onProgress(looked.incrementAndGet(), songs.size)
+                        w to hit
+                    }
+                }
+            }.awaitAll()
         }
         val found = mutableListOf<Track>()
         val doubtful = mutableListOf<Pair<String, Track>>()
@@ -89,7 +105,7 @@ object Importer {
     }
 
     /** "Artist - Title" or "Title, Artist" a line; a CSV export's header is skipped. */
-    private fun lines(text: String) = text.lines().map { it.trim() }.filter { it.isNotEmpty() }
+    internal fun lines(text: String) = text.lines().map { it.trim() }.filter { it.isNotEmpty() }
         .filterNot { it.lowercase().startsWith("track name") || it.lowercase().startsWith("\"track") }
         .map { line ->
             when {

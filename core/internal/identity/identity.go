@@ -90,6 +90,20 @@ type SearchHistory interface {
 	ForgetSearches(ctx context.Context, tokens []string) error
 }
 
+// PlaylistEditor changes a playlist's own details. Optional, as SearchHistory
+// is: an Identity without it refuses the route.
+type PlaylistEditor interface {
+	// EditPlaylist changes what is not nil; an empty description clears it.
+	EditPlaylist(ctx context.Context, playlistID string, title, description *string) error
+}
+
+// LibrarySaver saves someone else's playlist or an album to the library, or
+// takes it out. Optional. Artists are not here: following one is Follow.
+type LibrarySaver interface {
+	SetPlaylistSaved(ctx context.Context, playlistID string, saved bool) error
+	SetAlbumSaved(ctx context.Context, albumID string, saved bool) error
+}
+
 // RemoteQueuer reads the queue the account has on its other devices. The
 // bool is false when the answer's shape was not recognised; the queue is
 // then empty.

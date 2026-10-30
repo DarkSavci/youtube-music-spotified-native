@@ -365,12 +365,19 @@ data class Target(
     @SerialName("Epoch") val epoch: Long = 0,
     @SerialName("VideoID") val videoId: String = "",
     @SerialName("StartAtMs") val startAtMs: Long = 0,
+    /** Changes each time the core moves the position on purpose; see reconcile. */
+    @SerialName("SeekSeq") val seekSeq: Long = 0,
+    /** Where the move [seekSeq] last counted went; absent from a core that does not send it. */
+    @SerialName("SeekToMs") val seekToMs: Long? = null,
     @SerialName("Playing") val playing: Boolean = false,
     @SerialName("PreloadVideoID") val preloadVideoId: String = "",
     @SerialName("Volume") val volume: Float = 1f,
     @SerialName("Transition") val transition: Transition = Transition(),
     @SerialName("UserChange") val userChange: Boolean = false,
-)
+) {
+    /** Where a seek goes: where the core said, or its one position from a core that does not say. */
+    val seekPositionMs: Long get() = seekToMs ?: startAtMs
+}
 
 @Serializable
 data class RoomPlayback(val entry: String = "", val ended: Boolean = false, val durationMs: Long = 0)

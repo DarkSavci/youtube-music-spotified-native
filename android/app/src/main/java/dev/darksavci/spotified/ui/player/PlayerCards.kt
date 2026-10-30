@@ -85,7 +85,7 @@ private fun Explore(track: Track, artist: Artist, actions: Actions) {
 private fun Tile(title: String, artwork: List<Artwork>, modifier: Modifier, onClick: () -> Unit) {
     Box(modifier.aspectRatio(0.66f).clip(RoundedCornerShape(8.dp)).clickable(onClick = onClick)) {
         AsyncImage(artwork.url(300), null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
-        Box(Modifier.fillMaxSize().background(Brush.verticalGradient(0.4f to Color.Transparent, 1f to Color.Black.copy(alpha = 0.8f))))
+        Box(Modifier.fillMaxSize().background(Brush.verticalGradient(0.35f to Color.Transparent, 1f to Color.Black.copy(alpha = 0.9f))))
         Text(
             title, style = Type.label, color = Color.White, maxLines = 3, overflow = TextOverflow.Ellipsis,
             modifier = Modifier.align(Alignment.BottomStart).padding(8.dp),
@@ -111,6 +111,8 @@ private fun AboutArtist(artist: Artist, actions: Actions) {
                 ImageRequest.Builder(LocalContext.current).data(artist.artwork.maxByOrNull { it.width }?.url).transformations(TrimBorders).build(),
                 null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop, alignment = Alignment.TopCenter,
             )
+            // White words on whatever the photo is: yellow, say.
+            Box(Modifier.fillMaxSize().background(Brush.verticalGradient(0f to Color.Black.copy(alpha = 0.65f), 0.5f to Color.Transparent)))
             Text("About the artist", style = Type.bodyStrong, color = Color.White, modifier = Modifier.padding(16.dp))
         }
         Column(Modifier.padding(16.dp)) {

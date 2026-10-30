@@ -46,6 +46,7 @@ class CarSession : Session() {
     private val screens get() = carContext.getCarService(ScreenManager::class.java)
 
     override fun onCreateScreen(intent: Intent): Screen {
+        AutoSetup.reached(carContext)
         connect()
         lifecycle.addObserver(object : DefaultLifecycleObserver {
             override fun onDestroy(owner: LifecycleOwner) {

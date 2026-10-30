@@ -24,7 +24,16 @@ func (s *Server) requireControl(w http.ResponseWriter) bool {
 }
 
 // periodFrom reads a window from the query string, defaulting to 30 days.
+//
+// from and to, in Unix seconds, name an exact span such as a calendar year,
+// and win over days. An app reading them where they are not understood still
+// sends days, so an older core answers with the nearest thing it can.
 func periodFrom(r *http.Request) control.Period {
+	from, errFrom := strconv.ParseInt(r.URL.Query().Get("from"), 10, 64)
+	to, errTo := strconv.ParseInt(r.URL.Query().Get("to"), 10, 64)
+	if errFrom == nil && errTo == nil && from >= 0 && from < to {
+		return control.Period{From: time.Unix(from, 0).UTC(), To: time.Unix(to, 0).UTC()}
+	}
 	days := 30
 	if v := r.URL.Query().Get("days"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 3650 {

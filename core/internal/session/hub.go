@@ -52,6 +52,9 @@ type Projection struct {
 	// Offline is whether the core cannot reach YouTube. Playback waits
 	// rather than skipping while it is set (#7).
 	Offline bool `json:"offline"`
+	// AutoplayHeld is whether the listener cleared what is next, and autoplay
+	// is to wait until the queue is about to run out.
+	AutoplayHeld bool `json:"-"`
 }
 
 // LogSink receives play-log entries. Implemented by the Control plane; the Core
@@ -121,6 +124,9 @@ func (h *Hub) Restore(snap *Snapshot) {
 	}
 	st.Version++
 	st.Epoch++
+	h.core.movePosition(snap.PositionMs)
+	// Listening is counted from here, not from the start of the song.
+	h.core.lastPositionMs = snap.PositionMs
 }
 
 // Register adds a Device. The first one to register takes ownership, so a
@@ -164,6 +170,7 @@ func (h *Hub) Unregister(id string) {
 		// A new owner resolves its own stream, so the epoch advances and any
 		// report still in flight from the old owner is discarded.
 		h.core.state.Epoch++
+		h.core.movePosition(h.core.state.PositionMs)
 		break
 	}
 	if h.core.state.OwnerDeviceID == "" {
@@ -325,6 +332,7 @@ func (h *Hub) projectionLocked() Projection {
 		Devices:        devices,
 		Caps:           h.core.Capabilities(),
 		Offline:        h.core.Offline(),
+		AutoplayHeld:   h.core.holdAutoplay,
 	}
 }
 

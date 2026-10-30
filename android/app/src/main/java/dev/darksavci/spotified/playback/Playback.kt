@@ -1,6 +1,5 @@
 package dev.darksavci.spotified.playback
 
-import android.util.Log
 import dev.darksavci.spotified.api.ApiError
 import dev.darksavci.spotified.api.Command
 import dev.darksavci.spotified.api.EngineEvent
@@ -8,8 +7,10 @@ import dev.darksavci.spotified.api.Projection
 import dev.darksavci.spotified.api.Repeat
 import dev.darksavci.spotified.api.Session
 import dev.darksavci.spotified.api.Track
+import dev.darksavci.spotified.data.Logs
 import dev.darksavci.spotified.data.SettingsStore
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -22,9 +23,8 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.HttpUrl
 
 /**
@@ -41,8 +41,21 @@ class Playback(
     /** Whether the phone is on a network that costs, for the quality to ask for. */
     private val metered: Flow<Boolean>,
 ) {
+    /** The core's projection as it came, which is what the engine follows. */
     private val _projection = MutableStateFlow(Projection())
-    val projection: StateFlow<Projection> = _projection
+    private val _shown = MutableStateFlow(Projection())
+    private val showing = Any()
+
+    /** The core's projection, but paused while this phone is held. */
+    val projection: StateFlow<Projection> = _shown
+
+    private val _hold = MutableStateFlow<Hold?>(null)
+    /** This phone gone quiet while its room carries on; null when it is not. */
+    val hold: StateFlow<Hold?> = _hold
+
+    /** Puts the player back in step with its room, on the main thread; set where the room is known. */
+    @Volatile
+    var rejoin: (() -> Unit)? = null
 
     private val _connected = MutableStateFlow(false)
     val connected: StateFlow<Boolean> = _connected
@@ -55,12 +68,23 @@ class Playback(
     var engine: Engine? = null
         set(value) {
             field = value
-            value?.let { e -> scope.launch(Dispatchers.Main) { e.apply(_projection.value.target) } }
+            value?.let { e ->
+                scope.launch(Dispatchers.Main) {
+                    e.setHeld(_hold.value != null)
+                    e.apply(_projection.value.target)
+                }
+            }
         }
 
     private var deviceId = ""
     private var loop: Job? = null
-    private val reports = Mutex()
+    private val reports = InOrder(scope) { Logs.w(TAG, "engine event", it) }
+
+    /** Commands go one at a time, each answered before the next: the core reads them as a sequence too. */
+    private val commands = InOrder(scope) { e ->
+        Logs.w(TAG, "command", e)
+        _messages.tryEmit("That could not be done.")
+    }
     /** The first projection after a reconnect is taken whatever its version: a restarted core restarts them. */
     private var acceptAny = true
 
@@ -84,10 +108,10 @@ class Playback(
                     backoff = 500L
                     session.events(deviceId, origin).collect { accept(it) }
                 } catch (e: ApiError) {
-                    Log.w(TAG, "session: ${e.message}")
+                    Logs.w(TAG, "session: ${e.message}")
                 } catch (e: Exception) {
                     if (e is CancellationException) throw e
-                    Log.w(TAG, "session", e)
+                    Logs.w(TAG, "session", e)
                 }
                 _connected.value = false
                 delay(backoff)
@@ -101,17 +125,18 @@ class Playback(
         val shown = _projection.value
         if (!acceptAny && p.state.version < shown.state.version) return
         acceptAny = false
-        _projection.value = p
+        synchronized(showing) {
+            _projection.value = p
+            _shown.value = if (_hold.value != null) p.heldBack() else p
+        }
         engine?.let { e -> withContext(Dispatchers.Main) { e.apply(p.target) } }
     }
 
     /** An engine report, sent in order: the core reads them as a sequence. */
     fun report(event: EngineEvent) {
-        scope.launch {
-            reports.withLock {
-                runCatching { session.engineEvent(deviceId, event) }
-                    .onFailure { Log.w(TAG, "engine event ${event.kind}: ${it.message}") }
-            }
+        reports.post {
+            runCatching { session.engineEvent(deviceId, event) }
+                .onFailure { Logs.w(TAG, "engine event ${event.kind}: ${it.message}") }
         }
     }
 
@@ -126,14 +151,73 @@ class Playback(
     fun send(command: Command) {
         val ownsIt = command is Command.FollowRoom || command is Command.LeaveRoom || command is Command.SetVolume
         if (!ownsIt && _projection.value.followingRoom && room?.invoke(command) == true) return
-        scope.launch {
+        inTurn {
             try {
-                if (deviceId.isEmpty()) deviceId = settings.deviceId()
-                accept(session.command(deviceId, command))
+                order(command)
+            } finally {
+                if (command is Command.LeaveRoom) leftWhileHeld()
+            }
+        }
+    }
+
+    private fun inTurn(work: suspend () -> Unit) {
+        commands.post {
+            try {
+                work()
             } catch (e: ApiError) {
                 _messages.tryEmit(e.message ?: "")
             }
         }
+    }
+
+    /** Sends a command and takes the answer. Only for work already in turn. */
+    private suspend fun order(command: Command) {
+        if (deviceId.isEmpty()) deviceId = settings.deviceId()
+        accept(session.command(deviceId, command))
+    }
+
+    /** Waits, for a little, until the commands sent so far have been answered. */
+    suspend fun settled() {
+        val done = CompletableDeferred<Unit>()
+        commands.post { done.complete(Unit) }
+        withTimeoutOrNull(SETTLE_MS) { done.await() }
+    }
+
+    /** Out of the room, a hold becomes what it is everywhere else: the player paused. */
+    private suspend fun leftWhileHeld() {
+        if (_hold.value == null) return
+        try {
+            if (_projection.value.target.playing) order(Command.Toggle)
+        } finally {
+            setHold(null)
+        }
+    }
+
+    private fun setHold(hold: Hold?) {
+        synchronized(showing) {
+            _hold.value = hold
+            val p = _projection.value
+            _shown.value = if (hold != null) p.heldBack() else p
+        }
+        engine?.let { e -> scope.launch(Dispatchers.Main) { e.setHeld(hold != null) } }
+    }
+
+    /** Ends a hold: the room's place first, and the sound once that has been answered, so it starts in step. */
+    private fun endHold() {
+        scope.launch(Dispatchers.Main) {
+            rejoin?.invoke()
+            commands.post { setHold(null) }
+        }
+    }
+
+    /** Asks for playing or paused, judged when its turn comes: what comes before may already have done it. */
+    private fun ask(playing: Boolean) {
+        if (_projection.value.followingRoom) {
+            // The room's to decide, and it goes there with its own view of the moment.
+            if (_projection.value.target.playing != playing) send(Command.Toggle)
+            return
+        }
+        inTurn { if (_projection.value.target.playing != playing) order(Command.Toggle) }
     }
 
     fun play(tracks: List<Track>, startIndex: Int, origin: String) {
@@ -143,6 +227,27 @@ class Playback(
         send(Command.Play(playable, start, origin))
     }
 
+    /**
+     * Plays a list from [positionMs] into its [startIndex]th track: the queue put
+     * in place held paused, the seek, then play, each answered before the next
+     * goes. A paused deck makes no sound, so nothing is heard from the start of the
+     * track on the way. A room decides for itself what plays, and from where.
+     */
+    fun playFrom(tracks: List<Track>, startIndex: Int, origin: String, positionMs: Long) {
+        val playable = tracks.filter { it.playable && it.id.isNotEmpty() }
+        val wanted = tracks.getOrNull(startIndex)?.id
+        val start = playable.indexOfFirst { it.id == wanted }
+        if (start < 0 || _projection.value.followingRoom) return play(tracks, startIndex, origin)
+        inTurn {
+            if (deviceId.isEmpty()) deviceId = settings.deviceId()
+            val placed = session.command(deviceId, Command.Play(playable, start, origin, paused = true))
+            accept(placed)
+            // Blocked, the queue started on another track: this place is not that one's.
+            if (placed.state.current?.id == wanted) accept(session.command(deviceId, Command.Seek(positionMs)))
+            accept(session.command(deviceId, Command.Toggle))
+        }
+    }
+
     fun shuffle(tracks: List<Track>, origin: String) {
         val playable = tracks.filter { it.playable && it.id.isNotEmpty() }
         if (playable.isEmpty()) return
@@ -150,15 +255,36 @@ class Playback(
         send(Command.Play(playable, playable.indices.random(), origin))
     }
 
-    fun toggle() = send(Command.Toggle)
+    /** The play button: while held, it is what brings this phone back, not the room's to pause. */
+    fun toggle() {
+        if (_hold.value != null) endHold() else send(Command.Toggle)
+    }
 
-    /** Pauses if playing; for audio focus and a headset unplugged. */
-    fun pause() {
-        if (_projection.value.target.playing) send(Command.Toggle)
+    /**
+     * Stops the sound because the system asks, not the listener: focus lost, a
+     * headset unplugged, a sleep timer run out, an account being left. Pauses
+     * if playing. In a room a pause is the room's, so this phone alone goes quiet.
+     */
+    fun pause(hold: Hold = Hold.UntilAsked) {
+        if (_projection.value.followingRoom) setHold(_hold.value.and(hold)) else ask(false)
+    }
+
+    /** The listener's pause from the system's controls. While held, this phone is paused already. */
+    fun pressPause() {
+        if (_hold.value == null) ask(false)
     }
 
     fun resume() {
-        if (!_projection.value.target.playing) send(Command.Toggle)
+        if (_hold.value != null) endHold() else ask(true)
+    }
+
+    /** Audio focus came back after a moment's loss. In a room, it ends only a hold that came from that loss. */
+    fun focusBack() {
+        val hold = _hold.value
+        when {
+            hold != null -> if (hold.afterFocusBack() == null) endHold()
+            !_projection.value.followingRoom -> ask(true)
+        }
     }
 
     fun next() = send(Command.Next)
@@ -205,5 +331,6 @@ class Playback(
 
     companion object {
         private const val TAG = "Playback"
+        private const val SETTLE_MS = 5000L
     }
 }

@@ -160,8 +160,10 @@ func (i *InnerTube) RemoteQueue(ctx context.Context) (domain.RemoteQueue, bool, 
 }
 
 var (
-	_ SearchHistory = (*InnerTube)(nil)
-	_ RemoteQueuer  = (*InnerTube)(nil)
+	_ SearchHistory  = (*InnerTube)(nil)
+	_ RemoteQueuer   = (*InnerTube)(nil)
+	_ PlaylistEditor = (*InnerTube)(nil)
+	_ LibrarySaver   = (*InnerTube)(nil)
 )
 
 // ---------- writes ----------
@@ -285,6 +287,93 @@ func (i *InnerTube) RemoveFromPlaylist(ctx context.Context, playlistID string, i
 		"actions":    actions,
 	})
 	return err
+}
+
+// EditPlaylist renames a playlist or changes its description.
+func (i *InnerTube) EditPlaylist(ctx context.Context, playlistID string, title, description *string) error {
+	var actions []map[string]any
+	if title != nil {
+		actions = append(actions, map[string]any{"action": "ACTION_SET_PLAYLIST_NAME", "playlistName": *title})
+	}
+	if description != nil {
+		actions = append(actions, map[string]any{"action": "ACTION_SET_PLAYLIST_DESCRIPTION", "playlistDescription": *description})
+	}
+	if len(actions) == 0 {
+		return nil
+	}
+	_, err := i.call(ctx, "browse/edit_playlist", map[string]any{
+		"playlistId": strings.TrimPrefix(playlistID, "VL"),
+		"actions":    actions,
+	})
+	return err
+}
+
+// SetPlaylistSaved adds a playlist to the library or takes it out, which
+// YouTube models as rating the playlist.
+func (i *InnerTube) SetPlaylistSaved(ctx context.Context, playlistID string, saved bool) error {
+	endpoint := "like/removelike"
+	if saved {
+		endpoint = "like/like"
+	}
+	_, err := i.call(ctx, endpoint, map[string]any{
+		"target": map[string]any{"playlistId": strings.TrimPrefix(playlistID, "VL")},
+	})
+	return err
+}
+
+// SetAlbumSaved does the same for an album, by the playlist behind it: an
+// album's page id is not what is rated, and only its page says what is.
+func (i *InnerTube) SetAlbumSaved(ctx context.Context, albumID string, saved bool) error {
+	audio := albumID
+	if !strings.HasPrefix(albumID, audioPlaylistPrefix) {
+		doc, err := i.browse(ctx, albumID)
+		if err != nil {
+			return err
+		}
+		audio = albumAudioPlaylist(doc)
+		if audio == "" {
+			return fmt.Errorf("identity: album %s names no playlist to save", albumID)
+		}
+	}
+	return i.SetPlaylistSaved(ctx, audio, saved)
+}
+
+// audioPlaylistPrefix starts the id of the playlist behind an album.
+const audioPlaylistPrefix = "OLAK5uy_"
+
+// albumAudioPlaylist reads the album's playlist from its own track rows. The
+// carousels under them hold other albums' playlists, as cards rather than rows.
+func albumAudioPlaylist(doc renderers.Node) string {
+	for _, row := range renderers.FindAll(doc, "musicResponsiveListItemRenderer") {
+		if id := firstAudioPlaylist(map[string]any(row)); id != "" {
+			return id
+		}
+	}
+	return ""
+}
+
+func firstAudioPlaylist(v any) string {
+	switch t := v.(type) {
+	case string:
+		if strings.HasPrefix(t, audioPlaylistPrefix) {
+			return t
+		}
+	case renderers.Node:
+		return firstAudioPlaylist(map[string]any(t))
+	case map[string]any:
+		for _, sub := range t {
+			if id := firstAudioPlaylist(sub); id != "" {
+				return id
+			}
+		}
+	case []any:
+		for _, sub := range t {
+			if id := firstAudioPlaylist(sub); id != "" {
+				return id
+			}
+		}
+	}
+	return ""
 }
 
 // ---------- normalisation ----------

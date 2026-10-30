@@ -11,11 +11,19 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Download progress as a Live Update, on Android 16. -->
+    <uses-permission android:name="android.permission.POST_PROMOTED_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
     <uses-permission
         android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
+    <!-- To tell that the phone is on a car, and to offer a way to Android Auto's settings. -->
+    <queries>
+        <package android:name="com.google.android.projection.gearhead" />
+        <provider android:authorities="androidx.car.app.connection" />
+    </queries>
 
     <!--
         No backups and no device-to-device copy: the data directory holds a
@@ -62,6 +70,13 @@
                 <data android:host="www.deezer.com" />
                 <data android:host="deezer.page.link" />
                 <data android:host="soundcloud.com" />
+            </intent-filter>
+            <!-- An invitation to a Listen Together room. The app's own scheme: see together/Invite.kt. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="spotified" android:host="join" />
             </intent-filter>
             <!-- A link shared from another app. -->
             <intent-filter>
@@ -113,6 +128,11 @@
             android:name=".data.Updater$Installed"
             android:exported="false" />
 
+        <!-- Pause and Resume on the download notification. -->
+        <receiver
+            android:name=".data.Downloads$FromNotice"
+            android:exported="false" />
+
         <!-- Carries playback on after a reboot, from the system's media controls. -->
         <receiver
             android:name="androidx.media3.session.MediaButtonReceiver"
@@ -161,6 +181,28 @@
                 android:name="android.appwidget.provider"
                 android:resource="@xml/widget_recent" />
         </receiver>
+
+        <receiver
+            android:name=".widget.PlaylistWidgetReceiver"
+            android:exported="false"
+            android:label="@string/widget_playlist">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_playlist" />
+        </receiver>
+
+        <!-- Started by the launcher to choose a Playlist widget's playlist; checks the widget it is given. -->
+        <activity
+            android:name=".widget.PlaylistWidgetConfigure"
+            android:exported="true"
+            android:theme="@style/Theme.Spotified">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_CONFIGURE" />
+            </intent-filter>
+        </activity>
 
         <meta-data
             android:name="com.google.android.gms.car.application"

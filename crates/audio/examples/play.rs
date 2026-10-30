@@ -37,6 +37,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     step("play", &target, 8);
     target.start_at_ms = 60_000;
+    target.seek_to_ms = 60_000;
+    target.seek_seq += 1;
     step("seek to 1:00", &target, 4);
     target.playing = false;
     step("pause", &target, 2);
@@ -51,6 +53,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         target.duration_ms = duration_ms;
         target.crossfade_ms = 4000;
         target.start_at_ms = duration_ms.saturating_sub(8000);
+        target.seek_to_ms = target.start_at_ms;
+        target.seek_seq += 1;
         step(
             "seek to eight seconds before the end, crossfade on",
             &target,

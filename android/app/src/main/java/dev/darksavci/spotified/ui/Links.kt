@@ -1,6 +1,8 @@
 package dev.darksavci.spotified.ui
 
 import android.net.Uri
+import dev.darksavci.spotified.together.Invite
+import dev.darksavci.spotified.together.readInvite
 
 /**
  * Reads a link into what it opens: a YouTube Music or YouTube address, the
@@ -18,6 +20,12 @@ object Links {
         data class Playlist(val id: String) : Target
         data class Page(val route: String) : Target
         data class Elsewhere(val url: String) : Target
+
+        /** An invitation to a Listen Together room. */
+        data class Room(val invite: Invite) : Target
+
+        /** A link of the app's own that cannot be used, and why. */
+        data class Broken(val why: String) : Target
     }
 
     private val VIDEO = Regex("^[A-Za-z0-9_-]{11}$")
@@ -36,7 +44,9 @@ object Links {
             return when (host) {
                 "search" -> Target.Page(Routes.SEARCH)
                 "liked" -> Target.Page(Routes.LIKED)
+                "downloads" -> Target.Page(Routes.DOWNLOADS)
                 "shuffle-liked" -> Target.Page(Routes.LIKED + "?shuffle=1")
+                "join" -> readInvite(found).fold({ Target.Room(it) }, { Target.Broken(it.message.orEmpty()) })
                 else -> null
             }
         }

@@ -56,6 +56,7 @@ const TokenHeader = api.ClientTokenHeader
 var (
 	mu      sync.Mutex
 	runner  YtdlpRunner
+	sink    LogSink
 	stop    context.CancelFunc
 	stopped chan struct{}
 	token   string
@@ -94,8 +95,12 @@ func Start(cfg *Config) (string, error) {
 	if cfg.Verbose {
 		level = slog.LevelDebug
 	}
-	// gomobile sends standard error to logcat.
-	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
+	// Without the app's log, standard error: gomobile sends it to logcat.
+	var handler slog.Handler = slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})
+	if sink != nil {
+		handler = newSinkHandler(sink, level)
+	}
+	log := slog.New(handler)
 	slog.SetDefault(log)
 
 	secret := make([]byte, 32)

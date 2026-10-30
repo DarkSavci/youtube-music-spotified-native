@@ -96,3 +96,21 @@ func TestOnlyTheArtistFormOfALibraryIDIsUnwrapped(t *testing.T) {
 		t.Fatalf("got %+v", items)
 	}
 }
+
+func TestAnAlbumsPlaylistIsReadFromItsOwnRows(t *testing.T) {
+	raw, err := os.ReadFile("../../testdata/fixtures/album.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err := renderers.Parse(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The same each time, whatever order a map walk takes: the cards under the
+	// rows name other albums' playlists.
+	for range 20 {
+		if got := albumAudioPlaylist(doc); got != "OLAK5uy_mz6eafmqdRHSaR4IwG0ll6J6rgv0_ZpGw" {
+			t.Fatalf("got %q", got)
+		}
+	}
+}

@@ -6,7 +6,7 @@ import android.database.Cursor
 import android.net.Uri
 import android.os.ParcelFileDescriptor
 import android.util.Base64
-import android.util.Log
+import dev.darksavci.spotified.data.Logs
 import dev.darksavci.spotified.graph
 import okhttp3.Request
 import java.io.File
@@ -39,7 +39,7 @@ class ArtworkProvider : ContentProvider() {
             val request = Request.Builder().url(source).build()
             context.graph.http.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) {
-                    Log.w(TAG, "artwork from $host: HTTP ${response.code}")
+                    Logs.w(TAG, "artwork from $host: HTTP ${response.code}")
                     throw FileNotFoundException("HTTP ${response.code}")
                 }
                 val tmp = File(dir, file.name + ".part")

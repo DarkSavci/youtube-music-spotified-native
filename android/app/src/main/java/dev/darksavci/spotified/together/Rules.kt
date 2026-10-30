@@ -1,7 +1,9 @@
 package dev.darksavci.spotified.together
 
+import dev.darksavci.spotified.api.Artwork
 import dev.darksavci.spotified.api.Track
 import kotlin.math.abs
+import kotlin.math.ceil
 
 /*
  * The room's rules as this app knows them: who may do what, and what to
@@ -47,6 +49,41 @@ fun Room.mayRemove(member: String, entry: Entry): Boolean =
 fun Room.mayUndo(member: String, serverNow: Double): Boolean {
     val undo = undo ?: return false
     return undo.revision == revision && (undo.by == member || leads(member)) && serverNow < undo.expires
+}
+
+/** How many whole seconds are left to take back the last edit, counting up so that it never says 0 while it can still be done. */
+fun Room.undoSecondsLeft(serverNow: Double): Int =
+    ceil(((undo?.expires ?: 0.0) - serverNow).coerceAtLeast(0.0) / 1000.0).toInt()
+
+/** The picture of whoever added [entry]: the one it came with, or the one they have now. */
+fun Room.pictureOfAdder(entry: Entry): List<Artwork> =
+    entry.addedBy.picture.ifEmpty { member(entry.addedBy.id)?.picture.orEmpty() }
+
+/**
+ * An edit of the queue this listener asked for, which the room has yet to show.
+ * What can be said of it, and whether it can be taken back, waits for the state
+ * that shows it, since that is what carries the room's offer of undo.
+ */
+sealed interface PendingEdit {
+    /** What to say of it once [room] shows it; null while it does not, and empty if there is nothing to say. */
+    fun outcomeIn(room: Room): String?
+
+    data class Removal(val entry: String, val title: String) : PendingEdit {
+        override fun outcomeIn(room: Room): String? =
+            if (room.queue.any { it.id == entry }) null else "Removed “$title”"
+    }
+
+    data class Acceptance(val requests: List<String>) : PendingEdit {
+        override fun outcomeIn(room: Room): String? {
+            if (room.requests.any { it.id in requests }) return null
+            val added = room.queue.filter { it.request in requests }
+            return when (added.size) {
+                0 -> ""
+                1 -> "Added “${added[0].track.title}” to the queue"
+                else -> "Added ${added.size} songs to the queue"
+            }
+        }
+    }
 }
 
 /** The queue from the current song on, with each entry's place in it. */

@@ -26,12 +26,17 @@ type radioCatalog struct {
 	pages  []string // "seed/token" of every page asked for
 	params []string // the params every named list was asked for with
 	short  int      // when set, a named list is this many songs and ends
+	hold   chan struct{}
 }
 
 func (c *radioCatalog) RadioPage(_ context.Context, seed, token string) ([]domain.Track, string, error) {
 	c.mu.Lock()
 	c.pages = append(c.pages, seed+"/"+token)
+	hold := c.hold
 	c.mu.Unlock()
+	if hold != nil {
+		<-hold
+	}
 	page := 0
 	if token != "" {
 		fmt.Sscanf(token, "page%d", &page)
@@ -173,6 +178,108 @@ func TestAnAlbumCarriesOnFromItsLastTrack(t *testing.T) {
 	}
 	if asked := cat.asked(); asked[0] != "a3/" {
 		t.Fatalf("seeded from %v", asked)
+	}
+}
+
+// heldServer plays an album of songs three minutes long, waits for the first
+// page of its radio, and clears what is next. It reports the pages asked for at
+// the clear.
+func heldServer(t *testing.T) (*session.Hub, *radioCatalog, int) {
+	t.Helper()
+	_, hub, cat, _ := radioServer(t)
+	album := []domain.Track{track("a1"), track("a2"), track("a3")}
+	for i := range album {
+		album[i].DurationMs = 180_000
+	}
+	_, _ = hub.Command(context.Background(), "d", session.Command{Kind: session.CmdPlay, Tracks: album, Origin: "Album"})
+	waitQueue(t, hub, 4)
+	_, _ = hub.Command(context.Background(), "d", session.Command{Kind: session.CmdClearUpcoming})
+	return hub, cat, len(cat.asked())
+}
+
+// A queue cleared on purpose stays clear, however long the song has left.
+func TestAClearHoldsAutoplayBack(t *testing.T) {
+	hub, cat, asked := heldServer(t)
+	reportAt(hub, 60_000)
+	time.Sleep(200 * time.Millisecond)
+	if ids := queueIDs(hub); len(ids) != 1 || ids[0] != "a1" {
+		t.Fatalf("queue %v after a clear", ids)
+	}
+	if len(cat.asked()) != asked {
+		t.Fatalf("asked for more: %v", cat.asked())
+	}
+}
+
+// reportAt tells the hub where the engine has got to in the current song.
+func reportAt(hub *session.Hub, ms int64) {
+	hub.EngineEvent(context.Background(), "", session.EngineEvent{Kind: session.EvPosition, Epoch: hub.Projection().State.Epoch, PositionMs: ms})
+}
+
+// The hold lasts until the song is about to end; then listening carries on.
+func TestAClearLetsAutoplayGoNearTheEndOfTheSong(t *testing.T) {
+	hub, _, _ := heldServer(t)
+	reportAt(hub, 180_000-autoplayHeldUntil.Milliseconds()+1000)
+	ids := waitQueue(t, hub, 2)
+	if ids[0] != "a1" {
+		t.Fatalf("queue %v", ids)
+	}
+	// Once it has carried on, it tops up as it always did.
+	if !hubSettled(hub) {
+		t.Fatal("the hold outlived autoplay's own songs")
+	}
+}
+
+func hubSettled(hub *session.Hub) bool { return !hub.Projection().AutoplayHeld }
+
+// A song queued after the clear plays on, and the hold moves to its end.
+func TestASongQueuedAfterAClearKeepsTheHold(t *testing.T) {
+	hub, cat, asked := heldServer(t)
+	z := track("z")
+	z.DurationMs = 180_000
+	_, _ = hub.Command(context.Background(), "d", session.Command{Kind: session.CmdEnqueue, Insert: []domain.Track{z}, At: -1})
+	reportAt(hub, 170_000)
+	time.Sleep(150 * time.Millisecond)
+	if len(cat.asked()) != asked {
+		t.Fatalf("asked for more with a song still ahead: %v", cat.asked())
+	}
+	_, _ = hub.Command(context.Background(), "d", session.Command{Kind: session.CmdJump, At: 1})
+	reportAt(hub, 170_000)
+	waitQueue(t, hub, 3)
+}
+
+// Undo brings back the old order, with nothing of autoplay's in among it.
+func TestUndoingAClearRestoresTheOrder(t *testing.T) {
+	hub, _, _ := heldServer(t)
+	before := "a1 a2 a3"
+	_, _ = hub.Command(context.Background(), "d", session.Command{Kind: session.CmdRestoreUpcoming})
+	ids := queueIDs(hub)
+	if got := strings.Join(ids[:3], " "); got != before {
+		t.Fatalf("queue %v, want %s first", ids, before)
+	}
+	if ids[3] != "a3-r0-0" {
+		t.Fatalf("queue %v: the radio should follow the album", ids)
+	}
+}
+
+// A page on its way when the clear came is not let in.
+func TestAPageArrivingAfterAClearIsDropped(t *testing.T) {
+	_, hub, cat, _ := radioServer(t)
+	slow := make(chan struct{})
+	cat.mu.Lock()
+	cat.hold = slow
+	cat.mu.Unlock()
+	album := []domain.Track{track("a1"), track("a2")}
+	album[0].DurationMs = 180_000
+	_, _ = hub.Command(context.Background(), "d", session.Command{Kind: session.CmdPlay, Tracks: album, Origin: "Album"})
+	deadline := time.Now().Add(3 * time.Second)
+	for len(cat.asked()) == 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	_, _ = hub.Command(context.Background(), "d", session.Command{Kind: session.CmdClearUpcoming})
+	close(slow)
+	time.Sleep(200 * time.Millisecond)
+	if ids := queueIDs(hub); len(ids) != 1 {
+		t.Fatalf("queue %v after a clear", ids)
 	}
 }
 

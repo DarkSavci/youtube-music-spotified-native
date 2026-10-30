@@ -48,6 +48,81 @@ func (s *Server) handleCreatePlaylist(w http.ResponseWriter, r *http.Request) {
 	s.write(w, http.StatusOK, map[string]string{"id": newID})
 }
 
+// handleEditPlaylist renames a playlist or changes its description.
+func (s *Server) handleEditPlaylist(w http.ResponseWriter, r *http.Request) {
+	id, ok := s.requireIdentity(w)
+	if !ok {
+		return
+	}
+	editor, ok := id.(identity.PlaylistEditor)
+	if !ok {
+		s.write(w, http.StatusNotImplemented, apiError{Error: "this account cannot edit playlists"})
+		return
+	}
+	var body struct {
+		Title       *string `json:"title"`
+		Description *string `json:"description"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		s.write(w, http.StatusBadRequest, apiError{Error: "invalid body"})
+		return
+	}
+	if body.Title != nil && *body.Title == "" {
+		s.write(w, http.StatusBadRequest, apiError{Error: "a playlist needs a name"})
+		return
+	}
+	if err := editor.EditPlaylist(r.Context(), r.PathValue("id"), body.Title, body.Description); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	s.forget(r.Context(), playlistKeys(r.PathValue("id")))
+	s.expire(r.Context(), cacheKey("lib", "playlists"))
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleSaveToLibrary saves an album or someone else's playlist, or takes it out.
+func (s *Server) handleSaveToLibrary(w http.ResponseWriter, r *http.Request) {
+	id, ok := s.requireIdentity(w)
+	if !ok {
+		return
+	}
+	saver, ok := id.(identity.LibrarySaver)
+	if !ok {
+		s.write(w, http.StatusNotImplemented, apiError{Error: "this account cannot save to the library"})
+		return
+	}
+	var body struct {
+		Kind   string `json:"kind"`
+		ItemID string `json:"itemId"`
+		Saved  bool   `json:"saved"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		s.write(w, http.StatusBadRequest, apiError{Error: "invalid body"})
+		return
+	}
+	var err error
+	surface := "playlists"
+	switch {
+	case body.ItemID == "":
+		s.write(w, http.StatusBadRequest, apiError{Error: "itemId is required"})
+		return
+	case body.Kind == "playlist":
+		err = saver.SetPlaylistSaved(r.Context(), body.ItemID, body.Saved)
+	case body.Kind == "album":
+		surface = "albums"
+		err = saver.SetAlbumSaved(r.Context(), body.ItemID, body.Saved)
+	default:
+		s.write(w, http.StatusBadRequest, apiError{Error: "kind must be album or playlist"})
+		return
+	}
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	s.expire(r.Context(), cacheKey("lib", surface))
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // handleDeletePlaylist removes a playlist the user owns.
 func (s *Server) handleDeletePlaylist(w http.ResponseWriter, r *http.Request) {
 	id, ok := s.requireIdentity(w)

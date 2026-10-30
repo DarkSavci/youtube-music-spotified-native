@@ -29,6 +29,10 @@ last track.
 // are fetched.
 const autoplayLow = 5
 
+// autoplayHeldUntil is how long before the queue ends a clear stops holding
+// autoplay back: long enough to fetch a page, and for a crossfade into it.
+const autoplayHeldUntil = 30 * time.Second
+
 type autoplay struct {
 	mu      sync.Mutex
 	enabled bool
@@ -133,8 +137,10 @@ func (s *Server) topUp(ctx context.Context, p session.Projection, force bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	key := queueKey(q)
-	// Settings that decide whether autoplay applies count as changes too.
-	seen := fmt.Sprintf("%s\x00%s\x00%t", key, p.State.Repeat, p.FollowingRoom)
+	held := s.autoplayHeld(p)
+	// Settings that decide whether autoplay applies count as changes too, and
+	// so does a hold ending, which position reports alone can do.
+	seen := fmt.Sprintf("%s\x00%s\x00%t\x00%t", key, p.State.Repeat, p.FollowingRoom, held)
 	moved := q.Index != a.index || len(q.Items) != a.length || seen != a.seen
 	a.index, a.length, a.seen = q.Index, len(q.Items), seen
 	if moved {
@@ -144,7 +150,7 @@ func (s *Server) topUp(ctx context.Context, p session.Projection, force bool) {
 	} else if !force {
 		return
 	}
-	if p.FollowingRoom || p.State.Repeat != domain.RepeatOff || len(q.Items) == 0 || s.playableAhead(q) >= autoplayLow {
+	if held || p.FollowingRoom || p.State.Repeat != domain.RepeatOff || len(q.Items) == 0 || s.playableAhead(q) >= autoplayLow {
 		return
 	}
 	if !a.enabled || a.busy || a.gaveUp {
@@ -171,6 +177,23 @@ func (s *Server) topUp(ctx context.Context, p session.Projection, force bool) {
 	a.busy = true
 	a.fetchedAt = now
 	go s.extendRadio(ctx, a.key, a.seed, a.mix, a.token)
+}
+
+// autoplayHeld says whether a clear is still holding autoplay back. It lets go
+// once nothing is left ahead and the song playing is about to end, or has.
+func (s *Server) autoplayHeld(p session.Projection) bool {
+	if !p.AutoplayHeld {
+		return false
+	}
+	q := p.State.Queue
+	if s.playableAhead(q) > 0 {
+		return true
+	}
+	cur := q.Current()
+	if cur == nil || p.State.State == domain.StateIdle {
+		return false
+	}
+	return cur.DurationMs <= 0 || cur.DurationMs-p.State.PositionMs > autoplayHeldUntil.Milliseconds()
 }
 
 // playableAhead counts the tracks after the current one that will play, as
@@ -234,7 +257,12 @@ func (s *Server) extendRadio(ctx context.Context, key, seed string, mix domain.M
 	a.failDelay = autoplayFailMin
 	a.failedAt = time.Time{}
 
-	q := s.deps.Session.Projection().State.Queue
+	p := s.deps.Session.Projection()
+	q := p.State.Queue
+	if s.autoplayHeld(p) {
+		// Cleared while this page was on its way: what was asked for is not wanted now.
+		return
+	}
 	if queueKey(q) != key {
 		// The listener started something else meanwhile. Its updates arrived
 		// while this fetch was busy and were turned away, so look at it now
@@ -271,9 +299,10 @@ func (s *Server) extendRadio(ctx context.Context, key, seed string, mix domain.M
 	}
 	a.dry = 0
 	_, _ = s.deps.Session.Command(ctx, "autoplay", session.Command{
-		Kind:   session.CmdEnqueue,
-		Insert: fresh,
-		At:     -1,
+		Kind:         session.CmdEnqueue,
+		Insert:       fresh,
+		At:           -1,
+		FromAutoplay: true,
 	})
 }
 

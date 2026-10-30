@@ -177,4 +177,45 @@ class RulesTest {
         // Another song is not a seek.
         assertFalse(jumped(before, sought.copy(current = "e3")))
     }
+
+    @Test
+    fun theTimeLeftToUndoCountsUpToWholeSeconds() {
+        val room = room().copy(undo = Undo(revision = 4, expires = 10_000.0, by = "guest"))
+        assertEquals(10, room.undoSecondsLeft(0.0))
+        assertEquals(1, room.undoSecondsLeft(9_999.0))
+        assertEquals(0, room.undoSecondsLeft(10_000.0))
+        assertEquals(0, room.undoSecondsLeft(20_000.0))
+        assertEquals(0, room().undoSecondsLeft(0.0))
+    }
+
+    @Test
+    fun aRemovalIsToldOnceTheRoomShowsIt() {
+        val edit = PendingEdit.Removal("e3", "Three")
+        assertEquals(null, edit.outcomeIn(room()))
+        assertEquals("Removed “Three”", edit.outcomeIn(room().copy(queue = room().queue.dropLast(1))))
+    }
+
+    @Test
+    fun anAcceptanceIsToldOnceNoneOfItsRequestsWait() {
+        val edit = PendingEdit.Acceptance(listOf("r1", "r2"))
+        val waiting = room().copy(requests = listOf(request("r1", "aaa", "guest")))
+        assertEquals(null, edit.outcomeIn(waiting))
+        val one = room().queue + entry("e4", "aaa", "guest").copy(request = "r1")
+        assertEquals("Added “AAA” to the queue", edit.outcomeIn(room().copy(queue = one)))
+        val two = one + entry("e5", "bbb", "guest").copy(request = "r2")
+        assertEquals("Added 2 songs to the queue", edit.outcomeIn(room().copy(queue = two)))
+        // The guest took them back first: nothing was added, and nothing is said.
+        assertEquals("", edit.outcomeIn(room()))
+    }
+
+    @Test
+    fun aSongShowsThePictureOfWhoAddedIt() {
+        val theirs = "https://lh3.googleusercontent.com/a"
+        val now = "https://lh3.googleusercontent.com/b"
+        val withPicture = entry("e9", "nine", "guest").let { it.copy(addedBy = it.addedBy.copy(avatar = theirs)) }
+        val room = room().copy(members = listOf(member("guest", "listener").copy(avatar = now)))
+        assertEquals(theirs, room.pictureOfAdder(withPicture).single().url)
+        assertEquals(now, room.pictureOfAdder(entry("e9", "nine", "guest")).single().url)
+        assertTrue(room().pictureOfAdder(entry("e9", "nine", "gone")).isEmpty())
+    }
 }

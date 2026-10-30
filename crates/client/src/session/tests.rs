@@ -26,6 +26,28 @@ fn a_projection_reads_both_of_the_cores_spellings() {
     assert_eq!(projection.target.transition.kind, "gapless");
     assert_eq!(projection.target.transition.crossfade_ms(), 0);
     assert!(projection.target.playing);
+    // This one left out, as a core from before it was added does.
+    assert_eq!(projection.target.seek_seq, 0);
+}
+
+#[test]
+fn a_target_reads_its_seek_counter() {
+    let target: Target =
+        serde_json::from_str(r#"{"VideoID":"abc","SeekSeq":7}"#).expect("a target");
+    assert_eq!(target.seek_seq, 7);
+    assert_eq!(target.seek_to_ms, None);
+}
+
+#[test]
+fn a_seek_goes_where_the_target_names_or_else_to_its_position() {
+    let named: Target = serde_json::from_str(r#"{"StartAtMs":12000,"SeekSeq":7,"SeekToMs":95000}"#)
+        .expect("a target");
+    assert_eq!(named.seek_position_ms(), 95_000);
+    let to_start: Target =
+        serde_json::from_str(r#"{"StartAtMs":700,"SeekSeq":7,"SeekToMs":0}"#).expect("a target");
+    assert_eq!(to_start.seek_position_ms(), 0);
+    let old: Target = serde_json::from_str(r#"{"StartAtMs":12000,"SeekSeq":7}"#).expect("a target");
+    assert_eq!(old.seek_position_ms(), 12_000);
 }
 
 #[test]

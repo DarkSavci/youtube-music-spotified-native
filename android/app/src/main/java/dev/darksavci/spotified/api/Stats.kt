@@ -89,6 +89,13 @@ data class StatDetail(
     val topTracks: List<TrackStat> = emptyList(),
 )
 
+@Serializable
+data class LookupResults(
+    val tracks: List<TrackStat>? = null,
+    val artists: List<ArtistStat>? = null,
+    val albums: List<AlbumStat>? = null,
+)
+
 /** A picture the stats routes give as a bare address. */
 fun cover(url: String): List<Artwork> = if (url.isEmpty()) emptyList() else listOf(Artwork(url, 226, 226))
 

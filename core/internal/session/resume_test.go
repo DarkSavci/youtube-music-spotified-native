@@ -218,3 +218,23 @@ func TestEmptyRoomKeepsTheSavedPersonalQueue(t *testing.T) {
 		t.Fatalf("room queue not persisted: %+v", restored)
 	}
 }
+
+// Restored at 2:30, the song has not been listened to for two and a half
+// minutes: only what plays from there counts.
+func TestARestoredPositionIsNotCountedAsListening(t *testing.T) {
+	h := NewHub(clock.NewManual(), DefaultSettings(), nil)
+	h.Restore(&Snapshot{Tracks: tracks(2), PositionMs: 150_000})
+
+	if r, _ := h.core.Apply(Command{Kind: CmdToggle}); r != RejectNone {
+		t.Fatalf("play rejected: %s", r)
+	}
+	h.core.HandleEngine(EngineEvent{Kind: EvPosition, Epoch: h.core.State().Epoch, PositionMs: 151_000})
+
+	if h.core.playedMs != 1000 {
+		t.Fatalf("playedMs = %d, want 1000", h.core.playedMs)
+	}
+	_, logs := h.core.Apply(Command{Kind: CmdNext})
+	if len(logs) != 0 {
+		t.Fatalf("a second of listening was logged as a play: %+v", logs)
+	}
+}

@@ -21,6 +21,20 @@ val abis = (findProperty("abis") as String?)?.split(",") ?: listOf("arm64-v8a", 
 // The project's newest release, which carries the desktop's files and the phone's.
 val RELEASES = "https://api.github.com/repos/DarkSavci/youtube-music-spotified-native/releases/latest"
 
+// What's new reads the changelog the build was made with, as the desktop's does.
+val notes = layout.buildDirectory.dir("generated/notes")
+val copyNotes = tasks.register<Copy>("copyNotes") {
+    from(rootProject.file("../CHANGELOG.md"))
+    into(notes)
+}
+tasks.named("preBuild") { dependsOn(copyNotes) }
+
+androidComponents {
+    onVariants { variant ->
+        variant.sources.assets?.addStaticSourceDirectory(notes.get().asFile.path)
+    }
+}
+
 android {
     namespace = "dev.darksavci.spotified"
     compileSdk = 37
@@ -31,7 +45,7 @@ android {
         targetSdk = 36
         // -PversionCode and -PversionName stamp a release's own version.
         versionCode = (findProperty("versionCode") as String?)?.toInt() ?: 1
-        versionName = (findProperty("versionName") as String?) ?: "0.5.0"
+        versionName = (findProperty("versionName") as String?) ?: "0.6.0"
         buildConfigField("String", "RELEASES_URL", "\"$RELEASES\"")
         ndk { abiFilters += abis }
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -85,6 +99,10 @@ android {
         // APK it could not be run at all.
         jniLibs { useLegacyPackaging = true }
     }
+
+    // The app is in English alone. Without this the libraries' own translations
+    // come along, and a phone in Turkish gets Turkish labels on Material's sheets.
+    androidResources { localeFilters += "en" }
 
     testOptions { unitTests.isReturnDefaultValues = true }
 }

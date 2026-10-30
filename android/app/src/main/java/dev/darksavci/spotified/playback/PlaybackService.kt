@@ -8,10 +8,11 @@ import android.content.IntentFilter
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioManager
-import android.media.audiofx.Equalizer
 import android.media.session.MediaSession.Token as PlatformToken
 import android.net.Uri
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import androidx.annotation.OptIn
 import androidx.core.content.ContextCompat
 import androidx.media3.common.MediaItem
@@ -29,6 +30,7 @@ import androidx.media3.session.SessionResult
 import com.google.common.collect.ImmutableList
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
+import dev.darksavci.spotified.R
 import dev.darksavci.spotified.api.ApiError
 import dev.darksavci.spotified.api.Track
 import dev.darksavci.spotified.data.LocalMusic
@@ -42,8 +44,11 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.guava.future
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Playback, for as long as there is something to play: the engine, the media
@@ -60,7 +65,7 @@ class PlaybackService : MediaLibraryService() {
     private lateinit var tree: BrowseTree
     private lateinit var signIn: PendingIntent
     private lateinit var focus: Focus
-    private var equalizer: Equalizer? = null
+    private lateinit var effects: SoundEffects
     private var noisyRegistered = false
 
     override fun onCreate() {
@@ -77,6 +82,7 @@ class PlaybackService : MediaLibraryService() {
                     .apply { if (preload) appendQueryParameter("preload", "1") }
                     .build()
             },
+            coreAddress = { g.core.currentAddress() },
             loudnessOf = { id -> if (LocalMusic.isLocal(id)) null else runCatching { g.api.loudness(id) }.getOrNull() },
             report = g.playback::report,
             rateLimited = { id -> runCatching { g.api.health(id).rateLimited }.getOrDefault(false) },
@@ -86,13 +92,19 @@ class PlaybackService : MediaLibraryService() {
                 else SponsorBlock.segments(g.http, id)
             },
         )
+        effects = SoundEffects(engine.audioSessionId)
         player = CorePlayer(g.playback, engine)
         engine.onChange { player.refresh() }
         g.playback.engine = engine
         engine.startClock()
         g.playback.start()
         tree = BrowseTree(g.api, ArtworkProvider::uriFor)
-        focus = Focus(this, onLoss = { g.playback.pause() }, onDuck = engine::setDuck, onRegain = { g.playback.resume() })
+        focus = Focus(
+            this,
+            onLoss = { moment -> g.playback.pause(if (moment) Hold.ForAMoment else Hold.UntilAsked) },
+            onDuck = engine::setDuck,
+            onRegain = { g.playback.focusBack() },
+        )
 
         scope.launch {
             g.playback.projection.collect { p ->
@@ -102,8 +114,12 @@ class PlaybackService : MediaLibraryService() {
             }
         }
         scope.launch {
-            combine(g.playback.projection, g.liked.ids) { p, ids -> p.state.current?.id?.let { it in ids } ?: false }
-                .collect { liked -> session.setMediaButtonPreferences(buttons(liked)) }
+            combine(g.playback.projection, g.liked.ids) { p, ids ->
+                (p.state.current?.id?.let { it in ids } ?: false) to p.state.shuffle
+            }
+                // A projection comes every second: the buttons are posted again only when they differ.
+                .distinctUntilChanged()
+                .collect { (liked, shuffle) -> session.setMediaButtonPreferences(buttons(liked, shuffle)) }
         }
         scope.launch { g.settings.settings.collect(::applySound) }
 
@@ -117,7 +133,7 @@ class PlaybackService : MediaLibraryService() {
         )
         session = MediaLibrarySession.Builder(this, player, Callback())
             .setSessionActivity(open)
-            .setMediaButtonPreferences(buttons(false))
+            .setMediaButtonPreferences(buttons(false, g.playback.projection.value.state.shuffle))
             // A car shows a browse error only as "something went wrong"; signed
             // out, it shows the player's error instead, with a way to sign in.
             .setLibraryErrorReplicationMode(MediaLibrarySession.LIBRARY_ERROR_REPLICATION_MODE_FATAL)
@@ -137,8 +153,8 @@ class PlaybackService : MediaLibraryService() {
         session.release()
         player.release()
         engine.release()
-        equalizer?.release()
-        focus.want(false)
+        effects.release()
+        focus.release()
         noisy(false)
         scope.cancel()
         platformToken.value = null
@@ -147,15 +163,27 @@ class PlaybackService : MediaLibraryService() {
 
     // ---------- the notification's buttons ----------
 
-    private fun buttons(liked: Boolean): ImmutableList<CommandButton> = ImmutableList.of(
+    /*
+     * All session commands: a button tied to a player command has no action the
+     * system's media controls can show, nor a media key the notification can send.
+     * In order of worth: since Android 13 the controls show only the first two
+     * beside previous and next, and the plan's notification has like and close.
+     */
+    private fun buttons(liked: Boolean, shuffle: Boolean): ImmutableList<CommandButton> = ImmutableList.of(
         CommandButton.Builder(if (liked) CommandButton.ICON_HEART_FILLED else CommandButton.ICON_HEART_UNFILLED)
             .setDisplayName(if (liked) "Remove from Liked" else "Like")
             .setSessionCommand(SessionCommand(LIKE, Bundle.EMPTY))
             .setSlots(CommandButton.SLOT_OVERFLOW)
             .build(),
-        CommandButton.Builder(CommandButton.ICON_SHUFFLE_ON)
-            .setDisplayName("Shuffle")
-            .setPlayerCommand(Player.COMMAND_SET_SHUFFLE_MODE)
+        CommandButton.Builder(CommandButton.ICON_UNDEFINED)
+            .setCustomIconResId(R.drawable.ic_x)
+            .setDisplayName("Close")
+            .setSessionCommand(SessionCommand(CLOSE, Bundle.EMPTY))
+            .setSlots(CommandButton.SLOT_OVERFLOW)
+            .build(),
+        CommandButton.Builder(if (shuffle) CommandButton.ICON_SHUFFLE_ON else CommandButton.ICON_SHUFFLE_OFF)
+            .setDisplayName(if (shuffle) "Shuffle off" else "Shuffle on")
+            .setSessionCommand(SessionCommand(SHUFFLE, Bundle.EMPTY))
             .setSlots(CommandButton.SLOT_OVERFLOW)
             .build(),
     )
@@ -164,23 +192,10 @@ class PlaybackService : MediaLibraryService() {
 
     private fun applySound(s: Settings) {
         engine.setNormalise(s.normalise)
+        engine.setLoudnessTarget(lufsFor(s.volumeLevel))
         engine.setSpeed(s.speed)
         engine.setSkipSilence(s.skipSilence)
-        if (s.equalizerOn) {
-            val eq = equalizer ?: runCatching { Equalizer(0, engine.audioSessionId) }.getOrNull()?.also { equalizer = it }
-            eq?.let { applyBands(it, s.equalizerBands) }
-            eq?.enabled = true
-        } else {
-            equalizer?.enabled = false
-        }
-    }
-
-    private fun applyBands(eq: Equalizer, bands: String) {
-        val levels = bands.split(',').mapNotNull { it.trim().toIntOrNull() }
-        val (lo, hi) = eq.bandLevelRange.let { it[0].toInt() to it[1].toInt() }
-        for (band in 0 until eq.numberOfBands) {
-            eq.setBandLevel(band.toShort(), (levels.getOrNull(band) ?: 0).coerceIn(lo, hi).toShort())
-        }
+        effects.apply(s)
     }
 
     // ---------- a headset unplugged ----------
@@ -220,6 +235,8 @@ class PlaybackService : MediaLibraryService() {
             }
             val commands = MediaSession.ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS.buildUpon()
                 .add(SessionCommand(LIKE, Bundle.EMPTY))
+                .add(SessionCommand(SHUFFLE, Bundle.EMPTY))
+                .add(SessionCommand(CLOSE, Bundle.EMPTY))
                 .build()
             return MediaSession.ConnectionResult.AcceptedResultBuilder(session)
                 .setAvailableSessionCommands(commands)
@@ -229,11 +246,19 @@ class PlaybackService : MediaLibraryService() {
         override fun onCustomCommand(
             session: MediaSession, controller: MediaSession.ControllerInfo, customCommand: SessionCommand, args: Bundle,
         ): ListenableFuture<SessionResult> {
-            if (customCommand.customAction == LIKE) {
-                graph.playback.projection.value.state.current?.let(graph.liked::toggle)
-                return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+            val playback = graph.playback
+            when (customCommand.customAction) {
+                LIKE -> playback.projection.value.state.current?.let(graph.liked::toggle)
+                SHUFFLE -> playback.setShuffle(!playback.projection.value.state.shuffle)
+                // The session's queue stays with the core, to pick up from later.
+                // In a room, closing quiets this phone and leaves the room playing.
+                CLOSE -> {
+                    playback.pause()
+                    pauseAllPlayersAndStopSelf()
+                }
+                else -> return Futures.immediateFuture(SessionResult(SessionResult.RESULT_ERROR_NOT_SUPPORTED))
             }
-            return Futures.immediateFuture(SessionResult(SessionResult.RESULT_ERROR_NOT_SUPPORTED))
+            return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
         }
 
         override fun onGetLibraryRoot(
@@ -323,7 +348,8 @@ class PlaybackService : MediaLibraryService() {
         override fun onPlaybackResumption(
             mediaSession: MediaSession, controller: MediaSession.ControllerInfo, isForPlayback: Boolean,
         ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> = scope.future {
-            graph.core.running()
+            // The queue is the core's: on a cold start it comes with the first projection.
+            withTimeoutOrNull(RESUME_WAIT_MS) { graph.playback.connected.first { it } }
             val state = graph.playback.projection.value.state
             MediaSession.MediaItemsWithStartPosition(
                 state.queue.items.map { CorePlayer.mediaItemOf(it) }, state.queue.index, state.positionMs,
@@ -333,6 +359,11 @@ class PlaybackService : MediaLibraryService() {
 
     companion object {
         const val LIKE = "dev.darksavci.spotified.LIKE"
+        const val SHUFFLE = "dev.darksavci.spotified.SHUFFLE"
+        const val CLOSE = "dev.darksavci.spotified.CLOSE"
+
+        /** How long the system's resume button waits for the core before giving up. */
+        private const val RESUME_WAIT_MS = 20_000L
 
         /** The running session's token, for the car's own screens to hand to Android Auto. */
         val platformToken = MutableStateFlow<PlatformToken?>(null)
@@ -358,10 +389,14 @@ class PlaybackService : MediaLibraryService() {
     }
 }
 
+/** How long a temporary loss of focus must last before the music pauses for it. */
+private const val TRANSIENT_WAIT_MS = 400L
+
 /** Audio focus, held while the core means to play. */
 private class Focus(
     context: Context,
-    private val onLoss: () -> Unit,
+    /** The sound must stop; true when the loss is for a moment and focus will come back. */
+    private val onLoss: (moment: Boolean) -> Unit,
     private val onDuck: (Boolean) -> Unit,
     private val onRegain: () -> Unit,
 ) : AudioManager.OnAudioFocusChangeListener {
@@ -371,39 +406,57 @@ private class Focus(
         .setOnAudioFocusChangeListener(this)
         .setWillPauseWhenDucked(false)
         .build()
-    private var held = false
-    /** Paused for a call or another app's moment, to carry on after it. */
-    private var pausedForTransient = false
+    private val book = FocusBook()
+    private val main = Handler(Looper.getMainLooper())
+
+    /**
+     * A temporary loss pauses only if it lasts. An app that scrolls past a video
+     * takes focus and gives it back within moments, sometimes twice in 200 ms,
+     * and pausing for each was heard as the music stuttering.
+     */
+    private val pauseAfterWait = Runnable {
+        book.pausedForTransient = true
+        onLoss(true)
+    }
 
     fun want(play: Boolean) {
-        if (play && !held) {
-            held = audio.requestAudioFocus(request) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
-            pausedForTransient = false
-        } else if (!play && held && !pausedForTransient) {
-            audio.abandonAudioFocusRequest(request)
-            held = false
+        when (book.want(play)) {
+            FocusBook.Step.Request -> book.held = audio.requestAudioFocus(request) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+            FocusBook.Step.Abandon -> {
+                main.removeCallbacks(pauseAfterWait)
+                audio.abandonAudioFocusRequest(request)
+                book.held = false
+            }
+            FocusBook.Step.Nothing -> {}
         }
+    }
+
+    /** Gives focus back for good, as the service ends. */
+    fun release() {
+        main.removeCallbacks(pauseAfterWait)
+        if (book.held) audio.abandonAudioFocusRequest(request)
+        book.held = false
+        book.pausedForTransient = false
     }
 
     override fun onAudioFocusChange(change: Int) {
         when (change) {
             AudioManager.AUDIOFOCUS_LOSS -> {
-                held = false
-                pausedForTransient = false
+                main.removeCallbacks(pauseAfterWait)
+                book.held = false
+                book.pausedForTransient = false
                 audio.abandonAudioFocusRequest(request)
-                onLoss()
+                onLoss(false)
             }
             AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> {
-                pausedForTransient = true
-                onLoss()
+                main.removeCallbacks(pauseAfterWait)
+                main.postDelayed(pauseAfterWait, TRANSIENT_WAIT_MS)
             }
             AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> onDuck(true)
             AudioManager.AUDIOFOCUS_GAIN -> {
+                main.removeCallbacks(pauseAfterWait)
                 onDuck(false)
-                if (pausedForTransient) {
-                    pausedForTransient = false
-                    onRegain()
-                }
+                if (book.regained()) onRegain()
             }
         }
     }

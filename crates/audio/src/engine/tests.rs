@@ -62,17 +62,113 @@ fn the_track_the_engine_moved_into_by_itself_is_left_playing() {
 fn ordinary_drift_is_not_a_seek_but_a_moved_position_is() {
     let decks = Decks {
         current: Some("a"),
-        position_ms: 61_000,
+        position_ms: 60_800,
         ..Decks::default()
     };
     let mut near = target("a", "");
-    near.start_at_ms = 60_000;
+    near.seek_to_ms = 60_000;
+    near.seek_seq = 1;
     assert!(reconcile(decks, &target("a", ""), &near).is_empty());
     let mut far = target("a", "");
-    far.start_at_ms = 120_000;
+    far.seek_to_ms = 120_000;
+    far.seek_seq = 1;
     assert_eq!(
         reconcile(decks, &target("a", ""), &far),
         [Op::Seek(120_000)]
+    );
+}
+
+#[test]
+fn a_position_echoed_back_is_not_a_seek() {
+    // Six seconds into the track, the core publishes the 0 it named it with.
+    let decks = Decks {
+        current: Some("b"),
+        position_ms: 6000,
+        ..Decks::default()
+    };
+    let mut named = target("b", "");
+    named.epoch = 2;
+    named.seek_seq = 3;
+    assert!(reconcile(decks, &named, &named.clone()).is_empty());
+    // Nor does a late report far from the deck count, however far.
+    let mut late = named.clone();
+    late.start_at_ms = 90_000;
+    assert!(reconcile(decks, &named, &late).is_empty());
+}
+
+#[test]
+fn a_seek_goes_where_it_named_though_a_later_report_says_otherwise() {
+    // The projection that carried the seek was dropped, and a report from
+    // before it has since overwritten the position.
+    let decks = Decks {
+        current: Some("a"),
+        position_ms: 12_000,
+        ..Decks::default()
+    };
+    let mut late = target("a", "");
+    late.seek_seq = 4;
+    late.seek_to_ms = 95_000;
+    late.start_at_ms = 12_000;
+    assert_eq!(
+        reconcile(decks, &target("a", ""), &late),
+        [Op::Seek(95_000)]
+    );
+}
+
+#[test]
+fn a_deck_with_nothing_loaded_starts_where_the_session_stands() {
+    // The seek named is long past: the track has played on since.
+    let mut going = target("a", "");
+    going.seek_seq = 4;
+    going.seek_to_ms = 30_000;
+    going.start_at_ms = 150_000;
+    assert_eq!(
+        reconcile(Decks::default(), &Target::default(), &going),
+        [Op::Load { start_ms: 150_000 }]
+    );
+}
+
+#[test]
+fn the_same_song_played_again_starts_again() {
+    let decks = Decks {
+        current: Some("a"),
+        position_ms: 60_000,
+        ..Decks::default()
+    };
+    let mut again = target("a", "");
+    again.epoch = 2;
+    again.seek_seq = 1;
+    assert_eq!(reconcile(decks, &target("a", ""), &again), [Op::Seek(0)]);
+}
+
+#[test]
+fn a_request_for_about_where_the_deck_is_moves_nothing() {
+    // A room's follower is corrected only when it has really drifted.
+    let decks = Decks {
+        current: Some("a"),
+        position_ms: 60_800,
+        ..Decks::default()
+    };
+    let mut close = target("a", "");
+    close.seek_to_ms = 60_000;
+    close.seek_seq = 1;
+    assert!(reconcile(decks, &target("a", ""), &close).is_empty());
+}
+
+#[test]
+fn a_followers_real_drift_is_corrected_rather_than_asked_for_forever() {
+    // The room corrects past a second of drift, so a deck that far out must move.
+    let decks = Decks {
+        current: Some("a"),
+        position_ms: 61_200,
+        ..Decks::default()
+    };
+    let mut drifted = target("a", "");
+    drifted.seek_to_ms = 60_000;
+    drifted.seek_seq = 1;
+    assert_eq!(
+        reconcile(decks, &target("a", ""), &drifted),
+        [Op::Seek(60_000)]
     );
 }
 

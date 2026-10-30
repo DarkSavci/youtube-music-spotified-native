@@ -1,7 +1,6 @@
 package dev.darksavci.spotified.ui.screens
 
-import android.content.ClipData
-import android.content.ClipboardManager
+import dev.darksavci.spotified.ui.components.SearchField
 import androidx.annotation.DrawableRes
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -18,6 +17,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
@@ -26,22 +26,28 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableDoubleStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -49,12 +55,19 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.semantics.toggleableState
+import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -71,6 +84,8 @@ import dev.darksavci.spotified.api.SearchFilter
 import dev.darksavci.spotified.api.Track
 import dev.darksavci.spotified.data.Settings
 import dev.darksavci.spotified.together.Entry
+import dev.darksavci.spotified.together.Invite
+import dev.darksavci.spotified.together.LEADER_PLAYS
 import dev.darksavci.spotified.together.Member
 import dev.darksavci.spotified.together.Mode
 import dev.darksavci.spotified.together.Phase
@@ -83,32 +98,44 @@ import dev.darksavci.spotified.together.Together
 import dev.darksavci.spotified.together.TogetherState
 import dev.darksavci.spotified.together.Transport
 import dev.darksavci.spotified.together.answers
+import dev.darksavci.spotified.together.inviteQuestion
+import dev.darksavci.spotified.together.inviteText
 import dev.darksavci.spotified.together.leads
 import dev.darksavci.spotified.together.mayAdd
 import dev.darksavci.spotified.together.mayRemove
 import dev.darksavci.spotified.together.mayUndo
 import dev.darksavci.spotified.together.pictureOf
+import dev.darksavci.spotified.together.pictureOfAdder
 import dev.darksavci.spotified.together.ready
 import dev.darksavci.spotified.together.requesting
 import dev.darksavci.spotified.together.requestsFor
+import dev.darksavci.spotified.together.savedIn
+import dev.darksavci.spotified.together.spacedPin
+import dev.darksavci.spotified.together.undoSecondsLeft
 import dev.darksavci.spotified.together.upcoming
 import dev.darksavci.spotified.ui.Actions
+import dev.darksavci.spotified.ui.Change
 import dev.darksavci.spotified.ui.LocalActions
 import dev.darksavci.spotified.ui.components.Art
 import dev.darksavci.spotified.ui.components.Chip
+import dev.darksavci.spotified.ui.components.ConfirmDialog
 import dev.darksavci.spotified.ui.components.Glyph
 import dev.darksavci.spotified.ui.components.GlyphButton
 import dev.darksavci.spotified.ui.components.Loading
 import dev.darksavci.spotified.ui.components.Pill
-import dev.darksavci.spotified.ui.components.PlayButton
+import dev.darksavci.spotified.ui.components.Problem
 import dev.darksavci.spotified.ui.components.SectionTitle
 import dev.darksavci.spotified.ui.components.artColor
 import dev.darksavci.spotified.ui.components.darkened
+import dev.darksavci.spotified.ui.components.rememberHaptics
+import dev.darksavci.spotified.ui.components.tapRow
 import dev.darksavci.spotified.ui.theme.LocalPalette
 import dev.darksavci.spotified.ui.theme.Type
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import java.util.Locale
+import kotlin.coroutines.cancellation.CancellationException
 import kotlin.math.ceil
 import kotlinx.coroutines.delay
 
@@ -126,28 +153,44 @@ fun TogetherScreen() {
     val state by together.state.collectAsStateWithLifecycle()
     // The fields start from what was saved, so nothing is shown until it is read.
     val loaded by graph.settings.settings.collectAsStateWithLifecycle(null)
-    val account by produceState<Account?>(null) { value = runCatching { graph.api.account() }.getOrNull() }
+    val asked by produceState<Result<Account?>?>(null) { value = runCatching { graph.api.account() } }
     val settings = loaded ?: return Loading()
     val room = state.room
     if (state.inRoom && room != null) {
         RoomPage(together, state, room, settings)
     } else {
-        Lobby(together, state, settings, account)
+        Lobby(together, state, settings, asked?.getOrNull(), asked?.isFailure == true)
     }
+    state.invite?.let { invite -> InviteDialog(together, state, settings, invite) }
+}
+
+/** A link was followed to a room: joining tells its server who this is, so it asks, and says which server. */
+@Composable
+private fun InviteDialog(together: Together, state: TogetherState, settings: Settings, invite: Invite) {
+    val leaving = state.room?.takeIf { state.inRoom }?.title()
+    ConfirmDialog(
+        title = "Join this room?",
+        text = inviteQuestion(invite, invite.savedIn(settings.togetherServers)?.name, leaving),
+        action = "Join room",
+        onConfirm = together::acceptInvite,
+        onDismiss = together::dismissInvite,
+        danger = false,
+    )
 }
 
 // ---------- before a room ----------
 
 @Composable
-private fun Lobby(together: Together, state: TogetherState, settings: Settings, account: Account?) {
+private fun Lobby(together: Together, state: TogetherState, settings: Settings, account: Account?, accountFailed: Boolean) {
     val actions = LocalActions.current
     val p = LocalPalette.current
     var removing by remember { mutableStateOf<ServerForm?>(null) }
+    var connection by rememberSaveable { mutableStateOf(false) }
     LazyColumn(Modifier.windowInsetsPadding(WindowInsets.statusBars), contentPadding = PaddingValues(bottom = 32.dp)) {
         item {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 GlyphButton(R.drawable.ic_chevron_left, "Back", { actions.nav.popBackStack() })
-                Text("Listen Together", style = Type.title)
+                Text("Listen Together", style = Type.title, modifier = Modifier.semantics { heading() })
             }
             Quiet(
                 "Play the same music at the same moment as your friends, each on your own account and at your own volume.",
@@ -165,37 +208,41 @@ private fun Lobby(together: Together, state: TogetherState, settings: Settings, 
                 }
             }
             Phase.Connecting -> item {
-                Text(
-                    "Cancel connection", style = Type.bodyStrong, color = p.accent,
-                    modifier = Modifier.clickable { together.leave() }.padding(horizontal = 16.dp, vertical = 12.dp),
-                )
+                TextAction("Cancel connection", { together.leave() }, Modifier.padding(horizontal = 4.dp))
             }
             else -> {}
         }
         item { StartPanel(together, state, settings) }
-        item { JoinPanel(together, state) }
-        item { SectionTitle("Connection") }
+        item { JoinPanel(together, state, settings) }
+        // Nothing here is needed to start or join: asking for a room with no server opens the form.
         item {
             Panel {
-                ServerBar(together, state, settings)
-                state.manage?.let { form ->
+                val server = settings.togetherServer?.name
+                val name = settings.togetherName.trim().ifEmpty { account?.name?.ifEmpty { null } ?: "Listener" }
+                Disclosure(
+                    "Server and your name",
+                    if (server != null) "$server · Joining as $name" else "No server yet · Joining as $name",
+                    connection,
+                ) { connection = !connection }
+                if (connection) {
                     Spacer(Modifier.height(12.dp))
-                    ServerFormPanel(together, form, onRemove = { removing = form })
+                    ServerBar(together, state, settings)
+                    Spacer(Modifier.height(16.dp))
+                    Identity(together, settings, account, accountFailed)
+                    Spacer(Modifier.height(8.dp))
+                    Small("Only your name, your picture if you share it, and what you do in a room are shared with the people in it.")
                 }
-                Spacer(Modifier.height(16.dp))
-                Identity(together, settings, account)
-                Spacer(Modifier.height(8.dp))
-                Small("Only your name, your picture if you share it, and what you do in a room are shared with the people in it.")
             }
         }
     }
+    state.manage?.let { form -> ServerSheet(together, form, onRemove = { removing = form }) }
     removing?.let { form ->
         val name = settings.togetherServers.firstOrNull { it.id == form.editing }?.name?.ifEmpty { null } ?: "this server"
-        Confirm(
+        ConfirmDialog(
             title = "Remove $name?",
-            body = "You can add it again later with its address.",
-            confirm = "Remove",
-            onConfirm = { form.editing?.let(together::removeServer) },
+            text = "You can add it again later with its address.",
+            action = "Remove",
+            onConfirm = { removing = null; form.editing?.let(together::removeServer) },
             onDismiss = { removing = null },
         )
     }
@@ -204,25 +251,10 @@ private fun Lobby(together: Together, state: TogetherState, settings: Settings, 
 @Composable
 private fun StartPanel(together: Together, state: TogetherState, settings: Settings) {
     var roomName by rememberSaveable { mutableStateOf(settings.togetherRoomName) }
+    var options by rememberSaveable { mutableStateOf(false) }
     Panel {
         PanelHeading("Start a room")
-        Quiet("Make a room and invite friends with its PIN. You lead it.")
-        Spacer(Modifier.height(12.dp))
-        OutlinedTextField(
-            roomName,
-            { roomName = it.take(80); together.typeRoomName(it) },
-            Modifier.fillMaxWidth(),
-            label = { Text("Room name (optional)") },
-            placeholder = { Text("Friday night together") },
-            singleLine = true,
-        )
-        Small("Remembered on this device for your next room. Visible to listeners.")
-        Spacer(Modifier.height(12.dp))
-        Text("Who controls the music", style = Type.label)
-        Spacer(Modifier.height(6.dp))
-        Mode.entries.forEach { mode ->
-            ModeChoice(mode, settings.togetherMode == mode) { together.chooseMode(mode) }
-        }
+        Quiet("Make a room and invite your friends. You lead it.")
         Spacer(Modifier.height(12.dp))
         val connecting = state.phase == Phase.Connecting
         Button(
@@ -231,6 +263,50 @@ private fun StartPanel(together: Together, state: TogetherState, settings: Setti
             icon = R.drawable.ic_plus,
             onClick = together::create,
         )
+        Spacer(Modifier.height(12.dp))
+        val named = settings.togetherRoomName.trim()
+        Disclosure(
+            "Room options",
+            if (named.isNotEmpty()) "$named · ${settings.togetherMode.title}" else settings.togetherMode.title,
+            options,
+        ) { options = !options }
+        if (options) {
+            Spacer(Modifier.height(8.dp))
+            OutlinedTextField(
+                roomName,
+                { roomName = it.take(80); together.typeRoomName(it) },
+                Modifier.fillMaxWidth(),
+                label = { Text("Room name (optional)") },
+                placeholder = { Text("Friday night together") },
+                singleLine = true,
+            )
+            Small("Remembered on this device for your next room. Visible to listeners.")
+            Spacer(Modifier.height(12.dp))
+            Text("Who controls the music", style = Type.label)
+            Spacer(Modifier.height(6.dp))
+            Mode.entries.forEach { mode ->
+                ModeChoice(mode, settings.togetherMode == mode) { together.chooseMode(mode) }
+            }
+        }
+    }
+}
+
+/** A heading that opens what is under it, saying what is chosen there while it is shut. */
+@Composable
+private fun Disclosure(title: String, summary: String, open: Boolean, onToggle: () -> Unit) {
+    val p = LocalPalette.current
+    Row(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp))
+            .tapRow(onClick = onToggle, role = Role.Button)
+            .semantics { stateDescription = if (open) "Open" else "Closed" }
+            .padding(vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(title, style = Type.bodyStrong)
+            if (!open) Text(summary, style = Type.small, color = p.secondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        Glyph(if (open) R.drawable.ic_chevron_up else R.drawable.ic_chevron_down, null, tint = p.secondary, size = 20.dp)
     }
 }
 
@@ -241,7 +317,8 @@ private fun ModeChoice(mode: Mode, chosen: Boolean, onChoose: () -> Unit) {
     Row(
         Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp))
             .background(if (chosen) p.surfaceActive else p.panel)
-            .clickable(onClick = onChoose)
+            .tapRow(onClick = onChoose, role = Role.RadioButton)
+            .semantics { selected = chosen }
             .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -259,19 +336,19 @@ private fun ModeChoice(mode: Mode, chosen: Boolean, onChoose: () -> Unit) {
 }
 
 @Composable
-private fun JoinPanel(together: Together, state: TogetherState) {
+private fun JoinPanel(together: Together, state: TogetherState, settings: Settings) {
     val p = LocalPalette.current
     val idle = state.phase == Phase.Idle
     val whole = state.pin.length == 8
     Panel {
         PanelHeading("Join a room")
-        Quiet("Enter the 8-digit PIN a friend gave you, or paste their link. You both need the same server.")
+        Quiet("Enter the 8-digit PIN a friend gave you, or paste their link.")
         Spacer(Modifier.height(12.dp))
         OutlinedTextField(
             state.pin,
             together::typePin,
             Modifier.fillMaxWidth(),
-            label = { Text("Room PIN") },
+            label = { Text("Room PIN or link") },
             placeholder = { Text("0000 0000", style = PinStyle, color = p.dim) },
             textStyle = PinStyle,
             singleLine = true,
@@ -281,6 +358,8 @@ private fun JoinPanel(together: Together, state: TogetherState) {
         Spacer(Modifier.height(12.dp))
         Button("Join room", enabled = idle && whole, onClick = together::join)
         Spacer(Modifier.height(12.dp))
+        // A link brings its own server; a PIN only works on the one chosen here.
+        settings.togetherServer?.let { Small("A PIN works on the server your friend uses. Using ${it.name}.") }
         Small("Your own queue waits while you are in a room. When you leave, the song playing carries on, then your own queue.")
     }
 }
@@ -291,7 +370,7 @@ private val PinStyle = TextStyle(fontSize = 24.sp, letterSpacing = 6.sp)
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ServerBar(together: Together, state: TogetherState, settings: Settings) {
-    Line("Server", "Rooms are made and joined here. Your friends need the same server.")
+    Titled("Server", "Rooms are made and joined here. Your friends need the same server.")
     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         settings.togetherServers.forEach { server ->
             Chip(server.name, server.id == settings.togetherSelected, { together.selectServer(server.id) })
@@ -303,47 +382,59 @@ private fun ServerBar(together: Together, state: TogetherState, settings: Settin
     if (state.manage == null) Pill(label, together::toggleManage, icon = if (settings.togetherServer != null) R.drawable.ic_pencil else R.drawable.ic_plus)
 }
 
+/** The form that adds a server or edits one, over the page, as starting or joining with no server opens it. */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ServerFormPanel(together: Together, form: ServerForm, onRemove: () -> Unit) {
+private fun ServerSheet(together: Together, form: ServerForm, onRemove: () -> Unit) {
     val p = LocalPalette.current
     val editing = form.editing != null
-    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(p.panel).padding(12.dp)) {
-        Text(if (editing) "Edit server" else "Add a server", style = Type.bodyStrong)
-        Small("Save this once. Your friends select the same server to join with a PIN.")
-        Spacer(Modifier.height(8.dp))
-        OutlinedTextField(
-            form.name, together::serverName, Modifier.fillMaxWidth(),
-            label = { Text("Name") }, placeholder = { Text("Our music room") }, singleLine = true,
-        )
-        OutlinedTextField(
-            form.url, together::serverAddress, Modifier.fillMaxWidth(),
-            label = { Text("Address") }, placeholder = { Text("wss://listen.example.com") }, singleLine = true,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-        )
-        if (form.check.isNotEmpty()) {
-            Spacer(Modifier.height(6.dp))
-            Small(form.check)
-        }
-        Spacer(Modifier.height(10.dp))
-        Buttons {
-            Button("Save server", onClick = together::saveServer)
-            Pill("Test connection", together::testServer)
-            Pill("Add another", together::addAnother)
-            if (editing) TextAction("Remove saved server", onRemove, color = p.danger)
-            TextAction("Cancel", together::closeManage)
+    ModalBottomSheet(
+        onDismissRequest = together::closeManage,
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        containerColor = p.panel,
+        contentColor = p.text,
+    ) {
+        Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).imePadding().padding(start = 16.dp, end = 16.dp, bottom = 24.dp)) {
+            Text(if (editing) "Edit server" else "Add a server", style = Type.heading, modifier = Modifier.semantics { heading() })
+            Small("Rooms run on a server you and your friends share. Ask whoever set it up for its address. You only need to save it once.")
+            Spacer(Modifier.height(8.dp))
+            OutlinedTextField(
+                form.name, together::serverName, Modifier.fillMaxWidth(),
+                label = { Text("Name") }, placeholder = { Text("Our music room") }, singleLine = true,
+            )
+            OutlinedTextField(
+                form.url, together::serverAddress, Modifier.fillMaxWidth(),
+                label = { Text("Address") }, placeholder = { Text("wss://listen.example.com") }, singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+            )
+            if (form.check.isNotEmpty()) {
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    form.check, style = Type.small, color = p.secondary,
+                    modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                )
+            }
+            Spacer(Modifier.height(10.dp))
+            Buttons {
+                Button("Save server", onClick = together::saveServer)
+                Pill("Test connection", together::testServer)
+                Pill("Add another", together::addAnother)
+                if (editing) TextAction("Remove saved server", onRemove, color = p.danger)
+                TextAction("Cancel", together::closeManage)
+            }
         }
     }
 }
 
 /** The picture and name this listener is seen by. */
 @Composable
-private fun Identity(together: Together, settings: Settings, account: Account?) {
+private fun Identity(together: Together, settings: Settings, account: Account?, accountFailed: Boolean) {
     val accountName = account?.name?.ifEmpty { null } ?: "Listener"
     var name by rememberSaveable { mutableStateOf(settings.togetherName) }
     val shown = name.trim().ifEmpty { accountName }
     val hasPicture = !account?.avatarUrl.isNullOrEmpty()
     val shares = hasPicture && settings.togetherSharePicture
-    Line("Your name", "What the people in a room see you as.")
+    Titled("Your name", "What the people in a room see you as.")
     Row(verticalAlignment = Alignment.CenterVertically) {
         OutlinedTextField(
             name, { name = it.take(50); together.typeName(it) }, Modifier.weight(1f),
@@ -352,6 +443,7 @@ private fun Identity(together: Together, settings: Settings, account: Account?) 
         Spacer(Modifier.width(12.dp))
         Avatar(shown, if (shares) pictureOf(account?.avatarUrl.orEmpty()) else emptyList(), 40)
     }
+    if (accountFailed) Small("Your account could not be read, so your name and picture from it aren’t shown.")
     if (hasPicture) {
         Spacer(Modifier.height(6.dp))
         Toggle("Share my profile picture", "Shown beside your name. Otherwise your initial is.", shares, together::sharePicture)
@@ -372,27 +464,20 @@ private fun RoomPage(together: Together, state: TogetherState, room: Room, setti
     var leaving by rememberSaveable { mutableStateOf<String?>(null) }
     var removing by remember { mutableStateOf<Member?>(null) }
     var savingHistory by remember { mutableStateOf<String?>(null) }
+    // The room says whether an edit can be taken back, so the Undo comes with its answer.
+    LaunchedEffect(together) {
+        together.undoOffers.collect { said -> actions.sayWithUndo(said) { together.undo() } }
+    }
     LazyColumn(contentPadding = PaddingValues(bottom = 32.dp)) {
         item { Head(state, room) }
         item {
             RoomButtons(
-                together, room, me, settings,
+                together, state, room, me, settings,
                 onSettings = { settingsOpen = !settingsOpen },
                 onLeave = { leaving = "" },
             )
         }
         state.error?.let { error -> item { Alert(error, together::dismissError) } }
-        leaving?.let { next ->
-            item {
-                LeavePanel(
-                    room, me, next,
-                    onNext = { leaving = it },
-                    onLeave = { together.leave(next) },
-                    onStay = { leaving = null },
-                    onEnd = { leaving = null; together.endRoom() },
-                )
-            }
-        }
         if (settingsOpen && leads) item { RoomSettings(together, room) }
         if (room.countdown != null) item { ReadyCheck(together, room, me) }
         item {
@@ -412,12 +497,21 @@ private fun RoomPage(together: Together, state: TogetherState, room: Room, setti
         }
         item { Listeners(together, room, me, settings, onRemove = { removing = it }) }
     }
+    leaving?.let { next ->
+        LeaveDialog(
+            room, me, next,
+            onNext = { leaving = it },
+            onLeave = { leaving = null; together.leave(next) },
+            onStay = { leaving = null },
+            onEnd = { leaving = null; together.endRoom() },
+        )
+    }
     removing?.let { member ->
-        Confirm(
+        ConfirmDialog(
             title = "Remove ${member.name}?",
-            body = "They leave the room and the PIN changes, so share the new PIN with everyone who is still joining.",
-            confirm = "Remove",
-            onConfirm = { together.removeListener(member.id) },
+            text = "They leave the room and the PIN changes, so share the new PIN with everyone who is still joining.",
+            action = "Remove",
+            onConfirm = { removing = null; together.removeListener(member.id) },
             onDismiss = { removing = null },
         )
     }
@@ -441,7 +535,7 @@ private fun Head(state: TogetherState, room: Room) {
     ) {
         GlyphButton(R.drawable.ic_chevron_left, "Back", { actions.nav.popBackStack() })
         Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-            if (current != null) Art(art, 220.dp)
+            if (current != null) Art(art, 220.dp, description = "Cover of ${current.track.title}")
             else Box(Modifier.size(220.dp).clip(RoundedCornerShape(4.dp)).background(p.surface), contentAlignment = Alignment.Center) {
                 Glyph(R.drawable.ic_headphones, null, tint = p.dim, size = 64.dp)
             }
@@ -464,9 +558,6 @@ private fun Head(state: TogetherState, room: Room) {
     }
 }
 
-/** The PIN as it is read out: two groups of four. */
-private fun spaced(pin: String) = if (pin.length == 8) "${pin.take(4)} ${pin.drop(4)}" else pin
-
 /**
  * Under the room's head: play or pause, the songs either side and the vote
  * to skip, for those who steer it; then the PIN that invites, the way out,
@@ -474,36 +565,40 @@ private fun spaced(pin: String) = if (pin.length == 8) "${pin.take(4)} ${pin.dro
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun RoomButtons(together: Together, room: Room, me: String, settings: Settings, onSettings: () -> Unit, onLeave: () -> Unit) {
+private fun RoomButtons(together: Together, state: TogetherState, room: Room, me: String, settings: Settings, onSettings: () -> Unit, onLeave: () -> Unit) {
     val actions = LocalActions.current
-    val context = LocalContext.current
-    val p = LocalPalette.current
-    val steers = room.mayControl(me)
+    val haptics = rememberHaptics()
+    // A command needs the line up as well as the right to send it; until then the buttons wait with the room.
+    val seated = state.phase == Phase.Joined
+    val steers = room.mayControl(me) && seated
     Row(Modifier.padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.alpha(if (steers && room.current != null) 1f else 0.4f)) {
-            PlayButton({ if (room.current != null) together.transport(Transport.Toggle) }, playing = room.playing)
+        RoomPlayButton(room.playing, enabled = steers && room.current != null) {
+            haptics.toggle(!room.playing)
+            together.transport(Transport.Toggle)
         }
         Spacer(Modifier.width(8.dp))
-        val dim = if (steers) p.text else p.dim
-        GlyphButton(R.drawable.ic_skip_back_filled, "Previous song", { together.transport(Transport.Previous) }, tint = dim)
-        GlyphButton(R.drawable.ic_skip_forward_filled, "Next song", { together.transport(Transport.Next) }, tint = dim)
+        RoomGlyph(R.drawable.ic_skip_back_filled, "Previous song", steers) { together.transport(Transport.Previous) }
+        RoomGlyph(R.drawable.ic_skip_forward_filled, "Next song", steers) { together.transport(Transport.Next) }
         Spacer(Modifier.weight(1f))
         if (room.leads(me)) GlyphButton(R.drawable.ic_settings, "Room settings", onSettings)
     }
+    if (!room.mayControl(me)) Small(LEADER_PLAYS, Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp))
     FlowRow(
         Modifier.padding(horizontal = 16.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Pill("PIN  ${spaced(room.pin)}", {
-            context.getSystemService(ClipboardManager::class.java)?.setPrimaryClip(ClipData.newPlainText("Room PIN", room.pin))
-            actions.say("PIN copied. Friends need the same server.")
-        }, icon = R.drawable.ic_copy)
+        Pill(
+            "PIN  ${spacedPin(room.pin)}",
+            { actions.copy(room.pin, "PIN copied. Friends need the same server.") },
+            icon = R.drawable.ic_copy,
+            description = "Copy PIN ${spacedPin(room.pin)}",
+        )
         Pill("Invite", {
             val server = settings.togetherServer?.url.orEmpty()
-            actions.share("Listen Together", "Join my Listen Together room with PIN ${spaced(room.pin)} on $server")
-        }, icon = R.drawable.ic_share_2)
-        if (room.voteSkip) Pill("Vote to skip · ${room.votes.size}", together::voteSkip)
+            actions.share("Listen Together", inviteText(room.title(), server, room.pin))
+        }, icon = R.drawable.ic_share_2, description = "Invite friends")
+        if (room.voteSkip) Pill("Vote to skip · ${room.votes.size}", together::voteSkip, enabled = seated)
         Pill("Leave room", onLeave, icon = R.drawable.ic_log_out)
     }
     room.lastControlledBy?.let { person ->
@@ -511,38 +606,91 @@ private fun RoomButtons(together: Together, room: Room, me: String, settings: Se
     }
 }
 
+/** The room's play button, which can be off: without the right to steer it does nothing, and says so to TalkBack. */
+@Composable
+private fun RoomPlayButton(playing: Boolean, enabled: Boolean, onClick: () -> Unit) {
+    val p = LocalPalette.current
+    val label = if (playing) "Pause" else "Play"
+    Box(
+        Modifier.size(56.dp).clip(CircleShape).background(if (enabled) p.accent else p.surfaceActive)
+            .clickable(enabled = enabled, onClickLabel = label, role = Role.Button, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Glyph(if (playing) R.drawable.ic_pause_filled else R.drawable.ic_play_filled, label, tint = if (enabled) p.onAccent else p.dim, size = 24.dp)
+    }
+}
+
+/** An icon button of the room's, which can be off in the same way. */
+@Composable
+private fun RoomGlyph(@DrawableRes icon: Int, description: String, enabled: Boolean, onClick: () -> Unit) {
+    val p = LocalPalette.current
+    Box(
+        Modifier.size(48.dp).clip(CircleShape)
+            .clickable(enabled = enabled, onClickLabel = description, role = Role.Button, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) { Glyph(icon, description, tint = if (enabled) p.text else p.dim) }
+}
+
 /** How to leave: for the leader, who leads next, or the end of the room. */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun LeavePanel(room: Room, me: String, next: String, onNext: (String) -> Unit, onLeave: () -> Unit, onStay: () -> Unit, onEnd: () -> Unit) {
+private fun LeaveDialog(room: Room, me: String, next: String, onNext: (String) -> Unit, onLeave: () -> Unit, onStay: () -> Unit, onEnd: () -> Unit) {
     val p = LocalPalette.current
-    val leads = room.leads(me)
-    Panel {
-        if (leads) {
-            PanelHeading("Keep the music going.")
-            Quiet(
-                "Choose the next leader, or let us pick a connected listener. The room and queue stay together, " +
-                    "and the music keeps playing here from the room’s queue.",
-            )
-            Spacer(Modifier.height(10.dp))
-            Text("Next leader", style = Type.label)
-            Spacer(Modifier.height(6.dp))
-            val others = room.members.filter { it.connected && it.id != me }
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Chip("Choose someone at random", others.none { it.id == next }, { onNext("") })
-                others.forEach { member -> Chip(member.name, member.id == next, { onNext(member.id) }) }
-            }
-        } else {
-            PanelHeading("Leave this room?")
-            Quiet("The song playing carries on, then your own queue.")
-        }
-        Spacer(Modifier.height(12.dp))
-        Buttons {
-            Button("Leave room", onClick = onLeave)
-            Pill("Stay", onStay)
-            if (leads) TextAction("End room for everyone", onEnd, color = p.danger)
-        }
+    var ending by rememberSaveable { mutableStateOf(false) }
+    if (ending) {
+        ConfirmDialog(
+            title = "End the room for everyone?",
+            text = "Everyone leaves and the room’s queue is gone. This can’t be undone.",
+            action = "End room",
+            onConfirm = onEnd,
+            onDismiss = { ending = false },
+        )
+        return
     }
+    if (!room.leads(me)) {
+        ConfirmDialog(
+            title = "Leave this room?",
+            text = "The song playing carries on, then your own queue.",
+            action = "Leave room",
+            onConfirm = onLeave,
+            onDismiss = onStay,
+            danger = false,
+            dismiss = "Stay",
+        )
+        return
+    }
+    val others = room.members.filter { it.connected && it.id != me }
+    AlertDialog(
+        onDismissRequest = onStay,
+        containerColor = p.overlay,
+        titleContentColor = p.text,
+        textContentColor = p.secondary,
+        title = { Text("Keep the music going?", style = Type.heading) },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                Text(
+                    "Choose the next leader, or let us pick a connected listener. The room and queue stay together, " +
+                        "and the music keeps playing here from the room’s queue.",
+                    style = Type.body,
+                )
+                Spacer(Modifier.height(12.dp))
+                if (others.isEmpty()) {
+                    Text("No one else is connected right now.", style = Type.small)
+                } else {
+                    Text("Next leader", style = Type.label, color = p.text)
+                    Spacer(Modifier.height(6.dp))
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Chip("Choose someone at random", others.none { it.id == next }, { onNext("") })
+                        others.forEach { member -> Chip(member.name, member.id == next, { onNext(member.id) }) }
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+                TextAction("End room for everyone", { ending = true }, color = p.danger)
+            }
+        },
+        confirmButton = { TextButton(onLeave) { Text("Leave room", style = Type.bodyStrong, color = p.accent) } },
+        dismissButton = { TextButton(onStay) { Text("Stay", style = Type.bodyStrong, color = p.text) } },
+    )
 }
 
 /** The leader's controls over who steers, who joins, and the queue. */
@@ -556,28 +704,37 @@ private fun RoomSettings(together: Together, room: Room) {
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Mode.entries.forEach { mode -> Chip(mode.title, mode == room.mode, { together.set(Setting.ModeTo(mode)) }) }
         }
+        Small(room.mode.about)
         Spacer(Modifier.height(12.dp))
         Text("Queue order", style = Type.label)
         Spacer(Modifier.height(6.dp))
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Policy.entries.forEach { policy -> Chip(policy.title, policy == room.policy, { together.set(Setting.PolicyTo(policy)) }) }
         }
+        Small(
+            when (room.policy) {
+                Policy.Fifo -> "Songs play in the order they were added."
+                Policy.Turns -> "One song from each person in turn, so no one takes over the queue."
+            },
+        )
         Spacer(Modifier.height(12.dp))
         LimitField(together, room)
+        Small("How many songs each guest can have waiting in the queue, from 1 to 100.")
         Spacer(Modifier.height(6.dp))
-        Toggle("Approve new listeners", null, room.joinApproval) { together.set(Setting.JoinApproval(it)) }
-        Toggle("Lock new joins", null, room.locked) { together.set(Setting.Locked(it)) }
+        Toggle("Approve new listeners", "You let each person in before they can join, even with the PIN.", room.joinApproval) { together.set(Setting.JoinApproval(it)) }
+        Toggle("Lock new joins", "No one new can join, even with the PIN. Everyone here stays.", room.locked) { together.set(Setting.Locked(it)) }
         if (room.mode == Mode.Contributions) {
-            Toggle("Add requests without asking me", null, room.autoAccept) { together.set(Setting.AutoAccept(it)) }
+            Toggle("Add requests without asking me", "Friends’ requests go straight into the queue.", room.autoAccept) { together.set(Setting.AutoAccept(it)) }
         }
-        Toggle("Allow duplicates", null, room.duplicates) { together.set(Setting.Duplicates(it)) }
-        Toggle("Vote to skip", null, room.voteSkip) { together.set(Setting.VoteSkip(it)) }
+        Toggle("Allow duplicates", "The same song can wait in the queue more than once.", room.duplicates) { together.set(Setting.Duplicates(it)) }
+        Toggle("Vote to skip", "Listeners can vote to skip the song playing.", room.voteSkip) { together.set(Setting.VoteSkip(it)) }
         Spacer(Modifier.height(8.dp))
         Buttons {
             Pill("Rotate PIN", together::rotatePin)
             Pill("Start together / ready check", together::readyCheck)
         }
-        Small("Rotating the PIN: everyone stays. The old PIN stops working.")
+        Small("Rotating the PIN: everyone stays. The old PIN and any invite links stop working.")
+        Small("A ready check pauses everyone and starts once they have all said they are ready.")
     }
 }
 
@@ -621,7 +778,7 @@ private fun ReadyCheck(together: Together, room: Room, me: String) {
     }
     val (ready, connected) = room.ready()
     Panel {
-        PanelHeading(said)
+        PanelHeading(said, Modifier.semantics { liveRegion = LiveRegionMode.Polite })
         Quiet("$ready of $connected ready")
         Spacer(Modifier.height(10.dp))
         Buttons {
@@ -633,18 +790,21 @@ private fun ReadyCheck(together: Together, room: Room, me: String) {
 
 /** What waits: the songs asked for, the search that finds more, and the queue from the song playing on. */
 private fun LazyListScope.queue(together: Together, room: Room, me: String) {
-    if (room.mayUndo(me, together.serverNow())) {
-        item { TextAction("Undo edit", together::undo, Modifier.padding(horizontal = 4.dp)) }
-    }
+    // Always in the list while the room offers one: the row itself goes when the time is up.
+    if (room.undo != null) item(key = "undo") { UndoEdit(together, room, me) }
     if (room.mayAdd(me)) item { RoomSearch(together, room, me) }
     val requests = room.requestsFor(me)
     if (requests.isNotEmpty()) {
         item {
             val answers = room.answers(me)
+            val haptics = rememberHaptics()
             SectionTitle(
                 if (answers) "Requests" else "Your requests",
                 action = if (answers && requests.size > 1) "Accept all" else null,
-                onAction = { together.accept(requests.map { it.id }, next = false) },
+                onAction = {
+                    haptics.drop()
+                    together.accept(requests.map { it.id }, next = false)
+                },
             )
         }
         items(requests, key = { "request-" + it.id }) { request -> RequestRow(together, room, me, request) }
@@ -655,12 +815,28 @@ private fun LazyListScope.queue(together: Together, room: Room, me: String) {
     }
     items(upcoming, key = { "entry-" + it.value.id }) { (_, entry) ->
         val playing = entry.id == room.current
+        val haptics = rememberHaptics()
         EntryRow(
-            entry, playing,
+            entry, playing, room.pictureOfAdder(entry),
             onClick = if (room.mayControl(me) && !playing) ({ together.jump(entry.id) }) else null,
-            onRemove = if (room.mayRemove(me, entry)) ({ together.remove(entry.id) }) else null,
+            onRemove = if (room.mayRemove(me, entry)) ({ haptics.drop(); together.remove(entry.id) }) else null,
         )
     }
+}
+
+/** The offer to take back the last edit, with how long it lasts, gone when the relay would refuse it. */
+@Composable
+private fun UndoEdit(together: Together, room: Room, me: String) {
+    var now by remember { mutableDoubleStateOf(together.serverNow()) }
+    LaunchedEffect(room.revision, room.undo?.expires) {
+        while (room.mayUndo(me, together.serverNow())) {
+            now = together.serverNow()
+            delay(250)
+        }
+        now = together.serverNow()
+    }
+    if (!room.mayUndo(me, now)) return
+    TextAction("Undo edit · ${room.undoSecondsLeft(now)} s", together::undo, Modifier.padding(horizontal = 4.dp))
 }
 
 /** Looking for a song from inside the room, to add it or ask for it. */
@@ -670,31 +846,32 @@ private fun RoomSearch(together: Together, room: Room, me: String) {
     val p = LocalPalette.current
     var query by rememberSaveable { mutableStateOf("") }
     var results by remember { mutableStateOf<List<Track>?>(null) }
+    var failed by remember { mutableStateOf<String?>(null) }
+    var attempt by remember { mutableIntStateOf(0) }
     val requesting = room.requesting(me)
-    LaunchedEffect(query) {
-        if (query.isBlank()) {
-            results = null
-            return@LaunchedEffect
-        }
+    LaunchedEffect(query, attempt) {
+        results = null
+        failed = null
+        if (query.isBlank()) return@LaunchedEffect
         // Typing has paused: search.
         delay(400)
-        results = null
-        results = runCatching {
+        runCatching {
             val found = actions.graph.api.search(query.trim(), SearchFilter.Songs)
             found.shelves.flatMap { it.items }.filterIsInstance<Item.Song>().map { it.track }.take(20)
-        }.getOrDefault(emptyList())
+        }.fold(
+            { results = it },
+            {
+                if (it is CancellationException) throw it
+                failed = it.message ?: "The search did not work."
+            },
+        )
     }
     Column(Modifier.padding(horizontal = 16.dp)) {
-        OutlinedTextField(
-            query, { query = it }, Modifier.fillMaxWidth(),
-            placeholder = { Text(if (requesting) "Find songs to request" else "Find songs to add") },
-            leadingIcon = { Glyph(R.drawable.ic_search, null, tint = p.secondary, size = 20.dp) },
-            trailingIcon = if (query.isNotEmpty()) ({ GlyphButton(R.drawable.ic_x, "Clear search", { query = "" }, size = 18.dp) }) else null,
-            singleLine = true,
-        )
+        SearchField(query, { query = it }, Modifier.fillMaxWidth(), placeholder = if (requesting) "Find songs to request" else "Find songs to add")
         if (query.isNotBlank()) {
             val found = results
             when {
+                failed != null -> Problem(failed.orEmpty(), { attempt++ })
                 found == null -> Quiet("Searching…", Modifier.padding(vertical = 12.dp))
                 found.isEmpty() -> Quiet("No songs found. Try another search.", Modifier.padding(vertical = 12.dp))
                 else -> found.forEach { track ->
@@ -722,7 +899,11 @@ private fun RequestRow(together: Together, room: Room, me: String, request: Song
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Text(request.track.title, style = Type.body, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text("${request.track.artistNames} · from ${request.by.name}", style = Type.small, color = p.secondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Avatar(request.by.name, request.by.picture, 16)
+                    Spacer(Modifier.width(4.dp))
+                    Text("${request.track.artistNames} · from ${request.by.name}", style = Type.small, color = p.secondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
             }
         }
         Row(Modifier.padding(start = 56.dp), horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -739,11 +920,12 @@ private fun RequestRow(together: Together, room: Room, me: String, request: Song
 }
 
 @Composable
-private fun EntryRow(entry: Entry, playing: Boolean, onClick: (() -> Unit)?, onRemove: (() -> Unit)?) {
+private fun EntryRow(entry: Entry, playing: Boolean, adder: List<Artwork>, onClick: (() -> Unit)?, onRemove: (() -> Unit)?) {
     val p = LocalPalette.current
     Row(
         Modifier.fillMaxWidth()
-            .then(if (onClick != null) Modifier.clickable(onClickLabel = "Play ${entry.track.title}", onClick = onClick) else Modifier)
+            // A swipe across the list must not jump the whole room to this song.
+            .then(if (onClick != null) Modifier.tapRow(onClick = onClick, role = Role.Button, onClickLabel = "Play ${entry.track.title}") else Modifier)
             .padding(start = 16.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -754,8 +936,15 @@ private fun EntryRow(entry: Entry, playing: Boolean, onClick: (() -> Unit)?, onR
                 entry.track.title, style = Type.body, maxLines = 1, overflow = TextOverflow.Ellipsis,
                 color = if (playing) p.accent else p.text,
             )
-            val by = if (entry.radio) "Radio" else "Added by ${entry.addedBy.name}"
-            Text("${entry.track.artistNames} · $by", style = Type.small, color = p.secondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                // Radio is nobody's pick, so it has no face.
+                if (!entry.radio) {
+                    Avatar(entry.addedBy.name, adder, 16)
+                    Spacer(Modifier.width(4.dp))
+                }
+                val by = if (entry.radio) "Radio" else "Added by ${entry.addedBy.name}"
+                Text("${entry.track.artistNames} · $by", style = Type.small, color = p.secondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
         }
         if (onRemove != null) GlyphButton(R.drawable.ic_x, "Remove ${entry.track.title}", onRemove, tint = p.secondary, size = 18.dp)
     }
@@ -767,7 +956,7 @@ private fun LazyListScope.history(room: Room, onSave: () -> Unit) {
         return
     }
     item { Pill("Save as playlist", onSave, Modifier.padding(horizontal = 16.dp, vertical = 4.dp), icon = R.drawable.ic_list_plus) }
-    items(room.history.reversed(), key = { "history-" + it.id }) { entry -> EntryRow(entry, false, null, null) }
+    items(room.history.reversed(), key = { "history-" + it.id }) { entry -> EntryRow(entry, false, room.pictureOfAdder(entry), null, null) }
 }
 
 private fun LazyListScope.activity(room: Room) {
@@ -817,7 +1006,7 @@ private fun Listeners(together: Together, room: Room, me: String, settings: Sett
         Spacer(Modifier.height(12.dp))
         Text("Your experience", style = Type.label)
         Toggle("Show room activity notifications", null, settings.togetherNotifications, together::notifications)
-        TextAction("Resync me", together::resync, Modifier.padding(start = 0.dp))
+        TextAction("Resync me", together::resyncMe, Modifier.padding(start = 0.dp))
         Small("Only affects your playback.")
     }
 }
@@ -880,10 +1069,9 @@ private fun SaveHistory(actions: Actions, name: String, room: Room, onName: (Str
                     val title = name.trim()
                     val ids = room.history.map { it.track.id }
                     onDone()
-                    actions.launch {
+                    actions.write(Change.Library, done = "Saved “$title” to your library.") {
                         val id = actions.graph.api.createPlaylist(title)
                         actions.graph.api.addToPlaylist(id, ids)
-                        actions.say("Saved “$title” to your library.")
                     }
                 },
                 enabled = name.isNotBlank(),
@@ -907,7 +1095,7 @@ private fun Panel(content: @Composable ColumnScope.() -> Unit) {
 
 @Composable
 private fun PanelHeading(text: String, modifier: Modifier = Modifier) {
-    Text(text, style = Type.heading, modifier = modifier.padding(bottom = 4.dp))
+    Text(text, style = Type.heading, modifier = modifier.semantics { heading() }.padding(bottom = 4.dp))
 }
 
 @Composable
@@ -921,7 +1109,7 @@ private fun Small(text: String, modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun Line(title: String, subtitle: String) {
+private fun Titled(title: String, subtitle: String) {
     Text(title, style = Type.bodyStrong)
     Text(subtitle, style = Type.small, color = LocalPalette.current.secondary, modifier = Modifier.padding(bottom = 8.dp))
 }
@@ -942,7 +1130,7 @@ private fun Button(text: String, enabled: Boolean = true, @DrawableRes icon: Int
     val p = LocalPalette.current
     Row(
         Modifier.clip(RoundedCornerShape(20.dp)).background(if (enabled) p.accent else p.surfaceActive)
-            .clickable(enabled = enabled, onClick = onClick).padding(horizontal = 18.dp, vertical = 10.dp),
+            .clickable(enabled = enabled, role = Role.Button, onClick = onClick).padding(horizontal = 18.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         val ink = if (enabled) p.onAccent else p.dim
@@ -958,19 +1146,28 @@ private fun Button(text: String, enabled: Boolean = true, @DrawableRes icon: Int
 private fun TextAction(text: String, onClick: () -> Unit, modifier: Modifier = Modifier, color: Color = LocalPalette.current.accent) {
     Text(
         text, style = Type.label, color = color,
-        modifier = modifier.clip(RoundedCornerShape(12.dp)).clickable(onClick = onClick).padding(horizontal = 12.dp, vertical = 10.dp),
+        modifier = modifier.clip(RoundedCornerShape(12.dp)).clickable(role = Role.Button, onClick = onClick).padding(horizontal = 12.dp, vertical = 10.dp),
     )
 }
 
 @Composable
 private fun Toggle(title: String, subtitle: String?, on: Boolean, onChange: (Boolean) -> Unit) {
     val p = LocalPalette.current
-    Row(Modifier.fillMaxWidth().clickable { onChange(!on) }.padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+    val haptics = rememberHaptics()
+    Row(
+        // A swipe across the page must not change a room's setting; the switch only shows it.
+        Modifier.fillMaxWidth()
+            .tapRow(onClick = { haptics.toggle(!on); onChange(!on) }, role = Role.Switch)
+            .semantics { toggleableState = ToggleableState(on) }
+            .padding(vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
         Column(Modifier.weight(1f)) {
             Text(title, style = Type.body)
             if (subtitle != null) Text(subtitle, style = Type.small, color = p.secondary)
         }
-        Switch(on, onChange, colors = SwitchDefaults.colors(checkedTrackColor = p.accent))
+        Spacer(Modifier.width(8.dp))
+        Switch(on, null, colors = SwitchDefaults.colors(checkedTrackColor = p.accent))
     }
 }
 
@@ -981,6 +1178,7 @@ private fun Alert(text: String, onDismiss: () -> Unit) {
     Row(
         Modifier.padding(horizontal = 16.dp, vertical = 8.dp).fillMaxWidth().clip(RoundedCornerShape(10.dp))
             .background(p.danger.copy(alpha = 0.12f)).border(1.dp, p.danger.copy(alpha = 0.3f), RoundedCornerShape(10.dp))
+            .semantics { liveRegion = LiveRegionMode.Polite }
             .padding(start = 16.dp, top = 4.dp, bottom = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -997,18 +1195,8 @@ private fun Avatar(name: String, picture: List<Artwork>, size: Int) {
         Art(picture, size.dp, shape = CircleShape)
     } else {
         Box(Modifier.size(size.dp).clip(CircleShape).background(p.surfaceActive), contentAlignment = Alignment.Center) {
-            Text(name.trim().take(1).uppercase(), style = Type.bodyStrong, textAlign = TextAlign.Center)
+            // Not this phone's language: a Turkish phone must not make an "i" a dotted capital in someone's English name.
+            Text(name.trim().take(1).uppercase(Locale.ROOT), style = if (size < 24) Type.tiny else Type.bodyStrong, textAlign = TextAlign.Center)
         }
     }
-}
-
-@Composable
-private fun Confirm(title: String, body: String, confirm: String, onConfirm: () -> Unit, onDismiss: () -> Unit) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(title) },
-        text = { Text(body) },
-        confirmButton = { TextButton({ onDismiss(); onConfirm() }) { Text(confirm, color = LocalPalette.current.danger) } },
-        dismissButton = { TextButton(onDismiss) { Text("Cancel") } },
-    )
 }

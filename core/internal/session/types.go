@@ -39,6 +39,10 @@ const (
 	CmdEnqueue    CommandKind = "enqueue"
 	CmdRemove     CommandKind = "remove"
 	CmdMove       CommandKind = "move"
+	// CmdClearUpcoming removes everything after the current entry in one step,
+	// and CmdRestoreUpcoming puts back what the last one removed.
+	CmdClearUpcoming   CommandKind = "clear_upcoming"
+	CmdRestoreUpcoming CommandKind = "restore_upcoming"
 	// CmdJump plays the queue entry at At, keeping the queue as it is.
 	CmdJump     CommandKind = "jump"
 	CmdTransfer CommandKind = "transfer"
@@ -75,6 +79,9 @@ type Command struct {
 	At     int
 	From   int
 	To     int
+	// FromAutoplay marks an enqueue as autoplay's own, which ends the hold a
+	// clear put on it.
+	FromAutoplay bool
 
 	Repeat  domain.RepeatMode
 	Shuffle bool
@@ -117,6 +124,21 @@ type Target struct {
 	VideoID   string
 	StartAtMs int64
 	Playing   bool
+
+	// SeekSeq changes each time the core moves the position on purpose: a
+	// seek, a track started, a queue brought back. On a track it already
+	// holds, the engine seeks only when this has changed. StartAtMs cannot say
+	// so by itself, since it also echoes the engine's own position reports: a
+	// late echo, or the 0 a track starts with after the engine ran into it,
+	// taken for a request pulled the song back.
+	SeekSeq uint64
+
+	// SeekToMs is where the move SeekSeq last counted went. Projections reach a
+	// subscriber lossily, and a report in flight can overwrite StartAtMs before
+	// one does, so a seek is followed to this rather than to StartAtMs. It is
+	// not where a deck with nothing loaded starts: by then the track may have
+	// played on, and StartAtMs says how far.
+	SeekToMs int64
 
 	// PreloadVideoID is the next track, resolved ahead of time so a gapless or
 	// crossfaded transition has something ready.

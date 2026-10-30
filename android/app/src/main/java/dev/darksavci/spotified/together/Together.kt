@@ -12,10 +12,14 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
@@ -62,6 +66,8 @@ data class TogetherState(
     val manage: ServerForm? = null,
     /** The PIN of a room to join, as typed. */
     val pin: String = "",
+    /** A link followed to a room, until this listener says whether to join it. */
+    val invite: Invite? = null,
 ) {
     /** In a room: seated, even if the line has dropped for a moment. */
     val inRoom: Boolean get() = (phase == Phase.Joined || phase == Phase.Reconnecting) && room != null
@@ -123,6 +129,9 @@ private const val ENDED_EVERY_MS = 5000L
 /** A song this far in or less is not worth taking a new room to. */
 private const val SEED_SEEK_FROM_MS = 2000L
 
+/** How long joining from a link waits for the player's session, which a link that opened the app may still be starting. */
+private const val SESSION_WAIT_MS = 8000L
+
 class Together(
     private val scope: CoroutineScope,
     private val playback: Playback,
@@ -160,6 +169,15 @@ class Together(
     private val withdrawn = mutableListOf<String>()
     /** Songs the room has had while this listener was in it. */
     private val heard = mutableListOf<String>()
+    /** The way into a room that stopped to ask for a server, to carry on once there is one. */
+    private var waitingForServer: Enter? = null
+    /** The edit this listener last asked for, until the room shows it. */
+    private var pendingEdit: PendingEdit? = null
+
+    private val _undoOffers = MutableSharedFlow<String>(extraBufferCapacity = 4)
+
+    /** What was just done to the queue, to say with an Undo: only what the room says can be taken back. */
+    val undoOffers: SharedFlow<String> = _undoOffers
 
     init {
         scope.launch { store.settings.collect { settings = it } }
@@ -178,7 +196,11 @@ class Together(
 
     // ---------- before a room ----------
 
-    fun typePin(text: String) = _state.update { it.copy(pin = pinFrom(text)) }
+    /** The PIN as typed; a whole invitation pasted here is the same as following the link. */
+    fun typePin(text: String) {
+        val invite = if ("://" in text) readInvite(text).getOrNull() else null
+        if (invite != null) openInvite(invite) else _state.update { it.copy(pin = pinFrom(text)) }
+    }
 
     fun typeName(text: String) = saveSettings { it.copy(togetherName = text.take(50)) }
 
@@ -196,11 +218,36 @@ class Together(
 
     fun join() = enter(Enter.Join(_state.value.pin))
 
-    private fun enter(enter: Enter) {
+    /** A link to a room was followed: the page asks whether to join, unless this listener is in that room already. */
+    fun openInvite(invite: Invite) {
+        val now = _state.value
+        if (now.inRoom && now.room?.pin == invite.pin) return say("You’re already in this room.")
+        _state.update { it.copy(invite = invite) }
+    }
+
+    fun dismissInvite() = _state.update { it.copy(invite = null) }
+
+    /** Joins the room of the link just followed, saving its server if it is a new one, and leaving any room this listener is in. */
+    fun acceptInvite() {
+        val invite = _state.value.invite ?: return
+        _state.update { it.copy(invite = null) }
+        val (servers, server) = invite.withServerIn(settings.togetherServers) ?: return refuse("That invite link’s server can’t be used.")
+        if (_state.value.phase != Phase.Idle) leave()
+        // Kept here as well as saved, as the save arrives back a moment later.
+        settings = settings.copy(togetherServers = servers, togetherSelected = server.id)
+        saveSettings { it.copy(togetherServers = servers, togetherSelected = server.id) }
+        _state.update { it.copy(pin = invite.pin) }
+        scope.launch(Dispatchers.Main) {
+            withTimeoutOrNull(SESSION_WAIT_MS) { playback.connected.first { it } }
+            enter(Enter.Join(invite.pin), server)
+        }
+    }
+
+    private fun enter(enter: Enter, server: SavedServer? = settings.togetherServer) {
         if (_state.value.phase != Phase.Idle) return
-        // With no server chosen the way in is to save one: the form opens.
-        val server = settings.togetherServer
+        // With no server chosen the way in is to save one: the form opens, and this goes on from there.
         if (server == null) {
+            waitingForServer = enter
             _state.update { it.copy(manage = ServerForm()) }
             return
         }
@@ -265,7 +312,8 @@ class Together(
         lengthTold = null
         withdrawn.clear()
         heard.clear()
-        _state.update { TogetherState(error = error, manage = it.manage, pin = it.pin) }
+        pendingEdit = null
+        _state.update { TogetherState(error = error, manage = it.manage, pin = it.pin, invite = it.invite) }
     }
 
     // ---------- saved servers ----------
@@ -287,7 +335,10 @@ class Together(
         if (idle) _state.update { it.copy(manage = ServerForm.on(server)) }
     }
 
-    fun closeManage() = _state.update { it.copy(manage = null) }
+    fun closeManage() {
+        waitingForServer = null
+        _state.update { it.copy(manage = null) }
+    }
 
     fun serverName(name: String) = _state.update { it.copy(manage = it.manage?.copy(name = name.take(80))) }
 
@@ -300,10 +351,15 @@ class Together(
         val form = _state.value.manage ?: return
         save(settings.togetherServers, form).fold(
             { (servers, id) ->
+                settings = settings.copy(togetherServers = servers, togetherSelected = id)
                 saveSettings { it.copy(togetherServers = servers, togetherSelected = id) }
                 _state.update { it.copy(manage = null, error = null) }
+                val next = waitingForServer
+                waitingForServer = null
+                if (next != null) enter(next, servers.firstOrNull { it.id == id })
             },
-            { why -> refuse(why.message.orEmpty()) },
+            // Said in the form, which covers the page.
+            { why -> _state.update { it.copy(manage = it.manage?.copy(check = why.message.orEmpty())) } },
         )
     }
 
@@ -346,7 +402,10 @@ class Together(
                 if (previous != null) roomChanged(previous, event.room)
                 keepUp()
             }
-            is Event.Refused -> say(event.why)
+            is Event.Refused -> {
+                pendingEdit = null
+                say(event.why)
+            }
             is Event.Ended -> leave(error = event.reason.ifEmpty { null })
             is Event.Failed -> leave(error = event.why)
         }
@@ -358,10 +417,20 @@ class Together(
         // Someone sought: follow at once, not as drift that may wait.
         if (jumped(previous, room)) correctedAt = null
         val news = requestNews(previous, room, _state.value.me, withdrawn).toMutableList()
+        val outcome = pendingEdit?.outcomeIn(room)
         val latest = room.activity.lastOrNull()
         val happened = latest?.id != previous.activity.lastOrNull()?.id
-        if (news.isEmpty() && happened && settings.togetherNotifications && latest != null) news += latest.text
+        // The room's own line about an edit would replace the Undo that goes with it.
+        if (outcome == null && news.isEmpty() && happened && settings.togetherNotifications && latest != null) news += latest.text
         news.forEach(::say)
+        if (outcome != null) {
+            pendingEdit = null
+            when {
+                outcome.isEmpty() -> {}
+                room.mayUndo(_state.value.me, serverNow()) -> _undoOffers.tryEmit(outcome)
+                else -> say(outcome)
+            }
+        }
     }
 
     private fun wantsToPlay(p: Projection) =
@@ -390,6 +459,7 @@ class Together(
             positionMs = livePosition(p),
             playing = wantsToPlay(p),
             settled = !wantsToPlay(p) || p.state.state == PlayState.Playing,
+            held = playback.hold.value != null,
         )
         val since = correctedAt?.let { clock - it }
         val connection = line ?: return
@@ -556,10 +626,14 @@ class Together(
     fun turnAway(request: String) = leaderCommand("deny", buildJsonObject { put("request", request) })
 
     /** Puts requested songs in the queue: next, or at its end. */
-    fun accept(requests: List<String>, next: Boolean) = command("acceptRequest", buildJsonObject {
-        put("requests", buildJsonArray { requests.forEach { add(JsonPrimitive(it)) } })
-        put("placement", if (next) "next" else "end")
-    })
+    fun accept(requests: List<String>, next: Boolean) {
+        if (seated() == null) return
+        pendingEdit = PendingEdit.Acceptance(requests)
+        command("acceptRequest", buildJsonObject {
+            put("requests", buildJsonArray { requests.forEach { add(JsonPrimitive(it)) } })
+            put("placement", if (next) "next" else "end")
+        })
+    }
 
     fun decline(requests: List<String>) = command("declineRequest", buildJsonObject {
         put("requests", buildJsonArray { requests.forEach { add(JsonPrimitive(it)) } })
@@ -585,12 +659,25 @@ class Together(
         line?.command("jump", buildJsonObject { put("entry", entry) })
     }
 
-    fun remove(entry: String) = command("remove", buildJsonObject { put("entry", entry) })
+    fun remove(entry: String) {
+        val room = seated() ?: return
+        pendingEdit = PendingEdit.Removal(entry, room.queue.firstOrNull { it.id == entry }?.track?.title.orEmpty())
+        command("remove", buildJsonObject { put("entry", entry) })
+    }
 
-    /** Takes back the last edit of the queue. */
-    fun undo() = command("undo")
+    /** Takes back the last edit of the queue, unless its time has run out while the offer stood. */
+    fun undo() {
+        val room = seated() ?: return
+        if (!room.mayUndo(_state.value.me, serverNow())) return say("It’s too late to undo that.")
+        line?.command("undo")
+    }
 
     /** Brings this player back to the room, now, as if it had never been brought to it. */
+    /** "Resync me": for a phone being held, that also means letting it sound again. */
+    fun resyncMe() {
+        if (playback.hold.value != null) playback.resume() else resync()
+    }
+
     fun resync() {
         appliedEntry = null
         correctedAt = null

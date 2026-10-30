@@ -233,6 +233,13 @@ func (c *Cache) Keep(id string, keep bool) error {
 	return nil
 }
 
+// IsKept is whether a track is marked as a download.
+func (c *Cache) IsKept(id string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.kept[id]
+}
+
 // KeptTracks lists the downloads, in id order.
 func (c *Cache) KeptTracks() []Kept {
 	c.mu.Lock()

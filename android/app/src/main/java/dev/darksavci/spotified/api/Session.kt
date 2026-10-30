@@ -40,6 +40,10 @@ sealed interface Command {
     data class Jump(val index: Int) : Command
     data class Remove(val index: Int) : Command
     data class Move(val from: Int, val to: Int) : Command
+    /** Takes everything after the song playing off the queue, in one step. */
+    object ClearUpcoming : Command
+    /** Puts back what the last [ClearUpcoming] took off, which the core has kept. */
+    object RestoreUpcoming : Command
     /** Adds tracks at a place, or at the end when [at] is null. */
     data class Enqueue(val tracks: List<Track>, val at: Int?) : Command
     data class FollowRoom(val tracks: List<Track>, val index: Int, val entry: String, val positionMs: Long, val playing: Boolean) : Command
@@ -64,6 +68,8 @@ sealed interface Command {
             is Jump -> { put("Kind", "jump"); put("At", c.index) }
             is Remove -> { put("Kind", "remove"); put("At", c.index) }
             is Move -> { put("Kind", "move"); put("From", c.from); put("To", c.to) }
+            ClearUpcoming -> put("Kind", "clear_upcoming")
+            RestoreUpcoming -> put("Kind", "restore_upcoming")
             // The core reads a place outside the queue as "at the end".
             is Enqueue -> { put("Kind", "enqueue"); tracks("Insert", c.tracks); put("At", c.at ?: -1) }
             is FollowRoom -> {
@@ -98,8 +104,11 @@ data class CoreSettings(
     val autoplay: Boolean = true,
     val blockedTracks: List<String> = emptyList(),
     val blockedArtists: List<String> = emptyList(),
+    val blockedAlbums: List<String> = emptyList(),
     /** "high", "standard" or "low": what to resolve at on the network the phone is on. */
     val audioQuality: String = "high",
+    /** The network costs the listener money, so the core fetches only what is about to sound. */
+    val metered: Boolean = false,
 )
 
 @Serializable
@@ -171,10 +180,11 @@ class Session(private val api: Api, private val streaming: OkHttpClient) {
             put("cacheMaxMB", s.cacheMaxMb)
             put("autoplay", s.autoplay)
             put("audioQuality", s.audioQuality)
+            put("metered", s.metered)
             putJsonObject("blocked") {
                 put("tracks", buildJsonArray { s.blockedTracks.forEach { add(JsonPrimitive(it)) } })
                 put("artists", buildJsonArray { s.blockedArtists.forEach { add(JsonPrimitive(it)) } })
-                put("albums", buildJsonArray { })
+                put("albums", buildJsonArray { s.blockedAlbums.forEach { add(JsonPrimitive(it)) } })
             }
         })
 

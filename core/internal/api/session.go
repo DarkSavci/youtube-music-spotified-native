@@ -314,10 +314,17 @@ func (s *Server) handleSessionSettings(w http.ResponseWriter, r *http.Request) {
 		// The stream quality to resolve at: "high", "standard" or "low".
 		// A phone sends the one for the network it is on; absent leaves it.
 		AudioQuality *string `json:"audioQuality"`
+		// Whether the network costs the listener money, which a phone knows
+		// and the desktop does not ask; absent leaves it.
+		Metered *bool `json:"metered"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		s.write(w, http.StatusBadRequest, apiError{Error: "invalid body"})
 		return
+	}
+	// Before the projection below, which is what asks for the queue again.
+	if body.Metered != nil {
+		s.SetMetered(*body.Metered)
 	}
 	s.deps.Session.SetSettings(body.CrossfadeMs, body.Gapless)
 

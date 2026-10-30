@@ -1,6 +1,6 @@
 package dev.darksavci.spotified.together
 
-import android.util.Log
+import dev.darksavci.spotified.data.Logs
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CoroutineScope
@@ -192,7 +192,7 @@ class Connection(private val options: Options, client: OkHttpClient) {
                 Over.Done -> return
                 is Over.Dropped -> {
                     if (seat.credential == null || seat.attempts >= MOST_ATTEMPTS) {
-                        Log.w(TAG, "listen together: ${over.why}")
+                        Logs.w(TAG, "listen together: ${over.why}")
                         deliver(Event.Failed("Disconnected from the room. Check the server and join again."))
                         return
                     }
@@ -224,7 +224,7 @@ class Connection(private val options: Options, client: OkHttpClient) {
         var current: String? = null
         val seek = HeldSeek()
         fun send(message: JsonObject) {
-            if (!socket.send(message.toString())) Log.d(TAG, "listen together: not sent")
+            if (!socket.send(message.toString())) Logs.d(TAG, "listen together: not sent")
         }
         fun done(over: Over): Pair<Over, Seat> = over to seat
 
@@ -238,14 +238,14 @@ class Connection(private val options: Options, client: OkHttpClient) {
                 Heard.Open -> open = true
                 is Heard.Closed -> {
                     if (open || seat.credential != null) return done(Over.Dropped(wake.why))
-                    Log.w(TAG, "listen together: ${wake.why}")
+                    Logs.w(TAG, "listen together: ${wake.why}")
                     deliver(Event.Failed("Could not connect. Check the address, network, and server’s allowed origins."))
                     return done(Over.Done)
                 }
                 is Heard.Text -> {
                     val message = Incoming.read(wake.text)
                     if (message == null) {
-                        Log.w(TAG, "listen together: a message could not be read")
+                        Logs.w(TAG, "listen together: a message could not be read")
                         continue
                     }
                     when (message) {
@@ -293,7 +293,7 @@ class Connection(private val options: Options, client: OkHttpClient) {
                             return done(Over.Done)
                         }
                         Incoming.Ack -> {}
-                        Incoming.Unknown -> Log.d(TAG, "listen together: a message of a kind not known")
+                        Incoming.Unknown -> Logs.d(TAG, "listen together: a message of a kind not known")
                     }
                 }
                 is Ask.Command -> {
@@ -319,7 +319,7 @@ class Connection(private val options: Options, client: OkHttpClient) {
             // a room would leave the app "connecting" for ever.
             val asked = askedAt
             if (!joined && !waiting && asked != null && now - asked > ENTER_WITHIN_MS) {
-                Log.w(TAG, "listen together: the server did not answer the request for a room")
+                Logs.w(TAG, "listen together: the server did not answer the request for a room")
                 deliver(Event.Failed("The server did not answer. Try again, or check that it is up to date."))
                 socket.close(1000, null)
                 return done(Over.Done)
@@ -377,7 +377,7 @@ class Connection(private val options: Options, client: OkHttpClient) {
                 null -> Result.failure(IllegalStateException("No v2 handshake. Check the address and the relay version."))
                 is Heard.Text -> greeting(first.text)
                 else -> {
-                    Log.d(TAG, "listen together: the test could not connect: $first")
+                    Logs.d(TAG, "listen together: the test could not connect: $first")
                     Result.failure(IllegalStateException("Could not connect. Check the address, network and allowed origins."))
                 }
             }

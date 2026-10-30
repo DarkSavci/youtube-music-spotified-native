@@ -119,6 +119,7 @@ func okBody(v any) (produced, error) { return produced{status: http.StatusOK, va
 // produce when it must. Without a cache it is exactly produce-then-write.
 func (s *Server) serveKept(w http.ResponseWriter, r *http.Request, key string, p respcache.Policy,
 	produce func(ctx context.Context) (produced, error)) {
+	s.readFresh(r, key)
 	if s.deps.Responses == nil {
 		out, err := produce(r.Context())
 		if err != nil {
@@ -144,6 +145,14 @@ func (s *Server) serveKept(w http.ResponseWriter, r *http.Request, key string, p
 		return
 	}
 	writeKept(w, e, res)
+}
+
+// readFresh makes the kept answers under prefix out of date when the client
+// says it wants a new one, as a pull to refresh does. They still cover a failure.
+func (s *Server) readFresh(r *http.Request, prefix string) {
+	if s.deps.Responses != nil && r.Header.Get("Cache-Control") == "no-cache" {
+		s.deps.Responses.Expire(r.Context(), prefix)
+	}
 }
 
 // writeKept writes a kept answer as the route first wrote it, and says where

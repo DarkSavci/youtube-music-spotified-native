@@ -71,6 +71,12 @@ pub struct Target {
     #[serde(rename = "VideoID")]
     pub video_id: String,
     pub start_at_ms: u64,
+    /// Changes each time the core moves the position on purpose; 0 from a
+    /// core that does not send it.
+    pub seek_seq: u64,
+    /// Where the move `seek_seq` last counted went; absent from a core that
+    /// does not send it.
+    pub seek_to_ms: Option<u64>,
     pub playing: bool,
     #[serde(rename = "PreloadVideoID")]
     pub preload_video_id: String,
@@ -86,6 +92,14 @@ pub struct Transition {
     pub kind: String,
     /// The crossfade's length.
     pub ms: u64,
+}
+
+impl Target {
+    /// Where a seek goes: where the core said, or its one position from a core
+    /// that does not say.
+    pub fn seek_position_ms(&self) -> u64 {
+        self.seek_to_ms.unwrap_or(self.start_at_ms)
+    }
 }
 
 impl Transition {

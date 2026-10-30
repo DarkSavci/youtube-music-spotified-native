@@ -56,6 +56,20 @@ type Core struct {
 	// tracks changes a list playback ignores.
 	unshuffled []domain.Track
 
+	// seekSeq counts the times the position was moved on purpose, and seekToMs
+	// is where the latest of them moved it to; see Target.SeekSeq.
+	seekSeq  uint64
+	seekToMs int64
+
+	// What clearUpcoming last removed, for restoreUpcoming: the tracks, the
+	// shuffle's underlying order as it was, and how long that order was left.
+	cleared      []domain.Track
+	clearedOrder []domain.Track
+	clearedLeft  int
+	// holdAutoplay is set by a clear: the listener has said what is next is
+	// nothing, and autoplay leaves it so until the queue is about to run out.
+	holdAutoplay bool
+
 	// Progress accounting for the current track.
 	playedMs          int64
 	lastPositionMs    int64
@@ -129,12 +143,14 @@ func (c *Core) SetCapabilities(caps Capabilities) {
 func (c *Core) Target() Target {
 	cur := c.state.Queue.Current()
 	if cur == nil {
-		return Target{Epoch: c.state.Epoch, Volume: c.state.Volume}
+		return Target{Epoch: c.state.Epoch, SeekSeq: c.seekSeq, SeekToMs: c.seekToMs, Volume: c.state.Volume}
 	}
 	t := Target{
 		Epoch:      c.state.Epoch,
 		VideoID:    cur.ID,
 		StartAtMs:  c.state.PositionMs,
+		SeekSeq:    c.seekSeq,
+		SeekToMs:   c.seekToMs,
 		Playing:    c.playIntent(),
 		Volume:     c.state.Volume,
 		Transition: c.transition(),
@@ -220,6 +236,7 @@ func (c *Core) Apply(cmd Command) (Reject, []LogEntry) {
 				c.playedMs = 0
 				c.lastPositionMs = c.state.PositionMs
 				c.loggedCurrent = false
+				c.movePosition(c.state.PositionMs)
 			}
 			// A room that never had a track leaves nothing to resume.
 			c.state.State = domain.StatePaused
@@ -258,6 +275,10 @@ func (c *Core) Apply(cmd Command) (Reject, []LogEntry) {
 		return c.remove(cmd.At)
 	case CmdMove:
 		return c.move(cmd.From, cmd.To)
+	case CmdClearUpcoming:
+		return c.clearUpcoming()
+	case CmdRestoreUpcoming:
+		return c.restoreUpcoming()
 	case CmdJump:
 		return c.jump(cmd.At)
 	case CmdTransfer:
@@ -265,6 +286,8 @@ func (c *Core) Apply(cmd Command) (Reject, []LogEntry) {
 		// A new owner resolves its own stream, so the epoch advances and any
 		// report still in flight from the previous owner is discarded.
 		c.state.Epoch++
+		// It picks up where the session stands, wherever its deck has got to.
+		c.movePosition(c.state.PositionMs)
 		c.bump()
 		return RejectNone, nil
 	default:
@@ -288,6 +311,7 @@ func (c *Core) play(cmd Command) (Reject, []LogEntry) {
 	logs := c.closeOutCurrent(false)
 
 	c.state.Queue = domain.Queue{Items: cmd.Tracks, Index: idx, Origin: cmd.Origin}
+	c.forgetCleared()
 	c.state.Degraded = nil
 	c.consecutiveFaults = 0
 	c.unshuffled = nil
@@ -346,6 +370,7 @@ func (c *Core) skip(delta int, byUser bool) (Reject, []LogEntry) {
 		// than wrapping, and hold the last track so the bar still shows it.
 		c.state.State = domain.StatePaused
 		c.state.PositionMs = 0
+		c.movePosition(0)
 		c.bump()
 		return RejectNone, logs
 	}
@@ -381,6 +406,7 @@ func (c *Core) seek(ms int64) (Reject, []LogEntry) {
 	c.state.PositionMs = ms
 	c.state.PositionAt = c.clk.Now()
 	c.lastPositionMs = ms
+	c.movePosition(ms)
 	c.bump()
 	return RejectNone, nil
 }
@@ -421,14 +447,84 @@ func (c *Core) enqueue(cmd Command) (Reject, []LogEntry) {
 	if c.unshuffled != nil {
 		c.unshuffled = append(c.unshuffled, cmd.Insert...)
 	}
+	if cmd.FromAutoplay {
+		c.holdAutoplay = false
+	}
 	c.bump()
 	return RejectNone, nil
+}
+
+// clearUpcoming removes everything after the current entry at once, so that
+// nothing moving on meanwhile can make it hit the wrong entry. It stays in hand
+// for restoreUpcoming until the queue is replaced.
+func (c *Core) clearUpcoming() (Reject, []LogEntry) {
+	items := c.state.Queue.Items
+	keep := c.state.Queue.Index + 1
+	if keep >= len(items) {
+		return RejectNone, nil
+	}
+	c.holdAutoplay = true
+	c.cleared = append([]domain.Track(nil), items[keep:]...)
+	c.clearedOrder = c.unshuffled
+	c.state.Queue.Items = items[:keep:keep]
+	if c.unshuffled != nil {
+		rest := append([]domain.Track(nil), c.unshuffled...)
+		for _, gone := range c.cleared {
+			for i, t := range rest {
+				if t.ID == gone.ID {
+					rest = append(rest[:i], rest[i+1:]...)
+					break
+				}
+			}
+		}
+		c.unshuffled = rest
+		c.clearedLeft = len(rest)
+	}
+	c.bump()
+	return RejectNone, nil
+}
+
+// restoreUpcoming puts what clearUpcoming removed back after the current entry.
+// The tracks are the core's own, so an undo of a clear that never happened adds
+// nothing, and one undone twice adds them once.
+func (c *Core) restoreUpcoming() (Reject, []LogEntry) {
+	if len(c.cleared) == 0 {
+		return RejectNone, nil
+	}
+	at := min(c.state.Queue.Index+1, len(c.state.Queue.Items))
+	items := c.state.Queue.Items
+	next := make([]domain.Track, 0, len(items)+len(c.cleared))
+	next = append(next, items[:at]...)
+	next = append(next, c.cleared...)
+	next = append(next, items[at:]...)
+	c.state.Queue.Items = next
+	if c.unshuffled != nil {
+		// The order from before, unless the queue changed since; then they
+		// join the end, as anything queued does.
+		if len(c.unshuffled) == c.clearedLeft {
+			c.unshuffled = c.clearedOrder
+		} else {
+			c.unshuffled = append(c.unshuffled, c.cleared...)
+		}
+	}
+	c.forgetCleared()
+	c.bump()
+	return RejectNone, nil
+}
+
+func (c *Core) forgetCleared() {
+	c.cleared, c.clearedOrder, c.clearedLeft = nil, nil, 0
+	c.holdAutoplay = false
 }
 
 func (c *Core) remove(at int) (Reject, []LogEntry) {
 	items := c.state.Queue.Items
 	if at < 0 || at >= len(items) {
 		return RejectOutOfRange, nil
+	}
+	var logs []LogEntry
+	if at == c.state.Queue.Index {
+		logs = c.closeOutCurrent(false)
 	}
 	removed := items[at].ID
 	c.state.Queue.Items = append(items[:at:at], items[at+1:]...)
@@ -443,8 +539,9 @@ func (c *Core) remove(at int) (Reject, []LogEntry) {
 	case at < c.state.Queue.Index:
 		c.state.Queue.Index--
 	case at == c.state.Queue.Index:
-		// Removing what is playing: hold the position so the next track slides
-		// into it, and clamp when the tail was removed.
+		// Removing what is playing: the next track slides into its place and
+		// starts from its own beginning, and the place is clamped when the tail
+		// was removed.
 		c.userChange = true
 		if c.state.Queue.Index >= len(c.state.Queue.Items) {
 			c.state.Queue.Index = len(c.state.Queue.Items) - 1
@@ -452,6 +549,13 @@ func (c *Core) remove(at int) (Reject, []LogEntry) {
 		if c.state.Queue.Index < 0 {
 			c.state.Queue.Index = 0
 			c.state.State = domain.StateIdle
+			c.state.PositionMs = 0
+			c.state.PositionAt = c.clk.Now()
+			c.lastPositionMs = 0
+			c.playedMs = 0
+			c.state.Epoch++
+			c.bump()
+			return RejectNone, logs
 		}
 		// What slides into its place may be blocked: the first after it
 		// that is not takes the place instead.
@@ -461,7 +565,12 @@ func (c *Core) remove(at int) (Reject, []LogEntry) {
 				break
 			}
 		}
-		c.excuseCurrent()
+		paused := c.state.State == domain.StatePaused
+		c.startTrack(c.state.Queue.Index, 0)
+		if paused {
+			c.state.State = domain.StatePaused
+		}
+		return RejectNone, logs
 	}
 	c.bump()
 	return RejectNone, nil
@@ -797,6 +906,12 @@ func (c *Core) handleFailure(reason string) []LogEntry {
 
 // ---------- internals ----------
 
+// movePosition says the position was moved on purpose, to ms.
+func (c *Core) movePosition(ms int64) {
+	c.seekSeq++
+	c.seekToMs = ms
+}
+
 // startTrack makes index current and begins playback from ms.
 //
 // Every track change advances the Epoch, which is what invalidates reports
@@ -808,6 +923,7 @@ func (c *Core) startTrack(index int, ms int64) {
 	c.state.PositionAt = c.clk.Now()
 	c.state.State = domain.StatePlaying
 	c.state.Epoch++
+	c.movePosition(ms)
 	c.playedMs = 0
 	c.lastPositionMs = ms
 	c.loggedCurrent = false
@@ -1037,6 +1153,7 @@ func (c *Core) followRoom(cmd Command) (Reject, []LogEntry) {
 		c.beforeRoomUnshuffled = append([]domain.Track(nil), c.unshuffled...)
 	}
 	c.following = true
+	c.forgetCleared()
 	if len(cmd.Tracks) == 0 {
 		// Already following an empty room: nothing to stop or restart, so
 		// no new epoch or projection either.

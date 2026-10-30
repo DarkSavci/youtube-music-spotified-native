@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"spotifier/internal/domain"
@@ -515,8 +516,21 @@ func (s *Server) fetchUpstream(ctx context.Context, url, rng string) (*http.Resp
 	if err == nil {
 		// Any answer at all means the connection works.
 		s.net.AnsweredSince(sent)
+		resp.Body = countedBody{resp.Body, &s.upstreamBytes}
 	}
 	return resp, err
+}
+
+// countedBody adds what is read from a response to a running total.
+type countedBody struct {
+	io.ReadCloser
+	total *atomic.Int64
+}
+
+func (b countedBody) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	b.total.Add(int64(n))
+	return n, err
 }
 
 // errRefused is a track upstream will not serve, even freshly resolved.
@@ -746,7 +760,9 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.WriteHeader(resp.StatusCode)
 
-	if n, err := io.Copy(w, stallGuard(resp.Body, cancel)); err != nil {
+	n, err := io.Copy(w, stallGuard(resp.Body, cancel))
+	s.deps.Log.Info("audio relayed", "video", videoID, "bytes", n, "upstreamTotal", s.upstreamBytes.Load())
+	if err != nil {
 		// A client seeking away mid-transfer aborts the copy. That is normal
 		// and not worth reporting as an error; upstream breaking off or
 		// stalling while the player still listens is, since the player sees

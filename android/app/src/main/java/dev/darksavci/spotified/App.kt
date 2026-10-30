@@ -7,7 +7,9 @@ import dev.darksavci.spotified.api.Session
 import dev.darksavci.spotified.core.Core
 import dev.darksavci.spotified.data.Crashes
 import dev.darksavci.spotified.data.Downloads
+import dev.darksavci.spotified.data.Logs
 import dev.darksavci.spotified.data.ReleasesWorker
+import dev.darksavci.spotified.data.learnBlockedAlbums
 import dev.darksavci.spotified.data.Liked
 import dev.darksavci.spotified.data.SettingsStore
 import dev.darksavci.spotified.data.meteredNetwork
@@ -55,11 +57,17 @@ class Graph(context: Context) {
     val api = Api(http, origin)
     val session = Session(api, Session.streamingClient(http))
     val playback = Playback(scope, session, settings, origin, meteredNetwork(context))
-    val liked = Liked(api, scope)
+    val liked = Liked(
+        fetch = { api.liked().tracks.map { it.id } },
+        write = { id, on -> api.setLiked(id, on) },
+        account = { core.accounts.current },
+        scope = scope,
+    )
     val sleep = SleepTimer(scope, playback)
-    val downloads = Downloads(context, api, scope)
+    val downloads = Downloads(context, api, scope, settings, meteredNetwork(context))
     val together = Together(scope, playback, settings, api, http).also { t ->
         playback.room = { command -> t.state.value.inRoom.also { if (it) t.press(command) } }
+        playback.rejoin = t::resync
     }
 }
 
@@ -69,6 +77,7 @@ class App : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        Logs.install(this)
         Crashes.install(this)
         graph = Graph(this)
         // The core starts at once, beside the first frame, and the session
@@ -80,6 +89,8 @@ class App : Application() {
             ReleasesWorker.schedule(this@App)
             if (graph.downloads.syncedPlaylists.isNotEmpty()) Downloads.schedule(this@App, graph.settings.current().downloadOnWifiOnly)
             graph.liked.refresh()
+            // An album blocked while offline has its songs read now.
+            graph.settings.learnBlockedAlbums(graph.api)
         }
     }
 }

@@ -169,6 +169,123 @@ func TestLeavingTheQueueStopsTheDownload(t *testing.T) {
 	}
 }
 
+// The queue moving on leaves a download alone, whether the transfer began as a
+// download or as the queue's and was then kept.
+func TestAQueueChangeLeavesADownloadRunning(t *testing.T) {
+	cases := []struct {
+		name  string
+		start func(t *testing.T, s *Server, id string)
+	}{
+		{"asked for as a download", func(t *testing.T, s *Server, id string) {
+			if w := downloadRoute(s, http.MethodPost, id); w.Code != http.StatusNoContent {
+				t.Fatalf("keep answered %d", w.Code)
+			}
+		}},
+		{"kept while the queue was fetching it", func(t *testing.T, s *Server, id string) {
+			s.PrefetchQueue([]string{id})
+			waitWriting(t, s, id, true)
+			if w := downloadRoute(s, http.MethodPost, id); w.Code != http.StatusNoContent {
+				t.Fatalf("keep answered %d", w.Code)
+			}
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// The first response hangs until the stall guard gives it up, so the
+			// transfer is under way when the queue changes, and then must resume.
+			old := stallTimeout
+			stallTimeout = 300 * time.Millisecond
+			defer func() { stallTimeout = old }()
+
+			u := &wholeUpstream{data: audioFile(3 * streamWindow), stallAfter: 1024}
+			s, cache := newWholeServer(t, u, &switchable{})
+			const id = "keptsong001"
+			tc.start(t, s, id)
+			waitWriting(t, s, id, true)
+
+			s.PrefetchQueue([]string{"otherqueue1"})
+			waitComplete(t, cache, id)
+		})
+	}
+}
+
+// A download that gave way to a listener's own resolution is taken up again,
+// though the queue no longer holds it.
+func TestADownloadThatGaveWayIsRetried(t *testing.T) {
+	u := &wholeUpstream{data: audioFile(streamWindow)}
+	s, cache := newWholeServer(t, u, &switchable{})
+	const id = "keptsong002"
+	if err := cache.Keep(id, true); err != nil {
+		t.Fatal(err)
+	}
+	s.retryIfStillQueued(id, true, true)
+	waitComplete(t, cache, id)
+}
+
+// Letting a download go ends its transfer, and what arrived stays in the cache.
+func TestLettingADownloadGoStopsIt(t *testing.T) {
+	u := &wholeUpstream{data: audioFile(4 * streamWindow), stallAfter: 1024}
+	s, cache := newWholeServer(t, u, &switchable{})
+	const id = "keptsong003"
+	if w := downloadRoute(s, http.MethodPost, id); w.Code != http.StatusNoContent {
+		t.Fatalf("keep answered %d", w.Code)
+	}
+	waitWriting(t, s, id, true)
+	if w := downloadRoute(s, http.MethodDelete, id); w.Code != http.StatusNoContent {
+		t.Fatalf("let go answered %d", w.Code)
+	}
+	waitWriting(t, s, id, false)
+	if m, ok := cache.Get(id); !ok || m.Have == 0 {
+		t.Fatalf("what had arrived is gone: %+v, %v", m, ok)
+	}
+}
+
+// One the queue also wants goes on, as it would have without the download.
+func TestLettingGoOfADownloadTheQueueWantsLeavesItRunning(t *testing.T) {
+	u := &wholeUpstream{data: audioFile(2 * streamWindow)}
+	s, cache := newWholeServer(t, u, &switchable{})
+	const id = "keptsong004"
+	s.PrefetchQueue([]string{id})
+	if w := downloadRoute(s, http.MethodPost, id); w.Code != http.StatusNoContent {
+		t.Fatalf("keep answered %d", w.Code)
+	}
+	if w := downloadRoute(s, http.MethodDelete, id); w.Code != http.StatusNoContent {
+		t.Fatalf("let go answered %d", w.Code)
+	}
+	waitComplete(t, cache, id)
+}
+
+// Retry is the listener asking again: a failed attempt's hold does not apply.
+func TestAskingForADownloadAgainForgetsTheFailedAttempt(t *testing.T) {
+	u := &wholeUpstream{data: audioFile(streamWindow)}
+	s, cache := newWholeServer(t, u, &switchable{})
+	const id = "keptsong005"
+	if !s.prefetch.claim(id + ":whole") {
+		t.Fatal("no claim to begin with")
+	}
+	if w := downloadRoute(s, http.MethodPost, id); w.Code != http.StatusNoContent {
+		t.Fatalf("keep answered %d", w.Code)
+	}
+	waitComplete(t, cache, id)
+}
+
+func downloadRoute(s *Server, method, id string) *httptest.ResponseRecorder {
+	rec := httptest.NewRecorder()
+	s.mux.ServeHTTP(rec, httptest.NewRequest(method, "/v1/downloads/"+id, nil))
+	return rec
+}
+
+func waitWriting(t *testing.T, s *Server, id string, want bool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for s.deps.Audio.Writing(id) != want {
+		if time.Now().After(deadline) {
+			t.Fatalf("%s writing is not %v", id, want)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 // memURLs is a URLStore in memory.
 type memURLs struct {
 	mu sync.Mutex
