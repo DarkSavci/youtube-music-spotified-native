@@ -1,5 +1,8 @@
-//! A notification from Windows itself, for the one thing worth saying
+//! A notification from the system itself, for the one thing worth saying
 //! while the window may be out of sight: an update has been downloaded.
+//!
+//! A Mac has none here: Apple's notifications may not serve an app that is
+//! not signed by a developer, and the toast inside the window says the same.
 //!
 //! Windows files a notification under the application id the process
 //! claimed ([`super::identity`]) and shows it only for an app with a Start
@@ -17,11 +20,26 @@ pub fn update_ready(version: &str, on_click: impl Fn() + Send + 'static) {
         // No shortcut with the app's id, or notifications switched off.
         log::debug!("no notification was shown: {error}");
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    {
+        // Waits on the notification, for its click.
+        let spawned = std::thread::Builder::new()
+            .name("notify".into())
+            .spawn(move || {
+                if let Err(error) = super::linux::notify(&title, body, on_click) {
+                    log::debug!("no notification was shown: {error}");
+                }
+            });
+        if let Err(error) = spawned {
+            log::debug!("no notification was shown: {error}");
+        }
+    }
+    #[cfg(target_os = "macos")]
     let _ = (title, body, on_click);
 }
 
 /// The notification as Windows reads it: two lines of text.
+#[cfg(windows)]
 fn markup(title: &str, body: &str) -> String {
     format!(
         "<toast><visual><binding template=\"ToastGeneric\">\
@@ -32,6 +50,7 @@ fn markup(title: &str, body: &str) -> String {
 }
 
 /// Text as it may stand inside a tag.
+#[cfg(windows)]
 fn escaped(text: &str) -> String {
     text.replace('&', "&amp;")
         .replace('<', "&lt;")
@@ -72,7 +91,7 @@ mod win {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, windows))]
 mod tests {
     use super::*;
 

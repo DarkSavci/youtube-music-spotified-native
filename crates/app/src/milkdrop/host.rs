@@ -119,7 +119,6 @@ impl Drop for Host {
     }
 }
 
-#[cfg(windows)]
 fn start(scratch: &Path, presets: &Path) -> Result<Running, String> {
     let library = super::library().ok_or_else(|| {
         format!(
@@ -160,9 +159,4 @@ fn start(scratch: &Path, presets: &Path) -> Result<Running, String> {
         file,
         fed: Weak::new(),
     })
-}
-
-#[cfg(not(windows))]
-fn start(_scratch: &Path, _presets: &Path) -> Result<Running, String> {
-    Err("MilkDrop is only built for Windows.".into())
 }

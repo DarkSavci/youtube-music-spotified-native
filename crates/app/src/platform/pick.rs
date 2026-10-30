@@ -12,7 +12,11 @@ pub fn skins() -> Vec<PathBuf> {
     }
     #[cfg(not(windows))]
     {
-        Vec::new()
+        rfd::FileDialog::new()
+            .set_title("Add a skin")
+            .add_filter("Winamp skins", &["wsz", "wal", "zip"])
+            .pick_files()
+            .unwrap_or_default()
     }
 }
 

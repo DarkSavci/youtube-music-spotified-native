@@ -404,6 +404,7 @@ mod tests {
 
     /// What the song in the report was called, and a word in each of the
     /// scripts Inter cannot write, beside the font that should write it.
+    #[cfg(windows)]
     const WRITTEN: [(&str, &str); 8] = [
         ("YuGothR.ttc", "MOTIVE - 10 MG ︻デ═一"),
         ("YuGothR.ttc", "日本語"),

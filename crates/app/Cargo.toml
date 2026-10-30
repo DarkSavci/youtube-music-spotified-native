@@ -27,8 +27,9 @@ flate2 = "1"
 ureq = { version = "3", default-features = false, features = ["native-tls"] }
 spotified-client = { path = "../client" }
 spotified-audio = { path = "../audio" }
-# Media keys and the system's now-playing card.
-souvlaki = "0.8"
+# Media keys and the system's now-playing card. On Linux that is MPRIS, over
+# a D-Bus written in Rust rather than libdbus.
+souvlaki = { version = "0.8", default-features = false, features = ["use_zbus"] }
 # The window's native handle, which the media controls attach to.
 raw-window-handle = "0.6"
 # The notification-area icon and its menu.
@@ -40,6 +41,8 @@ tungstenite = { version = "0.30", default-features = false, features = ["handsha
 # Maps the file MilkDrop's process is given the sound through. The font
 # loader already builds it.
 memmap2 = "0.9"
+# Finds libprojectM's functions when MilkDrop's window is first opened.
+libloading = "0.8"
 # Backend-to-UI events. The standard channel has no select, which the worker
 # pools need.
 crossbeam-channel = "0.5"
@@ -76,6 +79,45 @@ version = "0.5"
 default-features = false
 features = ["wgl", "egl"]
 
+[target.'cfg(target_os = "macos")'.dependencies]
+# The system's dialog for choosing files.
+rfd = { version = "0.17", default-features = false }
+# Where the screens are, for the flyout. These are the versions the tray
+# already builds.
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "objc2-core-foundation", "NSArray", "NSGeometry"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "objc2-core-foundation", "NSScreen", "NSGraphics"] }
+
+[target.'cfg(target_os = "macos")'.dependencies.winit]
+version = "0.30"
+default-features = false
+
+[target.'cfg(target_os = "macos")'.dependencies.glutin]
+version = "0.32"
+default-features = false
+
+[target.'cfg(target_os = "macos")'.dependencies.glutin-winit]
+version = "0.5"
+default-features = false
+
+# X11 is asked for by name (src/main.rs), as Wayland can neither hide a window
+# nor place one; Wayland is what a desktop without XWayland gets. The tray is
+# a StatusNotifierItem over D-Bus, not GTK. OpenSSL is built in, as
+# distributions disagree on libssl's version.
+[target.'cfg(target_os = "linux")'.dependencies]
+eframe = { version = "0.36", default-features = false, features = ["x11", "wayland"] }
+winit = { version = "0.30", default-features = false, features = ["x11", "wayland", "wayland-dlopen", "rwh_06"] }
+glutin = { version = "0.32", default-features = false, features = ["glx", "egl", "x11", "wayland"] }
+glutin-winit = { version = "0.5", default-features = false, features = ["glx", "egl", "x11", "wayland"] }
+tray-icon = { version = "0.26", default-features = false, features = ["ksni"] }
+native-tls = { version = "0.2", features = ["vendored"] }
+# Whether there is a tray, the file manager, and notifications.
+zbus = { version = "5", default-features = false, features = ["blocking-api", "async-io"] }
+# Cuts a skin's window to its shape.
+x11rb = { version = "0.13", features = ["shape"] }
+# The system's dialog for choosing files, by way of the desktop portal.
+rfd = { version = "0.17", default-features = false, features = ["xdg-portal"] }
+
 # What Windows offers only through its own interfaces: the buttons on the
 # taskbar thumbnail, where the taskbar is, the corners of a window with no
 # frame, and its fonts mapped into memory instead of read into it. The audio output already brings the crate in; these are more of
@@ -104,6 +146,11 @@ windows = { version = "0.62", features = [
     "Win32_UI_Shell_Common",
     "Win32_UI_WindowsAndMessaging",
 ] }
+
+# Decodes a music video's pictures where the system's own decoder is not
+# Windows'. Built from Cisco's source.
+[target.'cfg(not(windows))'.dependencies]
+openh264 = "0.9"
 
 [dev-dependencies]
 # Drives the views without a window: finds controls by their accessible

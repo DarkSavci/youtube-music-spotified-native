@@ -8,8 +8,12 @@
 pub fn country() -> Option<String> {
     #[cfg(windows)]
     let locale = win::locale();
-    #[cfg(not(windows))]
-    let locale = std::env::var("LANG").ok();
+    #[cfg(target_os = "macos")]
+    let locale = mac_locale();
+    #[cfg(target_os = "linux")]
+    let locale = ["LC_ALL", "LC_MESSAGES", "LANG"]
+        .iter()
+        .find_map(|name| std::env::var(name).ok().filter(|value| !value.is_empty()));
     locale.as_deref().and_then(country_of)
 }
 
@@ -21,6 +25,19 @@ fn country_of(locale: &str) -> Option<String> {
         .skip(1)
         .find(|part| part.len() == 2 && part.chars().all(|c| c.is_ascii_alphabetic()))
         .map(str::to_ascii_uppercase)
+}
+
+/// A Mac's region, which an app opened from the Finder has no `LANG` for.
+#[cfg(target_os = "macos")]
+fn mac_locale() -> Option<String> {
+    let output = std::process::Command::new("defaults")
+        .args(["read", "-g", "AppleLocale"])
+        .output()
+        .ok()?;
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).trim().to_owned())
 }
 
 #[cfg(windows)]

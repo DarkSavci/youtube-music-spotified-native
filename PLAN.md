@@ -32,8 +32,7 @@ Non-goals for the first pass:
 - Playback speed. The Electron app leans on the browser's pitch-preserving
   stretch; a native one is its own piece of DSP. Revisit after parity.
 - Transfer between devices. One window owns playback.
-- macOS and Linux. Platform code lives under `platform/` behind `cfg`, so
-  they can follow; Windows is what gets built and tested.
+- macOS and Linux, at first. They have since followed: `docs/desktop-ports.md`.
 - i18n and a light theme. Colours come from one palette struct, so a light
   theme is a second palette later.
 

@@ -7,9 +7,7 @@
 use std::ffi::{c_char, c_void};
 use std::path::Path;
 
-use windows::Win32::Foundation::HMODULE;
-use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
-use windows::core::{HSTRING, PCSTR};
+use libloading::Library;
 
 /// One running projectM, as the library hands it out.
 pub type Handle = *mut c_void;
@@ -32,23 +30,19 @@ macro_rules! api {
 
         impl Api {
             /// Looks every function up; `None` names the first not found.
-            fn load(module: HMODULE) -> Result<Self, &'static str> {
+            fn load(library: &Library) -> Result<Self, &'static str> {
                 Ok(Self {
                     $($name: {
                         let name = concat!(stringify!($name), "\0");
-                        // SAFETY: the module is loaded and the name is a
-                        // terminated string.
-                        let found = unsafe { GetProcAddress(module, PCSTR(name.as_ptr())) };
-                        let found = found.ok_or(stringify!($name))?;
                         // SAFETY: the library documents this function with
-                        // exactly this signature, and on 64-bit Windows
-                        // there is one calling convention.
-                        unsafe {
-                            std::mem::transmute::<
-                                unsafe extern "system" fn() -> isize,
-                                unsafe extern "C" fn($($arg),*) $(-> $ret)?,
-                            >(found)
-                        }
+                        // exactly this signature, and it is never unloaded,
+                        // so the pointer taken out of the symbol stays good.
+                        let found = unsafe {
+                            library.get::<unsafe extern "C" fn($($arg),*) $(-> $ret)?>(
+                                name.as_bytes(),
+                            )
+                        };
+                        *found.map_err(|_| stringify!($name))?
                     },)*
                 })
             }
@@ -77,11 +71,12 @@ api! {
 
 /// Loads the library from `file` and finds its functions.
 pub fn load(file: &Path) -> Result<Api, String> {
-    let name = HSTRING::from(file.as_os_str());
-    // SAFETY: the name is a terminated string that outlives the call. The
-    // library's own start-up code runs here; it is the app's own build of
-    // libprojectM, from beside the program.
-    let module = unsafe { LoadLibraryW(&name) }
+    // SAFETY: the library's own start-up code runs here; it is the app's own
+    // build of libprojectM, from beside the program.
+    let library = unsafe { Library::new(file) }
         .map_err(|error| format!("{} could not be loaded: {error}", file.display()))?;
-    Api::load(module).map_err(|missing| format!("{} has no {missing}", file.display()))
+    let api = Api::load(&library).map_err(|missing| format!("{} has no {missing}", file.display()));
+    // Never unloaded, for the functions just found in it.
+    std::mem::forget(library);
+    api
 }

@@ -11,7 +11,12 @@
 //! The menu on the tray icon is drawn by Windows, light unless told
 //! otherwise. It is told to follow the app's theme.
 
+/// The name of the icon a Linux desktop entry and its notifications use.
+#[cfg(target_os = "linux")]
+pub const DESKTOP_ICON: &str = "dev.darksavci.spotified.native";
+
 /// The application id. The installer stamps the same one on its shortcuts.
+#[cfg(windows)]
 pub const APP_ID: &str = "dev.darksavci.youtubemusicspotified.native";
 
 /// Tells Windows the app's id. Once, before any window is made.
@@ -90,7 +95,7 @@ mod win {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, windows))]
 mod tests {
     use super::*;
 

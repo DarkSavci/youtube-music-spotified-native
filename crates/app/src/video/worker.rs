@@ -126,18 +126,22 @@ impl From<Failure> for Fault {
 /// Runs until told to stop or until the picture cannot be had. `address`
 /// is the core's address for the video's stream; `wake` redraws the window.
 pub fn run(shared: &Arc<Shared>, address: &str, wake: &(dyn Fn() + Send + Sync)) {
+    let smaller = format!("{address}?codec=h264&height={SOFTWARE_HEIGHT}");
     let outcome = Runtime::start()
         .map_err(Fault::Decode)
-        .and_then(
-            |_runtime| match play(shared, &format!("{address}?codec=h264"), true, wake) {
+        .and_then(|_runtime| {
+            // Only Windows' decoder is on the graphics card.
+            if !cfg!(windows) {
+                return play(shared, &smaller, false, wake);
+            }
+            match play(shared, &format!("{address}?codec=h264"), true, wake) {
                 Err(Fault::Decode(reason)) => {
                     log::warn!("video: {reason}; decoding in software instead");
-                    let smaller = format!("{address}?codec=h264&height={SOFTWARE_HEIGHT}");
                     play(shared, &smaller, false, wake)
                 }
                 other => other,
-            },
-        );
+            }
+        });
     if let Err(Fault::Fetch(reason) | Fault::Decode(reason)) = outcome {
         log::warn!("video: {reason}");
         let mut inner = shared.lock();

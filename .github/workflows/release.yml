@@ -1,11 +1,12 @@
 name: Release
 
-# Pushing a tag like v0.5.0 builds that version for Windows and Android and
-# publishes them as one release: the installer, the portable zip, the
-# phone's signed APKs, and the checksums both apps' updaters check a
-# download against. A version with a suffix (v0.5.0-beta.2) is a
-# pre-release, which neither updater offers. Run by hand, it builds both
-# and keeps the files as artifacts, publishing nothing.
+# Pushing a tag like v0.5.0 builds that version for Windows, macOS, Linux and
+# Android and publishes them as one release: the installer and the portable
+# zip, the Mac's disk image and its archive, the AppImage and its archive, the
+# phone's signed APKs, and the checksums every updater checks a download
+# against. A version with a suffix (v0.5.0-beta.2) is a pre-release, which no
+# updater offers. Run by hand, it builds them all and keeps the files as
+# artifacts, publishing nothing.
 on:
   push:
     tags: ['v*']
@@ -54,6 +55,74 @@ jobs:
           path: |
             dist/*-setup.exe
             dist/*-windows-x64.zip
+          if-no-files-found: error
+
+  linux:
+    # The oldest supported Ubuntu: what is built here runs on anything with
+    # this glibc or newer.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: core/go.mod
+          cache-dependency-path: core/go.sum
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libgl1-mesa-dev libegl1-mesa-dev \
+            libx11-dev libxkbcommon-dev libwayland-dev nasm ninja-build
+
+      - name: Test
+        run: cargo test --workspace
+
+      - name: Package
+        run: sh scripts/package-linux.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: |
+            dist/*.AppImage
+            dist/*-linux-*.tar.gz
+          if-no-files-found: error
+
+  macos:
+    # Apple Silicon.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: core/go.mod
+          cache-dependency-path: core/go.sum
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Tools
+        run: brew install ninja
+
+      - name: Test
+        run: cargo test --workspace
+
+      - name: Package
+        run: sh scripts/package-macos.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: |
+            dist/*.dmg
+            dist/*-macos-*.tar.gz
           if-no-files-found: error
 
   android:
@@ -144,7 +213,7 @@ jobs:
           if-no-files-found: error
 
   publish:
-    needs: [desktop, android]
+    needs: [desktop, linux, macos, android]
     if: github.ref_type == 'tag'
     runs-on: windows-latest
     steps:

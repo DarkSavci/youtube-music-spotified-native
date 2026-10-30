@@ -27,6 +27,17 @@ scripts/build-projectm.ps1 # libprojectM, for MilkDrop (optional)
 cargo run                  # the app
 ```
 
+On macOS and Linux, with Rust, Go 1.26+, CMake and Ninja, and on Linux the
+headers for ALSA, OpenGL, X11, Wayland and xkbcommon (`.github/workflows/check.yml`
+lists Ubuntu's):
+
+```sh
+scripts/build-core.sh      # the Go core, to target/core
+scripts/fetch-tools.sh     # yt-dlp and deno, to vendor/
+scripts/build-projectm.sh  # libprojectM, for MilkDrop (optional)
+cargo run                  # the app
+```
+
 `cargo run -- --demo` runs on recorded responses in a throwaway profile, with
 no account. `--screenshot <file.png>` saves the window and exits.
 `--profile <dir>` keeps every file under a directory of your choosing.
@@ -40,7 +51,9 @@ built-in Winamp skin, and `skin-add:<file.wsz>` installs one and wears it.
 
 The mini player can wear a classic Winamp 2 skin (`.wsz`). Drop the file on
 either window, or use **Add a skin** in Settings under Appearance; it is
-copied to `%APPDATA%\SpotifiedNative\skins` and worn at once. Settings lists
+copied to the app's `skins` folder (`%APPDATA%\SpotifiedNative` on Windows,
+`~/Library/Application Support/SpotifiedNative` on a Mac,
+`~/.config/SpotifiedNative` on Linux) and worn at once. Settings lists
 the skins there, and **No skin** goes back to the app's own mini player.
 Skins are to be had at the [Winamp Skin Museum](https://skins.webamp.org).
 
@@ -67,14 +80,30 @@ anywhere in one brings the menu.
 **Open MilkDrop** in Settings under Appearance (or MilkDrop in a skin's
 menu) draws the music with MilkDrop's presets, in a window of its own. No
 presets come with the app: **Get presets** fetches the 550 that shipped
-with MilkDrop 2 into `%APPDATA%\SpotifiedNative\milkdrop`, and any `.milk`
+with MilkDrop 2 into the `milkdrop` folder beside `skins`, and any `.milk`
 file put there is used. In the window, Space or N is the next preset and
 Backspace or P the one before, L stays on one, F or a double click fills
 the screen, and Escape leaves.
 
 The drawing is libprojectM's, a library beside the app
-(`libprojectM-4.dll`) and not part of it; without the file there is no
+(`libprojectM-4.dll`, `.so` or `.dylib`) and not part of it; without the file there is no
 MilkDrop, and nothing else changes.
+
+## macOS and Linux
+
+The same app, from the same release; `docs/desktop-ports.md` has what each system
+has and what has been checked. Both are new, and macOS has not yet been run.
+
+**Linux:** download the AppImage, make it executable and run it. It updates itself;
+the `.tar.gz` is the same app as a folder, and does not. It needs glibc 2.35 or newer.
+The app asks for X11, through XWayland on a Wayland desktop, as Wayland can neither
+hide a window nor place one. On a desktop with no tray, such as plain GNOME, closing
+the window quits it.
+
+**macOS:** Apple Silicon. Open the `.dmg` and drag the app to Applications. The app is
+not notarised, so macOS will refuse it at first: open it once, then choose **Open
+Anyway** in System Settings under Privacy & Security. It updates itself once it is in
+Applications.
 
 ## Android
 
@@ -108,6 +137,11 @@ scripts/package.ps1        # dist/Youtube Music Spotified/ and a zip of it
 
 The folder runs from anywhere: the app, the core beside it, and yt-dlp and
 deno under `vendor/`.
+
+```sh
+scripts/package-linux.sh   # the folder, a .tar.gz of it, and an AppImage
+scripts/package-macos.sh   # the app, a .dmg, and a .tar.gz for the updater
+```
 
 ## Check
 

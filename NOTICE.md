@@ -19,9 +19,14 @@
   it, with the name on its title bars redrawn. MilkDrop's window in
   `crates/app/src/milkdrop/` is arranged as its `src/milkdrop/` is.
   https://github.com/crmne/spotifast
+- **OpenH264** (BSD 2-Clause, Copyright (c) Cisco Systems), built into the
+  macOS and Linux programs from its source, which decodes music videos there.
+  Cisco's patent licence for H.264 covers the binaries Cisco itself
+  publishes, and not a build like this one. https://github.com/cisco/openh264
 - **libprojectM** (LGPL 2.1, Copyright (c) the projectM team), which draws
-  MilkDrop. It is not part of the program: it is `libprojectM-4.dll` beside
-  it, built unchanged from its source by `scripts/build-projectm.ps1` and
+  MilkDrop. It is not part of the program: it is `libprojectM-4.dll` (or `.so`
+  or `.dylib`) beside it, built unchanged from its source by
+  `scripts/build-projectm` and
   loaded when MilkDrop's window is opened, so it can be replaced with any
   other build of itself. Its licence is `libprojectM-LICENSE.txt`.
   https://github.com/projectM-visualizer/projectm

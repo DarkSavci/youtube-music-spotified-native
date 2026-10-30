@@ -6,7 +6,11 @@ on:
 
 jobs:
   check:
-    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-22.04, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
@@ -20,6 +24,15 @@ jobs:
           components: clippy, rustfmt
 
       - uses: Swatinem/rust-cache@v2
+
+      # What the window, the sound and OpenSSL's build need; the last is what
+      # the window is run in below.
+      - name: Linux libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libgl1-mesa-dev libegl1-mesa-dev \
+            libx11-dev libxkbcommon-dev libwayland-dev libgl1-mesa-dri nasm xvfb
 
       - name: Format
         run: cargo fmt --check
@@ -38,3 +51,11 @@ jobs:
       # about whether it links.
       - name: Release build
         run: cargo build --release -p spotified
+
+      # Everything above passes with no window at all. This opens one.
+      - name: The window opens
+        if: runner.os == 'Linux'
+        run: |
+          sh scripts/build-core.sh
+          xvfb-run -a target/release/spotified --demo --screenshot "$RUNNER_TEMP/window.png"
+          test -s "$RUNNER_TEMP/window.png"

@@ -1,7 +1,8 @@
-"""Writes crates/app/assets/icon.ico: the app's icon for the executable.
+"""Writes the app's icon files: crates/app/assets/icon.ico for the Windows
+executable, and the PNG and .icns a Linux desktop and a Mac bundle use.
 
 The icon is the one `crates/app/src/icon.rs` draws at run time for the
-window and the tray: a red disc with a play triangle. Windows wants a file
+window and the tray: a red disc with a play triangle. The systems want a file
 at build time, so the same drawing is made here once and committed. If the
 drawing changes there, change it here and run this again.
 
@@ -70,9 +71,31 @@ def ico(images):
     return directory + entries + bodies
 
 
+def icns(images):
+    """An .icns holding each size as a PNG, by the type a Mac knows it as."""
+    body = b"".join(
+        kind.encode() + struct.pack(">I", len(data) + 8) + data for kind, data in images
+    )
+    return b"icns" + struct.pack(">I", len(body) + 8) + body
+
+
+def write(root, parts, data):
+    target = os.path.join(root, *parts)
+    with open(target, "wb") as out:
+        out.write(data)
+    print("wrote", target)
+
+
 if __name__ == "__main__":
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    target = os.path.join(root, "crates", "app", "assets", "icon.ico")
-    with open(target, "wb") as out:
-        out.write(ico([(size, png(size)) for size in SIZES]))
-    print("wrote", target)
+    write(
+        root,
+        ["crates", "app", "assets", "icon.ico"],
+        ico([(size, png(size)) for size in SIZES]),
+    )
+    write(root, ["packaging", "linux", "icon.png"], png(256))
+    write(
+        root,
+        ["packaging", "macos", "icon.icns"],
+        icns([("ic07", png(128)), ("ic08", png(256)), ("ic09", png(512))]),
+    )

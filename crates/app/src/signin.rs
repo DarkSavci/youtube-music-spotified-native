@@ -5,10 +5,13 @@
 //! happens in two steps, as in the Electron app:
 //!
 //! 1. An ordinary browser window is opened on a throwaway profile, with
-//!    nothing attached. The only thing watched is its window title, the
-//!    same thing the taskbar shows; when it reads "YouTube Music" the
-//!    sign-in has landed and the window is closed, which makes the browser
-//!    write its cookies to disk. Closing it by hand works too.
+//!    nothing attached. On Windows the only thing watched is its window
+//!    title, the same thing the taskbar shows; when it reads "YouTube Music"
+//!    the sign-in has landed and the window is closed, which makes the
+//!    browser write its cookies to disk. Elsewhere there is no such easy
+//!    way to read a title, so what is watched is the profile's cookie file,
+//!    for the name of the cookie a sign-in leaves. Closing it by hand works
+//!    too.
 //! 2. The profile is reopened without a window, never loading a Google
 //!    page, only to read those cookies back. They become this app's
 //!    credentials and the profile is deleted.
@@ -28,6 +31,29 @@ const SIGN_IN_URL: &str = "https://accounts.google.com/ServiceLogin?service=yout
 /// How long the reopened browser has to say where it is listening.
 const BROWSER_START: Duration = Duration::from_secs(15);
 const REPLY_TIMEOUT: Duration = Duration::from_secs(20);
+/// Told to the browser in both steps, so that a profile thrown away after
+/// one sign-in asks for nothing of the system's password store.
+#[cfg(target_os = "macos")]
+const STORE_FLAGS: &[&str] = &["--use-mock-keychain"];
+#[cfg(target_os = "linux")]
+const STORE_FLAGS: &[&str] = &["--password-store=basic"];
+#[cfg(windows)]
+const STORE_FLAGS: &[&str] = &[];
+/// Where a profile keeps its cookies, which depends on the version. Their
+/// names are not encrypted.
+#[cfg(unix)]
+const COOKIE_FILES: [&str; 2] = ["Default/Cookies", "Default/Network/Cookies"];
+/// How often the cookie files are looked at. Chrome writes them every half
+/// minute or so.
+#[cfg(unix)]
+const LOOK_EVERY: Duration = Duration::from_secs(1);
+/// How long a browser has to save and leave once told to.
+#[cfg(unix)]
+const BROWSER_STOP: Duration = Duration::from_secs(10);
+/// How long a sign-in may take. On a Mac closing a browser's last window does
+/// not end it, so a sign-in given up on is not otherwise known of.
+#[cfg(unix)]
+const SIGN_IN_MOST: Duration = Duration::from_secs(15 * 60);
 
 /// Cookies the core needs. Anything else in the profile is left behind.
 const WANTED: [&str; 23] = [
@@ -74,7 +100,15 @@ pub enum SignInError {
 impl fmt::Display for SignInError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            SignInError::NoBrowser => write!(f, "Signing in needs Chrome or Edge installed."),
+            SignInError::NoBrowser if cfg!(windows) => {
+                write!(f, "Signing in needs Chrome or Edge installed.")
+            }
+            SignInError::NoBrowser => {
+                write!(
+                    f,
+                    "Signing in needs Chrome, Edge, Chromium or Brave installed."
+                )
+            }
             SignInError::NotSignedIn => {
                 write!(f, "The browser was closed before the sign-in finished.")
             }
@@ -96,7 +130,46 @@ struct Cookie {
     domain: String,
 }
 
+/// Chrome, or failing that another of its kind, where a Mac's are put.
+#[cfg(target_os = "macos")]
+pub fn browser() -> Option<PathBuf> {
+    const APPS: [&str; 4] = [
+        "Google Chrome.app/Contents/MacOS/Google Chrome",
+        "Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+        "Chromium.app/Contents/MacOS/Chromium",
+        "Brave Browser.app/Contents/MacOS/Brave Browser",
+    ];
+    let home = std::env::var_os("HOME").map(|home| Path::new(&home).join("Applications"));
+    let folders: Vec<PathBuf> = std::iter::once(PathBuf::from("/Applications"))
+        .chain(home)
+        .collect();
+    APPS.iter()
+        .flat_map(|app| folders.iter().map(move |folder| folder.join(app)))
+        .find(|path| path.exists())
+}
+
+/// Chrome, or failing that another of its kind, on the `PATH`.
+#[cfg(target_os = "linux")]
+pub fn browser() -> Option<PathBuf> {
+    const NAMES: [&str; 7] = [
+        "google-chrome-stable",
+        "google-chrome",
+        "chromium",
+        "chromium-browser",
+        "microsoft-edge-stable",
+        "microsoft-edge",
+        "brave-browser",
+    ];
+    let path = std::env::var_os("PATH")?;
+    let folders: Vec<PathBuf> = std::env::split_paths(&path).collect();
+    NAMES
+        .iter()
+        .flat_map(|name| folders.iter().map(move |folder| folder.join(name)))
+        .find(|path| path.is_file())
+}
+
 /// Chrome, or failing that Edge, where their installers put them.
+#[cfg(windows)]
 pub fn browser() -> Option<PathBuf> {
     let var = |name: &str| std::env::var_os(name).map(PathBuf::from);
     let chrome = "Google/Chrome/Application/chrome.exe";
@@ -129,10 +202,11 @@ pub fn sign_in(scratch: &Path, credentials: &Path) -> Result<(), SignInError> {
     Ok(())
 }
 
-/// Step one: the sign-in page in an ordinary window, until it is closed.
-fn show_sign_in(browser: &Path, profile: &Path) -> Result<(), SignInError> {
-    let mut window = Command::new(browser)
+/// The sign-in page in an ordinary window, started.
+fn open_sign_in(browser: &Path, profile: &Path) -> Result<Child, SignInError> {
+    Ok(Command::new(browser)
         .arg(format!("--user-data-dir={}", profile.display()))
+        .args(STORE_FLAGS)
         .args([
             "--no-first-run",
             "--no-default-browser-check",
@@ -143,7 +217,65 @@ fn show_sign_in(browser: &Path, profile: &Path) -> Result<(), SignInError> {
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .spawn()?;
+        .spawn()?)
+}
+
+/// Step one: the sign-in page, until the browser has been closed, or told to
+/// close because the sign-in has left its cookie.
+#[cfg(unix)]
+fn show_sign_in(browser: &Path, profile: &Path) -> Result<(), SignInError> {
+    let mut window = open_sign_in(browser, profile)?;
+    let deadline = Instant::now() + SIGN_IN_MOST;
+    loop {
+        if window.try_wait()?.is_some() {
+            return Ok(());
+        }
+        let signed_in = COOKIE_FILES
+            .iter()
+            .any(|file| has_sign_in_cookie(&profile.join(file)));
+        if signed_in || Instant::now() >= deadline {
+            stop_browser(&mut window);
+            return Ok(());
+        }
+        std::thread::sleep(LOOK_EVERY);
+    }
+}
+
+/// Whether the cookie file names the cookie YouTube leaves on a sign-in.
+#[cfg(unix)]
+fn has_sign_in_cookie(file: &Path) -> bool {
+    std::fs::read(file).is_ok_and(|bytes| {
+        bytes
+            .windows(b"LOGIN_INFO".len())
+            .any(|window| window == b"LOGIN_INFO")
+    })
+}
+
+/// Asks the browser to leave, which it takes as a reason to save its cookies,
+/// and makes it if it will not.
+#[cfg(unix)]
+fn stop_browser(browser: &mut Child) {
+    let told = Command::new("kill")
+        .args(["-TERM", &browser.id().to_string()])
+        .status();
+    if let Err(error) = told {
+        log::debug!("the browser could not be told to leave: {error}");
+    }
+    let deadline = Instant::now() + BROWSER_STOP;
+    while Instant::now() < deadline {
+        if !matches!(browser.try_wait(), Ok(None)) {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let _ = browser.kill();
+    let _ = browser.wait();
+}
+
+/// Step one: the sign-in page in an ordinary window, until it is closed.
+#[cfg(windows)]
+fn show_sign_in(browser: &Path, profile: &Path) -> Result<(), SignInError> {
+    let mut window = open_sign_in(browser, profile)?;
     let mut watcher = close_when_signed_in(window.id());
     let exited = window.wait();
     if let Some(watcher) = &mut watcher {
@@ -156,6 +288,7 @@ fn show_sign_in(browser: &Path, profile: &Path) -> Result<(), SignInError> {
 
 /// Closes the browser window, as clicking its X would, once its title says
 /// YouTube Music has loaded. Without this the person closes it themselves.
+#[cfg(windows)]
 fn close_when_signed_in(browser_pid: u32) -> Option<Child> {
     // The title is read the way the taskbar reads it; nothing touches the
     // page. Two seconds' grace lets the browser finish writing cookies.
@@ -189,6 +322,7 @@ fn read_cookies(browser: &Path, profile: &Path) -> Result<Vec<Cookie>, SignInErr
     let _ = std::fs::remove_file(&port_file);
     let mut headless = Command::new(browser)
         .arg(format!("--user-data-dir={}", profile.display()))
+        .args(STORE_FLAGS)
         .args([
             "--headless=new",
             "--remote-debugging-port=0",
@@ -297,6 +431,19 @@ fn write_credentials(path: &Path, cookie_header: &str) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn the_cookie_a_sign_in_leaves_is_found_by_its_name() {
+        let dir =
+            crate::scratch::Scratch::folder(&format!("spotified-signin-{}", std::process::id()));
+        let file = dir.join("Cookies");
+        assert!(!has_sign_in_cookie(&file), "no file, no sign-in");
+        std::fs::write(&file, b"SQLite format 3 ...SID...").expect("write");
+        assert!(!has_sign_in_cookie(&file));
+        std::fs::write(&file, b"SQLite format 3 ...LOGIN_INFO...").expect("write");
+        assert!(has_sign_in_cookie(&file));
+    }
     use crate::scratch::Scratch;
 
     fn cookie(name: &str, value: &str, domain: &str) -> Cookie {

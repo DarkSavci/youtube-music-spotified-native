@@ -16,8 +16,20 @@ const CORE_BINARY: &str = if cfg!(windows) {
     "spotified-core"
 };
 
-const YTDLP: &str = "vendor/yt-dlp/yt-dlp.exe";
-const DENO: &str = "vendor/deno/deno.exe";
+const YTDLP: &str = if cfg!(windows) {
+    "vendor/yt-dlp/yt-dlp.exe"
+} else if cfg!(target_os = "macos") {
+    "vendor/yt-dlp/yt-dlp_macos"
+} else if cfg!(target_arch = "aarch64") {
+    "vendor/yt-dlp/yt-dlp_linux_aarch64"
+} else {
+    "vendor/yt-dlp/yt-dlp_linux"
+};
+const DENO: &str = if cfg!(windows) {
+    "vendor/deno/deno.exe"
+} else {
+    "vendor/deno/deno"
+};
 
 /// How long a clean stop may take before the core is killed. Its own
 /// shutdown allows five seconds for the final resume save.
@@ -63,6 +75,8 @@ pub fn spawn(
             "the playback service is not next to the app",
         )
     })?;
+    #[cfg(target_os = "macos")]
+    clear_quarantine();
     let mut command = Command::new(program);
     command
         .args(["-addr", "127.0.0.1:0", "-exit-with-stdin"])
@@ -89,7 +103,7 @@ pub fn spawn(
             Some(path) => {
                 command.arg(flag).arg(path);
             }
-            None => log::warn!("{tool} is missing; run scripts/fetch-tools.ps1"),
+            None => log::warn!("{tool} is missing; run scripts/fetch-tools"),
         }
     }
     hide_console(&mut command);
@@ -228,7 +242,13 @@ pub fn bundled_resolver() -> Option<PathBuf> {
 pub fn packaged() -> bool {
     std::env::current_exe()
         .ok()
-        .and_then(|exe| Some(exe.parent()?.join(CORE_BINARY).exists()))
+        .and_then(|exe| {
+            let folder = exe.parent()?;
+            Some(
+                folder.join(CORE_BINARY).exists()
+                    || folder.join("../Resources").join(CORE_BINARY).exists(),
+            )
+        })
         .unwrap_or(false)
 }
 
@@ -240,6 +260,8 @@ pub fn locate(relative: impl AsRef<Path>) -> Option<PathBuf> {
     let relative = relative.as_ref();
     [
         exe_dir.join(relative),
+        // Name.app/Contents/MacOS/app -> Name.app/Contents/Resources/
+        exe_dir.join("../Resources").join(relative),
         // target/debug/spotified.exe -> target/core/
         exe_dir.join("../core").join(relative),
         // target/debug/spotified.exe -> repository root
@@ -247,6 +269,30 @@ pub fn locate(relative: impl AsRef<Path>) -> Option<PathBuf> {
     ]
     .into_iter()
     .find(|candidate| candidate.exists())
+}
+
+/// Takes the mark of having been downloaded off the bundle. The person has
+/// approved the app by the time it runs, but a Mac asks again of each program
+/// inside it that still bears the mark, and the core and yt-dlp are started
+/// where nobody would see that.
+#[cfg(target_os = "macos")]
+fn clear_quarantine() {
+    let Some(bundle) = std::env::current_exe().ok().and_then(|exe| {
+        let bundle = exe.parent()?.parent()?.parent()?.to_path_buf();
+        (bundle.extension()? == "app").then_some(bundle)
+    }) else {
+        return;
+    };
+    let cleared = Command::new("/usr/bin/xattr")
+        .args(["-dr", "com.apple.quarantine"])
+        .arg(&bundle)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+    if let Err(error) = cleared {
+        log::debug!("the bundle's quarantine stays: {error}");
+    }
 }
 
 /// A console child of a windowed app would flash a terminal window.

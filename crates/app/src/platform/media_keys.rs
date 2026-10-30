@@ -1,5 +1,5 @@
-//! The system's media controls: the keyboard's media keys, and on Windows
-//! the now-playing card with its title, artist and cover.
+//! The system's media controls: the keyboard's media keys, and the
+//! now-playing card with its title, artist and cover.
 
 use std::ffi::c_void;
 use std::time::{Duration, Instant};
@@ -16,6 +16,9 @@ use crate::state::Playback;
 /// The size of cover the system's card is given.
 const COVER_PIXELS: u32 = 300;
 
+/// How often the system is told how far the song has got.
+const POSITION_EVERY: Duration = Duration::from_secs(2);
+
 /// What the controls were last told, so they are only told again on a
 /// change: each update crosses into the system.
 #[derive(PartialEq, Eq)]
@@ -27,6 +30,7 @@ struct Shown {
 pub struct MediaKeys {
     controls: MediaControls,
     shown: Option<Shown>,
+    told: Instant,
 }
 
 impl MediaKeys {
@@ -37,6 +41,13 @@ impl MediaKeys {
         window: &impl HasWindowHandle,
         on_action: impl Fn(Action) + Send + 'static,
     ) -> Option<Self> {
+        // The controls' own thread takes for granted that a bus is there, and
+        // a panic in it would end the app.
+        #[cfg(target_os = "linux")]
+        if !crate::platform::linux::has_session_bus() {
+            log::info!("no media controls: this session has no message bus");
+            return None;
+        }
         let hwnd = match window.window_handle().ok()?.as_raw() {
             RawWindowHandle::Win32(handle) => Some(handle.hwnd.get() as *mut c_void),
             _ => None,
@@ -60,7 +71,17 @@ impl MediaKeys {
         Some(Self {
             controls,
             shown: None,
+            told: Instant::now(),
         })
+    }
+
+    /// Whether the song has played on enough that the system should hear how
+    /// far. MPRIS answers for its position from what it was last told, where
+    /// the others work it out from when they were told it.
+    fn position_is_stale(&self) -> bool {
+        cfg!(target_os = "linux")
+            && self.shown.as_ref().is_some_and(|shown| shown.playing)
+            && self.told.elapsed() >= POSITION_EVERY
     }
 
     /// Tells the system what is playing, if that has changed.
@@ -71,9 +92,10 @@ impl MediaKeys {
                 playing: playback.wants_to_play(),
             })
         });
-        if now == self.shown {
+        if now == self.shown && !self.position_is_stale() {
             return;
         }
+        self.told = Instant::now();
         // Errors here are the system declining an update; the next change
         // tries again.
         match playback.and_then(|playback| Some((playback, playback.current()?))) {

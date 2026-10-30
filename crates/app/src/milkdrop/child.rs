@@ -20,6 +20,8 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::{Duration, Instant};
 
 use glutin::config::ConfigTemplateBuilder;
+#[cfg(target_os = "macos")]
+use glutin::context::{ContextApi, GlProfile, Version};
 use glutin::context::{ContextAttributesBuilder, NotCurrentGlContext, PossiblyCurrentContext};
 use glutin::display::{GetGlDisplay, GlDisplay};
 use glutin::surface::{GlSurface, Surface, SwapInterval, WindowSurface};
@@ -120,7 +122,16 @@ pub fn run(args: &Args) -> i32 {
         Ok(ring) => ring,
         Err(error) => return failed(&format!("the sound could not be reached: {error}")),
     };
-    let event_loop = match EventLoop::<Control>::with_user_event().build() {
+    let mut builder = EventLoop::<Control>::with_user_event();
+    #[cfg(target_os = "linux")]
+    crate::platform::x11::prefer(&mut builder);
+    // The window is the app's, not another app in the Dock.
+    #[cfg(target_os = "macos")]
+    {
+        use winit::platform::macos::{ActivationPolicy, EventLoopBuilderExtMacOS};
+        builder.with_activation_policy(ActivationPolicy::Accessory);
+    }
+    let event_loop = match builder.build() {
         Ok(event_loop) => event_loop,
         Err(error) => return failed(&format!("no event loop: {error}")),
     };
@@ -175,10 +186,12 @@ fn seed() -> u64 {
 
 /// The window while it exists, with the context its picture is drawn in.
 struct Live {
-    window: Window,
-    surface: Surface<WindowSurface>,
-    context: PossiblyCurrentContext,
     handle: Handle,
+    // Dropped in this order: X11 takes it as an error for a window to go
+    // before what is drawn on it.
+    context: PossiblyCurrentContext,
+    surface: Surface<WindowSurface>,
+    window: Window,
 }
 
 struct Child<'a> {
@@ -249,7 +262,13 @@ impl Child<'_> {
             .window_handle()
             .map_err(|error| format!("the window has no handle: {error}"))?
             .as_raw();
-        let wanted = ContextAttributesBuilder::new().build(Some(raw));
+        let wanted = ContextAttributesBuilder::new();
+        // A Mac otherwise gives the OpenGL of 2007, whatever it can do.
+        #[cfg(target_os = "macos")]
+        let wanted = wanted
+            .with_profile(GlProfile::Core)
+            .with_context_api(ContextApi::OpenGl(Some(Version::new(3, 3))));
+        let wanted = wanted.build(Some(raw));
         let display = config.display();
         // SAFETY: the handle is the window's, which outlives the context:
         // both are kept together and dropped together.

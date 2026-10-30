@@ -291,9 +291,7 @@ impl App {
         // tray there would be no way back to the window, so it shows.
         let hidden = launch.hidden && tray.is_some();
         if hidden {
-            context
-                .egui_ctx
-                .send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            context.egui_ctx.send_viewport_cmd(desktop::putting_away());
         }
         // Only a copy put together to be run keeps yt-dlp current: a build
         // in a working tree uses the one fetched for it.
@@ -454,7 +452,7 @@ impl App {
         if closing && !self.quitting && self.tray.is_some() && self.state.settings.close_to_tray {
             self.window_shown = false;
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            ctx.send_viewport_cmd(desktop::putting_away());
         }
     }
 

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Youtube Music Spotified
+Comment=A native YouTube Music client
+Exec=AppRun %U
+Icon=dev.darksavci.spotified.native
+Terminal=false
+Categories=AudioVideo;Audio;Player;
+StartupWMClass=dev.darksavci.spotified.native

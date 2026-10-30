@@ -67,7 +67,6 @@ fn main() -> ExitCode {
     let started = Instant::now();
     // Started as the MilkDrop window: none of the app is wanted, and the
     // profile is the app's that started this, not this process's to open.
-    #[cfg(windows)]
     {
         let mut args = std::env::args().skip(1);
         if args.next().as_deref() == Some(milkdrop::child::FLAG) {
@@ -142,6 +141,10 @@ fn run(args: cli::Args, started: Instant) -> Result<(), Box<dyn std::error::Erro
             .with_decorations(decorated)
             .with_inner_size(args_size.unwrap_or(theme::WINDOW_SIZE))
             .with_min_inner_size(theme::WINDOW_MIN_SIZE),
+        #[cfg(target_os = "linux")]
+        event_loop_builder: Some(Box::new(|builder| {
+            platform::x11::prefer(builder);
+        })),
         ..Default::default()
     };
     eframe::run_native(

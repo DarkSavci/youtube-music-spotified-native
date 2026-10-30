@@ -6,6 +6,10 @@
 //! release's `SHA256SUMS.txt`: a file that does not match is thrown away.
 //! Only an installed copy updates itself; a portable folder or a
 //! development build is told so and left alone.
+//!
+//! On Windows the installer is Inno Setup's. A Mac's and a Linux copy have
+//! no installer: the app's bundle, or its AppImage, is replaced where it
+//! stands, which they allow of a running file.
 
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
@@ -19,10 +23,23 @@ use crate::changelog::VERSION;
 /// The newest release of this app.
 const FEED: &str =
     "https://api.github.com/repos/DarkSavci/youtube-music-spotified-native/releases/latest";
-/// How the installer's asset is named: `…-setup.exe`.
-const INSTALLER_SUFFIX: &str = "-setup.exe";
+/// How the asset this copy updates from is named: `…-setup.exe` and so on.
+const INSTALLER_SUFFIX: &str = if cfg!(windows) {
+    "-setup.exe"
+} else if cfg!(target_os = "macos") {
+    if cfg!(target_arch = "aarch64") {
+        "-macos-arm64.tar.gz"
+    } else {
+        "-macos-x64.tar.gz"
+    }
+} else if cfg!(target_arch = "aarch64") {
+    "-linux-aarch64.AppImage"
+} else {
+    "-linux-x86_64.AppImage"
+};
 const SUMS: &str = "SHA256SUMS.txt";
 /// Beside the executable of an installed copy, and of nothing else.
+#[cfg(windows)]
 const UNINSTALLER: &str = "unins000.exe";
 const TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -55,11 +72,41 @@ impl Status {
 }
 
 /// Whether this copy was put here by the installer.
+#[cfg(windows)]
 pub fn installed() -> bool {
     std::env::current_exe()
         .ok()
         .and_then(|exe| Some(exe.parent()?.join(UNINSTALLER).exists()))
         .unwrap_or(false)
+}
+
+/// Whether this copy is an AppImage, which can replace itself. One unpacked
+/// from the `.tar.gz` is a portable folder.
+#[cfg(target_os = "linux")]
+pub fn installed() -> bool {
+    std::env::var_os("APPIMAGE").is_some()
+}
+
+/// Whether this copy is a bundle somewhere it can be replaced. A Mac runs an
+/// app not yet moved out of Downloads from a read-only copy elsewhere.
+#[cfg(target_os = "macos")]
+pub fn installed() -> bool {
+    std::env::current_exe()
+        .ok()
+        .and_then(|exe| bundle_of(&exe))
+        .is_some_and(|bundle| !bundle.to_string_lossy().contains("/AppTranslocation/"))
+}
+
+/// The `.app` an executable is inside.
+#[cfg(any(target_os = "macos", test))]
+fn bundle_of(exe: &Path) -> Option<PathBuf> {
+    let bundle = exe.parent()?.parent()?.parent()?;
+    let shape = exe.parent()?.ends_with("Contents/MacOS");
+    (shape
+        && bundle
+            .extension()
+            .is_some_and(|extension| extension == "app"))
+    .then(|| bundle.to_path_buf())
 }
 
 /// Looks for a newer release and, if there is one, downloads its installer
@@ -116,6 +163,7 @@ pub enum Then {
 
 /// Runs the installer without its windows. The app must then quit, so its
 /// files are free.
+#[cfg(windows)]
 pub fn install(installer: &Path, then: Then) -> io::Result<()> {
     std::process::Command::new(installer)
         .args(install_arguments(then))
@@ -123,6 +171,96 @@ pub fn install(installer: &Path, then: Then) -> io::Result<()> {
         .map(drop)
 }
 
+/// Replaces the AppImage this copy runs from. The app must then quit; the
+/// new one is started once it has, as two would fight over the profile.
+#[cfg(target_os = "linux")]
+pub fn install(installer: &Path, then: Then) -> io::Result<()> {
+    let image = PathBuf::from(
+        std::env::var_os("APPIMAGE").ok_or_else(|| io::Error::other("not an AppImage"))?,
+    );
+    replace_image(installer, &image)?;
+    if then == Then::Relaunch {
+        start_after_this_ends(&image, &[])?;
+    }
+    Ok(())
+}
+
+/// Puts the download where the AppImage is, whole or not at all. The file in
+/// use is left to whoever has it open, and the name goes to the new one.
+#[cfg(target_os = "linux")]
+fn replace_image(installer: &Path, image: &Path) -> io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let beside = image.with_extension("new");
+    std::fs::copy(installer, &beside)?;
+    std::fs::set_permissions(&beside, std::fs::Permissions::from_mode(0o755))?;
+    std::fs::rename(&beside, image)
+}
+
+/// Replaces the bundle this copy runs from with the one in the download. The
+/// app must then quit; the new one is started once it has, as two would
+/// fight over the profile.
+#[cfg(target_os = "macos")]
+pub fn install(installer: &Path, then: Then) -> io::Result<()> {
+    let exe = std::env::current_exe()?;
+    let bundle = bundle_of(&exe).ok_or_else(|| io::Error::other("not in a bundle"))?;
+    let folder = bundle
+        .parent()
+        .ok_or_else(|| io::Error::other("a bundle with no folder"))?;
+    let unpacked = folder.join(".spotified-update");
+    let _ = std::fs::remove_dir_all(&unpacked);
+    std::fs::create_dir_all(&unpacked)?;
+    let status = std::process::Command::new("/usr/bin/tar")
+        .arg("-xzf")
+        .arg(installer)
+        .arg("-C")
+        .arg(&unpacked)
+        .status()?;
+    if !status.success() {
+        let _ = std::fs::remove_dir_all(&unpacked);
+        return Err(io::Error::other(format!("tar ended with {status}")));
+    }
+    let new = std::fs::read_dir(&unpacked)?
+        .flatten()
+        .map(|entry| entry.path())
+        .find(|path| path.extension().is_some_and(|extension| extension == "app"))
+        .ok_or_else(|| io::Error::other("the download has no app in it"))?;
+    let old = unpacked.join("old.app");
+    std::fs::rename(&bundle, &old)?;
+    if let Err(error) = std::fs::rename(&new, &bundle) {
+        // Put back: an app that is gone is worse than one not updated.
+        let _ = std::fs::rename(&old, &bundle);
+        return Err(error);
+    }
+    let _ = std::fs::remove_dir_all(&unpacked);
+    if then == Then::Relaunch {
+        start_after_this_ends(Path::new("/usr/bin/open"), &[bundle.as_os_str()])?;
+    }
+    Ok(())
+}
+
+/// Starts `program` when this process has ended, from a shell that outlives it.
+#[cfg(unix)]
+fn start_after_this_ends(program: &Path, arguments: &[&std::ffi::OsStr]) -> io::Result<()> {
+    start_after(std::process::id(), program, arguments)
+}
+
+/// Starts `program` when the process `pid` has ended.
+#[cfg(unix)]
+fn start_after(pid: u32, program: &Path, arguments: &[&std::ffi::OsStr]) -> io::Result<()> {
+    const WAIT: &str = "while kill -0 \"$1\" 2>/dev/null; do sleep 0.2; done; shift; exec \"$@\"";
+    std::process::Command::new("/bin/sh")
+        .args(["-c", WAIT, "sh"])
+        .arg(pid.to_string())
+        .arg(program)
+        .args(arguments)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map(drop)
+}
+
+#[cfg(windows)]
 fn install_arguments(then: Then) -> Vec<&'static str> {
     let mut arguments = vec!["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"];
     if then == Then::Relaunch {
@@ -296,6 +434,55 @@ pub(crate) fn expected_hash(sums: &str, name: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn an_appimage_is_replaced_whole_and_can_be_run() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = Scratch::folder(&format!("spotified-image-{}", std::process::id()));
+        let (image, download) = (dir.join("app.AppImage"), dir.join("download"));
+        std::fs::write(&image, b"old").expect("write");
+        std::fs::write(&download, b"new").expect("write");
+        replace_image(&download, &image).expect("replaced");
+        assert_eq!(std::fs::read(&image).expect("read"), b"new");
+        let mode = std::fs::metadata(&image)
+            .expect("there")
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o111, 0o111);
+        assert!(!dir.join("app.new").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_new_copy_starts_only_once_the_old_one_has_ended() {
+        let dir = Scratch::folder(&format!("spotified-after-{}", std::process::id()));
+        let started = dir.join("started");
+        let script = dir.join("start.sh");
+        std::fs::write(&script, format!("touch '{}'\n", started.display())).expect("write");
+        let mut old = std::process::Command::new("sleep")
+            .arg("1")
+            .spawn()
+            .expect("something to wait for");
+        start_after(old.id(), Path::new("/bin/sh"), &[script.as_os_str()]).expect("waiting");
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(!started.exists(), "started while the old one still ran");
+        old.wait().expect("ended");
+        let begun = std::time::Instant::now();
+        while !started.exists() && begun.elapsed() < Duration::from_secs(5) {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert!(started.exists(), "never started");
+    }
+
+    #[test]
+    fn a_bundle_is_found_from_the_executable_inside_it() {
+        assert_eq!(
+            bundle_of(Path::new("/Applications/A b.app/Contents/MacOS/app")),
+            Some(PathBuf::from("/Applications/A b.app"))
+        );
+        assert_eq!(bundle_of(Path::new("/usr/local/bin/app")), None);
+    }
     use crate::scratch::Scratch;
 
     const RELEASE: &str = r#"{
@@ -303,6 +490,12 @@ mod tests {
         "assets": [
             {"name": "youtube-music-spotified-native-0.3.0-windows-x64.zip", "browser_download_url": "https://example.com/zip"},
             {"name": "youtube-music-spotified-native-0.3.0-setup.exe", "browser_download_url": "https://example.com/setup"},
+            {"name": "youtube-music-spotified-native-0.3.0-macos-arm64.tar.gz", "browser_download_url": "https://example.com/mac"},
+            {"name": "youtube-music-spotified-native-0.3.0-macos-arm64.dmg", "browser_download_url": "https://example.com/dmg"},
+            {"name": "youtube-music-spotified-native-0.3.0-macos-x64.tar.gz", "browser_download_url": "https://example.com/mac-intel"},
+            {"name": "youtube-music-spotified-native-0.3.0-linux-x86_64.AppImage", "browser_download_url": "https://example.com/linux"},
+            {"name": "youtube-music-spotified-native-0.3.0-linux-x86_64.tar.gz", "browser_download_url": "https://example.com/portable"},
+            {"name": "youtube-music-spotified-native-0.3.0-linux-aarch64.AppImage", "browser_download_url": "https://example.com/linux-arm"},
             {"name": "SHA256SUMS.txt", "browser_download_url": "https://example.com/sums"}
         ]
     }"#;
@@ -331,7 +524,21 @@ mod tests {
     fn a_newer_release_is_offered_with_its_installer_and_checksums() {
         let offer = offer_in(RELEASE, "0.2.0").expect("an offer");
         assert_eq!(offer.version, "0.3.0");
-        assert_eq!(offer.installer_url, "https://example.com/setup");
+        assert!(offer.installer_name.ends_with(INSTALLER_SUFFIX));
+        let expected = if cfg!(windows) {
+            "https://example.com/setup"
+        } else if cfg!(target_os = "macos") {
+            if cfg!(target_arch = "aarch64") {
+                "https://example.com/mac"
+            } else {
+                "https://example.com/mac-intel"
+            }
+        } else if cfg!(target_arch = "aarch64") {
+            "https://example.com/linux-arm"
+        } else {
+            "https://example.com/linux"
+        };
+        assert_eq!(offer.installer_url, expected);
         assert_eq!(offer.sums_url, "https://example.com/sums");
     }
 
@@ -366,6 +573,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(windows)]
     #[test]
     fn an_update_asked_for_now_starts_the_app_again_and_one_at_quitting_does_not() {
         let now = install_arguments(Then::Relaunch);

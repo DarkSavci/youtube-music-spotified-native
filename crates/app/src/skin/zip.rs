@@ -1,4 +1,5 @@
-//! The zip reader behind `.wsz` skin files.
+//! The zip reader behind `.wsz` skin files, and the writer behind a problem
+//! report.
 //!
 //! A skin is a small archive of stored or deflated entries and nothing more.
 //! The `zip` crate would be a large dependency for that narrow use, while
@@ -56,9 +57,17 @@ pub struct Entry {
     compressed_size: usize,
     size: usize,
     header_offset: usize,
+    /// What the central directory says of the file, whose high half is its
+    /// Unix permissions and kind where it was archived on Unix.
+    external: u32,
 }
 
 impl Entry {
+    /// The file's Unix mode, or 0 where the archive has none.
+    pub fn unix_mode(&self) -> u32 {
+        self.external >> 16
+    }
+
     /// The final path component in lower case, which is how skin files are
     /// looked up: Winamp ran on a case-insensitive file system, and skins
     /// often nest everything in a folder.
@@ -99,6 +108,7 @@ impl<'a> Archive<'a> {
             let name_len = usize::from(u16_at(data, cursor + 28)?);
             let extra_len = usize::from(u16_at(data, cursor + 30)?);
             let comment_len = usize::from(u16_at(data, cursor + 32)?);
+            let external = u32_at(data, cursor + 38)?;
             let header_offset = u32_at(data, cursor + 42)? as usize;
             let name = String::from_utf8_lossy(slice(data, cursor + 46, name_len)?).into_owned();
             entries.push(Entry {
@@ -108,6 +118,7 @@ impl<'a> Archive<'a> {
                 compressed_size,
                 size,
                 header_offset,
+                external,
             });
             cursor += 46 + name_len + extra_len + comment_len;
         }
@@ -119,11 +130,16 @@ impl<'a> Archive<'a> {
     }
 
     pub fn read(&self, entry: &Entry) -> Result<Vec<u8>, ZipError> {
+        self.read_up_to(entry, ENTRY_LIMIT)
+    }
+
+    /// As [`Archive::read`], for an archive of files larger than a skin's.
+    pub fn read_up_to(&self, entry: &Entry, limit: usize) -> Result<Vec<u8>, ZipError> {
         if entry.flags & ENCRYPTED != 0 {
             return Err(ZipError::Encrypted(entry.name.clone()));
         }
         // 0xFFFF_FFFF is the zip64 marker; skins never need it.
-        if entry.size > ENTRY_LIMIT || entry.compressed_size == u32::MAX as usize {
+        if entry.size > limit || entry.compressed_size == u32::MAX as usize {
             return Err(ZipError::TooLarge(entry.name.clone()));
         }
         let data = self.data;
@@ -178,14 +194,11 @@ fn u32_at(data: &[u8], at: usize) -> Result<u32, ZipError> {
     Ok(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
 }
 
-#[cfg(test)]
 /// The DOS date every entry is stamped with: 1980-01-01, the epoch of the
 /// format, since a skin's files carry no meaningful time.
 const EPOCH_DATE: u16 = (1 << 5) | 1;
 
-/// Writes an archive: one entry per `(name, bytes, deflate)`, for tests to
-/// make skins to read back.
-#[cfg(test)]
+/// Writes an archive: one entry per `(name, bytes, deflate)`.
 pub fn write(entries: &[(&str, &[u8], bool)]) -> Vec<u8> {
     use std::io::Write;
 
@@ -197,8 +210,9 @@ pub fn write(entries: &[(&str, &[u8], bool)]) -> Vec<u8> {
         let (method, payload) = if *deflate {
             let mut encoder =
                 flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::default());
-            encoder.write_all(data).unwrap();
-            (DEFLATED, encoder.finish().unwrap())
+            // Into memory, which cannot fail.
+            let _ = encoder.write_all(data);
+            (DEFLATED, encoder.finish().unwrap_or_default())
         } else {
             (STORED, data.to_vec())
         };
@@ -338,6 +352,7 @@ mod tests {
             compressed_size: 0,
             size: 0,
             header_offset: 0,
+            external: 0,
         };
         assert!(entry("Skin/").is_dir());
         assert_eq!(entry("Skin\\MAIN.BMP").file_name(), "main.bmp");

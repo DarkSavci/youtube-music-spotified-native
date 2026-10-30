@@ -21,16 +21,24 @@ use crate::{report, sidecar, update, views};
 /// flyouts keep. In points.
 const FLYOUT_MARGIN: f32 = 12.0;
 
+/// What the main window is told to leave the screen but not the app. On a Mac
+/// a click on the Dock's icon is what brings an app back, and the toolkit does
+/// not hear of one, so the window goes where the Dock restores it by itself.
+pub(super) fn putting_away() -> egui::ViewportCommand {
+    if cfg!(target_os = "macos") {
+        egui::ViewportCommand::Minimized(true)
+    } else {
+        egui::ViewportCommand::Visible(false)
+    }
+}
+
 impl App {
     pub(super) fn tray_asked(&mut self, ctx: &egui::Context, action: TrayAction) {
         match action {
             TrayAction::Show => self.actions.push(Action::ShowMainWindow),
             TrayAction::Hide => {
                 self.window_shown = false;
-                ctx.send_viewport_cmd_to(
-                    egui::ViewportId::ROOT,
-                    egui::ViewportCommand::Visible(false),
-                );
+                ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, putting_away());
             }
             TrayAction::Flyout(icon) => self.toggle_flyout(ctx, icon),
             TrayAction::Quit => {

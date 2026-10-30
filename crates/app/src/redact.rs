@@ -16,7 +16,7 @@ use std::sync::LazyLock;
 use regex::Regex;
 
 /// Each pattern and what a match becomes, in the order they are applied.
-const RULES: [(&str, &str); 9] = [
+const RULES: [(&str, &str); 10] = [
     // A header or field that carries the session, to the end of its line.
     (
         r#"(?i)\b(cookie|set-cookie|authorization|x-goog-authuser|x-goog-visitor-id|x-youtube-identity-token)(["']?\s*[:=]\s*)[^\r\n]+"#,
@@ -48,6 +48,11 @@ const RULES: [(&str, &str); 9] = [
     ),
     (r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+", "<email>"),
     (r#"([A-Za-z]:[\\/]+Users[\\/]+)[^\\/\s"']+"#, "${1}<user>"),
+    // A Mac's or a Linux home folder; not any address with /home/ in it.
+    (
+        r#"(^|[\s"'=(])(/(?:Users|home)/)[^/\s"']+"#,
+        "${1}${2}<user>",
+    ),
 ];
 
 /// The patterns, compiled once. One that did not compile would be a bug in
@@ -151,6 +156,18 @@ mod tests {
         assert_eq!(
             redact(r"cache at C:\Users\ada\AppData\Local\SpotifiedNative\cache"),
             r"cache at C:\Users\<user>\AppData\Local\SpotifiedNative\cache"
+        );
+        assert_eq!(
+            redact("cache at /home/ada/.local/share/x"),
+            "cache at /home/<user>/.local/share/x"
+        );
+        assert_eq!(
+            redact("log: /Users/ada/Library/Logs/x"),
+            "log: /Users/<user>/Library/Logs/x"
+        );
+        assert_eq!(
+            redact("see https://example.com/home/feed"),
+            "see https://example.com/home/feed"
         );
         assert_eq!(
             redact("C:/Users/ada/Downloads/report.zip"),

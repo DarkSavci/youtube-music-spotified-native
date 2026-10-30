@@ -11,17 +11,39 @@
 
 use std::io;
 use std::path::{Path, PathBuf};
+#[cfg(all(test, windows))]
 use std::process::{Command, Stdio};
 use std::time::{Duration, SystemTime};
 
+use crate::skin::zip::Archive as Zip;
 use crate::update;
 
 const RELEASE: &str = "https://github.com/yt-dlp/yt-dlp/releases/latest/download";
-const ARCHIVE: &str = "yt-dlp_win.zip";
+const ARCHIVE: &str = if cfg!(windows) {
+    "yt-dlp_win.zip"
+} else if cfg!(target_os = "macos") {
+    "yt-dlp_macos.zip"
+} else if cfg!(target_arch = "aarch64") {
+    "yt-dlp_linux_aarch64.zip"
+} else {
+    "yt-dlp_linux.zip"
+};
 const SUMS: &str = "SHA2-256SUMS";
-const EXE: &str = "yt-dlp.exe";
+const EXE: &str = if cfg!(windows) {
+    "yt-dlp.exe"
+} else if cfg!(target_os = "macos") {
+    "yt-dlp_macos"
+} else if cfg!(target_arch = "aarch64") {
+    "yt-dlp_linux_aarch64"
+} else {
+    "yt-dlp_linux"
+};
 /// The hash of the archive a copy was unpacked from, kept beside it.
 const HASH: &str = "release.sha256";
+
+/// The most one file of yt-dlp may unpack to. Its Python library is a few
+/// tens of megabytes.
+const MOST_IN_A_FILE: usize = 512 << 20;
 
 /// How long after starting the first look waits, well clear of startup.
 pub const FIRST_CHECK_AFTER: Duration = Duration::from_secs(60);
@@ -133,7 +155,7 @@ impl Resolver {
         let sums = update::fetch_text(&agent, &format!("{RELEASE}/{SUMS}"))?
             .ok_or("the release has no list of checksums")?;
         let expected = update::expected_hash(&sums, ARCHIVE)
-            .ok_or("the release's checksums do not name the Windows build")?;
+            .ok_or("the release's checksums do not name this system's build")?;
 
         let bundled_hash = bundled.and_then(Path::parent).map(|dir| dir.join(HASH));
         let staged_hash = self.next().join(HASH);
@@ -184,6 +206,7 @@ fn remove_dir(dir: &Path) -> io::Result<()> {
 }
 
 /// The `tar` that Windows ships, which reads zip archives too.
+#[cfg(all(test, windows))]
 pub(crate) fn system_tar() -> Command {
     let windows = std::env::var_os("SystemRoot").map_or_else(|| "C:/Windows".into(), PathBuf::from);
     let mut command = Command::new(windows.join("System32").join("tar.exe"));
@@ -196,17 +219,55 @@ pub(crate) fn system_tar() -> Command {
 }
 
 fn unpack(archive: &Path, into: &Path) -> io::Result<()> {
-    let status = system_tar()
-        .arg("-xf")
-        .arg(archive)
-        .arg("-C")
-        .arg(into)
-        .status()?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(io::Error::other(format!("tar ended with {status}")))
+    let bytes = std::fs::read(archive)?;
+    let zip = Zip::parse(&bytes).map_err(|error| io::Error::other(error.to_string()))?;
+    for entry in zip.entries() {
+        let relative = Path::new(&entry.name);
+        // An archive says where its files go, and none may go outside.
+        if !relative
+            .components()
+            .all(|part| matches!(part, std::path::Component::Normal(_)))
+        {
+            return Err(io::Error::other(format!("{} is outside", entry.name)));
+        }
+        let path = into.join(relative);
+        if entry.is_dir() {
+            std::fs::create_dir_all(path)?;
+            continue;
+        }
+        if let Some(folder) = path.parent() {
+            std::fs::create_dir_all(folder)?;
+        }
+        let data = zip
+            .read_up_to(entry, MOST_IN_A_FILE)
+            .map_err(|error| io::Error::other(error.to_string()))?;
+        write_unpacked(&path, &data, entry.unix_mode())?;
     }
+    Ok(())
+}
+
+/// Writes one file of the archive, as a link if that is what it was, and
+/// with the permissions it had: yt-dlp is no use unless it can be run.
+#[cfg(unix)]
+fn write_unpacked(path: &Path, data: &[u8], mode: u32) -> io::Result<()> {
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::PermissionsExt;
+    const KIND: u32 = 0o170_000;
+    const LINK: u32 = 0o120_000;
+    if mode & KIND == LINK {
+        let target = std::ffi::OsStr::from_bytes(data);
+        return std::os::unix::fs::symlink(target, path);
+    }
+    std::fs::write(path, data)?;
+    if mode & 0o777 != 0 {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode & 0o777))?;
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn write_unpacked(path: &Path, data: &[u8], _mode: u32) -> io::Result<()> {
+    std::fs::write(path, data)
 }
 
 #[cfg(test)]
@@ -317,11 +378,53 @@ mod tests {
     }
 
     #[test]
-    fn the_windows_build_is_found_in_the_releases_checksums() {
-        let sums = "aa11  yt-dlp\nbb22  yt-dlp_win.zip\ncc33  yt-dlp_win_x86.zip\n";
+    fn this_systems_build_is_found_in_the_releases_checksums() {
+        let sums = format!("aa11  yt-dlp\nbb22  {ARCHIVE}\ncc33  yt-dlp_win_x86.zip\n");
         assert_eq!(
-            update::expected_hash(sums, ARCHIVE).as_deref(),
+            update::expected_hash(&sums, ARCHIVE).as_deref(),
             Some("bb22")
         );
+    }
+
+    #[test]
+    fn an_archive_is_unpacked_with_its_folders() {
+        let (dir, _) = scratch("unpack");
+        let zip = crate::skin::zip::write(&[
+            ("tool/run", b"#!/bin/sh\n", true),
+            ("tool/lib/a.so", b"library", false),
+        ]);
+        let archive = dir.join("a.zip");
+        std::fs::write(&archive, zip).expect("write");
+        unpack(&archive, &dir).expect("unpacked");
+        assert_eq!(
+            std::fs::read(dir.join("tool/lib/a.so")).expect("read"),
+            b"library"
+        );
+    }
+
+    #[test]
+    fn an_archive_may_not_write_outside_its_folder() {
+        let (dir, _) = scratch("escape");
+        let zip = crate::skin::zip::write(&[("../outside", b"no", false)]);
+        let archive = dir.join("a.zip");
+        std::fs::write(&archive, zip).expect("write");
+        assert!(unpack(&archive, &dir).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_file_keeps_its_right_to_be_run_and_a_link_stays_a_link() {
+        use std::os::unix::fs::PermissionsExt;
+        let (dir, _) = scratch("modes");
+        let tool = dir.join("tool");
+        write_unpacked(&tool, b"run", 0o100_755).expect("a file");
+        let mode = std::fs::metadata(&tool)
+            .expect("there")
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o755);
+        let link = dir.join("link");
+        write_unpacked(&link, b"tool", 0o120_777).expect("a link");
+        assert_eq!(std::fs::read(link).expect("through the link"), b"run");
     }
 }

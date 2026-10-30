@@ -124,8 +124,22 @@ pub fn show(state: &State, ui: &mut Ui, actions: &mut Vec<Action>) {
         });
         ui.add_space(10.0);
         let on = state.starts_at_login;
-        let label = "Start with Windows";
-        let about = "Starts in the notification area when you sign in to Windows.";
+        let (label, about) = if cfg!(windows) {
+            (
+                "Start with Windows",
+                "Starts in the notification area when you sign in to Windows.",
+            )
+        } else if cfg!(target_os = "macos") {
+            (
+                "Start at login",
+                "Starts in the menu bar when you log in to your Mac.",
+            )
+        } else {
+            (
+                "Start at login",
+                "Starts in the tray when you log in, or as a window where there is no tray.",
+            )
+        };
         row(state, ui, label, about, |ui| {
             if widgets::switch(ui, &state.palette, on, label).clicked() {
                 actions.push(Action::SetStartAtLogin(!on));

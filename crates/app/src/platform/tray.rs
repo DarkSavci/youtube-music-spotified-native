@@ -193,6 +193,14 @@ impl Tray {
     /// handling. `None` if the system has no notification area to offer;
     /// the app then quits when its window closes, as it has nowhere to go.
     pub fn new(on_action: impl Fn(TrayAction) + Send + Sync + Clone + 'static) -> Option<Self> {
+        // An X11 window can be hidden and brought back; a Wayland one cannot,
+        // so there the app has no way to live in a tray at all. Nor where
+        // nothing would show the icon.
+        #[cfg(target_os = "linux")]
+        if !crate::platform::x11::in_use() || !crate::platform::linux::has_tray_host() {
+            log::info!("this desktop has no tray to live in");
+            return None;
+        }
         let size = 32;
         let image = tray_icon::Icon::from_rgba(icon::rgba(size), size, size)
             .inspect_err(|error| log::warn!("tray icon: {error}"))
@@ -224,12 +232,18 @@ impl Tray {
                 ..
             } => {
                 let (left, top) = (rect.position.x as f32, rect.position.y as f32);
-                on_action(TrayAction::Flyout(Area {
-                    left,
-                    top,
-                    right: left + rect.size.width as f32,
-                    bottom: top + rect.size.height as f32,
-                }));
+                // A Linux tray does not say where its icon is, so there is
+                // nowhere to put a flyout: the click brings the window.
+                if cfg!(target_os = "linux") {
+                    on_action(TrayAction::Show);
+                } else {
+                    on_action(TrayAction::Flyout(Area {
+                        left,
+                        top,
+                        right: left + rect.size.width as f32,
+                        bottom: top + rect.size.height as f32,
+                    }));
+                }
             }
             TrayIconEvent::DoubleClick {
                 button: MouseButton::Left,

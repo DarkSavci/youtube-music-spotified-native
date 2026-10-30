@@ -2,7 +2,8 @@
 //!
 //! The drawing is libprojectM's, which reads MilkDrop `.milk` presets and
 //! renders them with OpenGL. It is not built into the app: it is a library
-//! beside it (`libprojectM-4.dll`, built by `scripts/build-projectm.ps1`),
+//! beside it (`libprojectM-4.dll`, or `.so` or `.dylib`, built by
+//! `scripts/build-projectm`),
 //! found and loaded when the window is first asked for, so a copy without
 //! it simply has no MilkDrop. The window runs as this same program started
 //! again with `--milkdrop-child`, because the window toolkit allows one
@@ -14,17 +15,21 @@
 //!
 //! The arrangement follows Spotifast's `src/milkdrop` (MIT, see NOTICE.md).
 
-#[cfg(windows)]
 pub mod child;
 pub mod host;
-#[cfg(windows)]
 mod library;
 pub mod ring;
 
 use std::path::{Path, PathBuf};
 
 /// The library, as its build names it.
-pub const LIBRARY: &str = "libprojectM-4.dll";
+pub const LIBRARY: &str = if cfg!(windows) {
+    "libprojectM-4.dll"
+} else if cfg!(target_os = "macos") {
+    "libprojectM-4.dylib"
+} else {
+    "libprojectM-4.so"
+};
 /// How long a preset plays before the next fades in.
 pub const PRESET_SECONDS: u32 = 20;
 /// How deep into the folder presets are looked for: packs come in a folder

@@ -1,0 +1,5 @@
+#!/bin/sh
+# What an AppImage starts. Nothing is bundled but the app's own files, so
+# nothing about the system's libraries has to be changed for it.
+here=$(dirname "$(readlink -f "$0")")
+exec "$here/spotified" "$@"

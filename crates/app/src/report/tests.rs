@@ -87,7 +87,8 @@ fn the_page_state_leaves_out_what_is_the_persons_own_business() {
     assert_eq!(page["player"], Value::Null);
 }
 
-/// The whole thing, with the `tar` Windows ships: a zip Explorer can open,
+/// The whole thing, read back with the `tar` Windows ships: a zip Explorer
+/// can open,
 /// holding the summary and the logs with their secrets taken out.
 #[cfg(windows)]
 #[test]

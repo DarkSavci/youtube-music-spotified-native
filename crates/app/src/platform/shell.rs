@@ -1,6 +1,6 @@
 //! Small things asked of the desktop itself: where the taskbar is, how a
-//! window with no frame is cornered, how much memory there is, and showing
-//! a file in its folder.
+//! window with no frame is cornered, how much memory there is, showing a
+//! file in its folder, and what this copy is started by.
 //!
 //! Each is a question the system may decline; the answer is then `None`
 //! and the app does without.
@@ -94,7 +94,13 @@ pub fn display_at(x: f32, y: f32) -> Option<Display> {
     {
         win::display_at(x, y)
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        mac::display_at(x, y)
+    }
+    // A Linux tray does not say where its icon is, so nothing is placed by
+    // one.
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         let _ = (x, y);
         None
@@ -120,7 +126,12 @@ pub fn shape_window(title: &str, boxes: Option<&[[i32; 4]]>) -> bool {
     {
         win::shape_window(title, boxes)
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    {
+        super::x11::shape_window(title, boxes)
+    }
+    // A Mac's window stays the rectangle the skin is drawn in.
+    #[cfg(not(any(windows, target_os = "linux")))]
     {
         let _ = (title, boxes);
         true
@@ -133,10 +144,42 @@ pub fn memory() -> Option<(u64, u64)> {
     {
         win::memory()
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    {
+        let text = std::fs::read_to_string("/proc/meminfo").ok()?;
+        meminfo(&text)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        mac::memory()
+    }
+    #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
     {
         None
     }
+}
+
+/// The total and the available memory in `/proc/meminfo`, in bytes.
+#[cfg(any(target_os = "linux", test))]
+fn meminfo(text: &str) -> Option<(u64, u64)> {
+    let field = |name: &str| -> Option<u64> {
+        let line = text.lines().find_map(|line| line.strip_prefix(name))?;
+        let kilobytes = line.trim_start_matches(':').split_whitespace().next()?;
+        Some(kilobytes.parse::<u64>().ok()? * 1024)
+    };
+    Some((field("MemTotal")?, field("MemAvailable")?))
+}
+
+/// What starts this copy again: its own file, or on Linux the AppImage it
+/// runs from, as the executable itself is under a temporary mount.
+#[cfg(unix)]
+pub fn launcher() -> io::Result<std::path::PathBuf> {
+    if cfg!(target_os = "linux")
+        && let Some(image) = std::env::var_os("APPIMAGE")
+    {
+        return Ok(image.into());
+    }
+    std::env::current_exe()
 }
 
 /// Opens an address in the browser the system is set to.
@@ -151,13 +194,113 @@ pub fn open_url(url: &str) -> io::Result<()> {
     Command::new(program).arg(url).spawn().map(drop)
 }
 
-/// Opens the file's folder in Explorer with the file picked out.
+/// Opens the file's folder in the file manager with the file picked out.
 pub fn reveal(file: &Path) -> io::Result<()> {
-    // Explorer takes the path as part of the switch, quotes and all.
-    Command::new("explorer")
-        .arg(format!("/select,{}", file.display()))
-        .spawn()
-        .map(drop)
+    #[cfg(windows)]
+    {
+        // Explorer takes the path as part of the switch, quotes and all.
+        Command::new("explorer")
+            .arg(format!("/select,{}", file.display()))
+            .spawn()
+            .map(drop)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open").arg("-R").arg(file).spawn().map(drop)
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if let Err(error) = super::linux::show_in_file_manager(&file_uri(file)) {
+            log::debug!("no file manager to ask: {error}");
+            let folder = file.parent().unwrap_or(file);
+            return Command::new("xdg-open").arg(folder).spawn().map(drop);
+        }
+        Ok(())
+    }
+}
+
+/// The `file:` address of a path, with what an address cannot hold escaped.
+#[cfg(any(target_os = "linux", test))]
+fn file_uri(path: &Path) -> String {
+    let mut uri = String::from("file://");
+    for byte in path.display().to_string().bytes() {
+        match byte {
+            b'/' | b'-' | b'_' | b'.' | b'~' => uri.push(byte as char),
+            _ if byte.is_ascii_alphanumeric() => uri.push(byte as char),
+            _ => uri.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    uri
+}
+
+#[cfg(target_os = "macos")]
+mod mac {
+    use std::process::Command;
+
+    use objc2::MainThreadMarker;
+    use objc2_app_kit::NSScreen;
+    use objc2_foundation::NSRect;
+
+    use super::{Area, Display};
+
+    /// The display nearest a point, in the flipped, physical pixels the tray
+    /// gives its icon's place in. A Mac measures upward from the bottom of
+    /// the first screen, in points.
+    pub(super) fn display_at(x: f32, y: f32) -> Option<Display> {
+        let main = MainThreadMarker::new()?;
+        let screens = NSScreen::screens(main);
+        let first_height = screens.firstObject()?.frame().size.height;
+        let mut best: Option<(f32, Display)> = None;
+        for screen in screens.iter() {
+            let scale = screen.backingScaleFactor();
+            let area = |rect: NSRect| Area {
+                left: (rect.origin.x * scale) as f32,
+                top: ((first_height - rect.origin.y - rect.size.height) * scale) as f32,
+                right: ((rect.origin.x + rect.size.width) * scale) as f32,
+                bottom: ((first_height - rect.origin.y) * scale) as f32,
+            };
+            let display = Display {
+                bounds: area(screen.frame()),
+                work: area(screen.visibleFrame()),
+            };
+            let (centre_x, centre_y) = display.bounds.centre();
+            let inside = (display.bounds.left..display.bounds.right).contains(&x)
+                && (display.bounds.top..display.bounds.bottom).contains(&y);
+            let distance = if inside {
+                0.0
+            } else {
+                (centre_x - x).powi(2) + (centre_y - y).powi(2)
+            };
+            if best.is_none_or(|(nearest, _)| distance < nearest) {
+                best = Some((distance, display));
+            }
+        }
+        best.map(|(_, display)| display)
+    }
+
+    fn said(program: &str, args: &[&str]) -> Option<String> {
+        let output = Command::new(program).args(args).output().ok()?;
+        output
+            .status
+            .success()
+            .then(|| String::from_utf8_lossy(&output.stdout).into_owned())
+    }
+
+    /// All the memory, and what `vm_stat` calls free and inactive.
+    pub(super) fn memory() -> Option<(u64, u64)> {
+        let total = said("sysctl", &["-n", "hw.memsize"])?.trim().parse().ok()?;
+        let page = said("sysctl", &["-n", "hw.pagesize"])?
+            .trim()
+            .parse::<u64>()
+            .ok()?;
+        let stat = said("vm_stat", &[])?;
+        let pages = |name: &str| -> Option<u64> {
+            let line = stat.lines().find_map(|line| line.strip_prefix(name))?;
+            line.trim_matches([':', ' ', '.']).parse().ok()
+        };
+        let free = pages("Pages free")?.saturating_add(pages("Pages inactive")?);
+        Some((total, free.saturating_mul(page)))
+    }
 }
 
 #[cfg(windows)]
@@ -284,6 +427,21 @@ mod win {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_memory_is_read_from_proc_meminfo() {
+        let text = "MemTotal:       16000 kB\nMemFree:  1 kB\nMemAvailable:   8000 kB\n";
+        assert_eq!(meminfo(text), Some((16000 * 1024, 8000 * 1024)));
+        assert_eq!(meminfo("MemTotal: 1 kB\n"), None);
+    }
+
+    #[test]
+    fn a_files_address_escapes_what_an_address_cannot_hold() {
+        assert_eq!(
+            file_uri(Path::new("/home/ada/My Logs/a&b.zip")),
+            "file:///home/ada/My%20Logs/a%26b.zip"
+        );
+    }
 
     const SIZE: (f32, f32) = (360.0, 136.0);
     const MARGIN: f32 = 12.0;

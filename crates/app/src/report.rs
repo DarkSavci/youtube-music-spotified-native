@@ -137,19 +137,17 @@ fn build(request: &Request, staging: &Path, stamp: &str) -> io::Result<PathBuf> 
 
     std::fs::create_dir_all(&request.into)?;
     let zip = request.into.join(format!("ytms-diagnostics-{stamp}.zip"));
-    // Windows ships bsdtar, which writes a zip when the name ends in one
-    // (-a). The files are named rather than given as ".": that stores them
-    // as "./app.log", and Explorer shows a zip of "./" entries as empty.
-    let status = crate::resolver::system_tar()
-        .args(["-a", "-c", "-f"])
-        .arg(&zip)
-        .arg("-C")
-        .arg(staging)
-        .args(&names)
-        .status()?;
-    if !status.success() {
-        return Err(io::Error::other(format!("tar ended with {status}")));
+    // The files are stored by plain names: Explorer shows a zip of "./"
+    // entries as empty.
+    let mut files = Vec::with_capacity(names.len());
+    for name in &names {
+        files.push((name.as_str(), std::fs::read(staging.join(name))?));
     }
+    let entries: Vec<(&str, &[u8], bool)> = files
+        .iter()
+        .map(|(name, bytes)| (*name, bytes.as_slice(), true))
+        .collect();
+    std::fs::write(&zip, crate::skin::zip::write(&entries))?;
     Ok(zip)
 }
 
@@ -185,7 +183,7 @@ fn summary(request: &Request) -> String {
         " (development)"
     };
     let processors = std::thread::available_parallelism().map_or(0, usize::from);
-    let processor = std::env::var("PROCESSOR_IDENTIFIER").unwrap_or_else(|_| "unknown".into());
+    let processor = processor().unwrap_or_else(|| "unknown".into());
     let memory = match crate::platform::shell::memory() {
         Some((total, free)) => format!(
             "{} GB total, {} MB free",
@@ -221,7 +219,7 @@ fn summary(request: &Request) -> String {
         ),
         format!(
             "os:          {} {}",
-            os_version().unwrap_or_else(|| "Windows".into()),
+            os_version().unwrap_or_else(|| std::env::consts::OS.into()),
             std::env::consts::ARCH
         ),
         format!("cpu:         {processor} x{processors}"),
@@ -297,9 +295,37 @@ fn resolver_version(exe: &Path) -> Option<String> {
     answer(Command::new(exe).arg("--version"), VERSION_TIMEOUT)
 }
 
-/// What Windows calls its version, as `ver` prints it.
+/// What the system calls its version.
 fn os_version() -> Option<String> {
-    answer(Command::new("cmd").args(["/c", "ver"]), HEALTH_TIMEOUT)
+    if cfg!(windows) {
+        answer(Command::new("cmd").args(["/c", "ver"]), HEALTH_TIMEOUT)
+    } else if cfg!(target_os = "macos") {
+        let version = answer(
+            Command::new("sw_vers").arg("-productVersion"),
+            HEALTH_TIMEOUT,
+        )?;
+        Some(format!("macOS {version}"))
+    } else {
+        let release = std::fs::read_to_string("/etc/os-release").ok()?;
+        let line = release
+            .lines()
+            .find_map(|line| line.strip_prefix("PRETTY_NAME="))?;
+        Some(line.trim_matches('"').to_owned())
+    }
+}
+
+/// What the processor is called.
+fn processor() -> Option<String> {
+    if cfg!(windows) {
+        std::env::var("PROCESSOR_IDENTIFIER").ok()
+    } else if cfg!(target_os = "macos") {
+        let name = ["-n", "machdep.cpu.brand_string"];
+        answer(Command::new("sysctl").args(name), HEALTH_TIMEOUT)
+    } else {
+        let info = std::fs::read_to_string("/proc/cpuinfo").ok()?;
+        let line = info.lines().find(|line| line.starts_with("model name"))?;
+        Some(line.split_once(':')?.1.trim().to_owned())
+    }
 }
 
 /// Runs a command and returns what it printed, trimmed. `None` if it
