@@ -401,7 +401,16 @@ func (s *Server) handleLoudness(w http.ResponseWriter, r *http.Request) {
 		s.write(w, http.StatusOK, map[string]any{})
 		return
 	}
-	s.write(w, http.StatusOK, map[string]any{"loudnessLkfs": lkfs})
+	out := map[string]any{"loudnessLkfs": lkfs}
+	// With ?album=1, also how loud its album is, from the queue around it,
+	// for evening out albums rather than tracks.
+	if r.URL.Query().Get("album") == "1" && s.deps.Session != nil {
+		queue := s.deps.Session.Projection().State.Queue.Items
+		if album, ok := albumLoudness(r.Context(), queue, r.PathValue("id"), s.deps.Loudness.For); ok {
+			out["albumLkfs"] = album
+		}
+	}
+	s.write(w, http.StatusOK, out)
 }
 
 /*
