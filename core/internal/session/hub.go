@@ -125,6 +125,7 @@ func (h *Hub) Restore(snap *Snapshot) {
 	st.Version++
 	st.Epoch++
 	h.core.movePosition(snap.PositionMs)
+	h.core.holdAutoplay = snap.AutoplayHeld
 	// Listening is counted from here, not from the start of the song.
 	h.core.lastPositionMs = snap.PositionMs
 }

@@ -43,6 +43,10 @@ type Snapshot struct {
 	Shuffle    bool              `json:"shuffle"`
 	Repeat     domain.RepeatMode `json:"repeat"`
 	SavedAt    time.Time         `json:"savedAt"`
+	// AutoplayHeld keeps a clear's word across a restart: the listener said
+	// what is next is up to them, and a restarted core must not fill the
+	// queue behind their back before they have played on.
+	AutoplayHeld bool `json:"autoplayHeld,omitempty"`
 }
 
 // snapshotVersion is the shape this build writes and accepts.
@@ -168,10 +172,16 @@ func (k *Keeper) save(ctx context.Context, p Projection) {
 	// empty room keeps the queue from before it instead: leaving one brings
 	// that queue back, so it must not be forgotten.
 	state := p.State
+	held := p.AutoplayHeld
 	if p.FollowingRoom && len(state.Queue.Items) == 0 && p.PersonalResume != nil {
+		// The hold was said of the room's queue, not of this one.
 		state = *p.PersonalResume
+		held = false
 	}
 	snap := snapshotOf(state)
+	if snap != nil {
+		snap.AutoplayHeld = held
+	}
 	if snap == nil {
 		// Nothing queued. Forget rather than leave a stale queue to come back
 		// after the listener has cleared it.

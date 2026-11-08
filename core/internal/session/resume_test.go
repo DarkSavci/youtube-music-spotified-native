@@ -238,3 +238,27 @@ func TestARestoredPositionIsNotCountedAsListening(t *testing.T) {
 		t.Fatalf("a second of listening was logged as a play: %+v", logs)
 	}
 }
+
+// Clearing the queue says autoplay is to leave it alone; quitting and coming
+// back must not take that back.
+func TestAClearsHoldOnAutoplaySurvivesARestart(t *testing.T) {
+	store := &memResume{}
+	k := &Keeper{Store: store, UserID: 1}
+	k.save(context.Background(), Projection{State: sessionWith(2, 1, 0), AutoplayHeld: true})
+
+	snap := LoadSnapshot(context.Background(), store, 1)
+	if snap == nil || !snap.AutoplayHeld {
+		t.Fatalf("the hold was not saved: %+v", snap)
+	}
+	h := NewHub(clock.System{}, DefaultSettings(), nil)
+	h.Restore(snap)
+	if !h.Projection().AutoplayHeld {
+		t.Fatal("the hold did not come back")
+	}
+
+	// Without a clear there is nothing to hold.
+	k.save(context.Background(), Projection{State: sessionWith(2, 1, 0)})
+	if snap := LoadSnapshot(context.Background(), store, 1); snap == nil || snap.AutoplayHeld {
+		t.Fatalf("a hold appeared from nowhere: %+v", snap)
+	}
+}
