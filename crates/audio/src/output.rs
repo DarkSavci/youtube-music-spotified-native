@@ -528,7 +528,9 @@ impl Feed {
         self.shared.delay.store(micros, Ordering::Relaxed);
     }
 
-    /// The device has gone: unplugged, or taken by the system.
+    /// The device has gone: unplugged, or taken by the system. Said by the
+    /// exclusive stream, which only Windows has; cpal says it itself.
+    #[cfg_attr(not(windows), allow(dead_code))]
     pub(crate) fn lost(&self) {
         self.shared.lost.store(true, Ordering::Relaxed);
     }
