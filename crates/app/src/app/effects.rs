@@ -169,6 +169,12 @@ impl App {
                 }
             }
             Effect::SignIn => self.sign_in(ctx),
+            Effect::CancelSignIn => self.cancel_sign_in(),
+            Effect::RaiseSignInBrowser => {
+                if let Some(control) = &self.sign_in {
+                    control.raise();
+                }
+            }
             Effect::SwitchAccount(id) => {
                 self.change_account(ctx, super::accounts::Change::Switch(id));
             }

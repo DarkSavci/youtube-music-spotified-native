@@ -122,11 +122,19 @@ fn an_entry_that_cannot_be_chosen_says_so_and_is_stepped_over() {
         name: "Ada".into(),
         ..Default::default()
     });
-    state.signing_in = true;
+    let mut saved = crate::accounts::Accounts::default();
+    saved.add(crate::accounts::new_account("Grace"));
+    saved.add(crate::accounts::new_account("Ada"));
+    state.accounts = saved;
+    // While a sign-in is under way no other account can be switched to,
+    // but the sign-in itself can always be brought back.
+    state.sign_in = crate::state::SignInStage::Browser;
     state.account_menu_asks = 1;
     let harness = harness(state);
-    let add = harness.get_by_label("Finish in your browser…");
-    assert!(add.accesskit_node().is_disabled());
+    let other = harness.get_by_label("Account: Grace");
+    assert!(other.accesskit_node().is_disabled());
+    let finish = harness.get_by_label("Finish signing in…");
+    assert!(!finish.accesskit_node().is_disabled());
 }
 
 /// The playlist, with its first song by `artists`.

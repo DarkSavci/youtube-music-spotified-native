@@ -4,7 +4,9 @@ use spotified_client::models::{Account, Channel};
 
 use super::*;
 use crate::accounts::{self, Accounts};
-use crate::state::Dialog;
+use crate::backend::Response;
+use crate::sidecar::CoreStatus;
+use crate::state::{Dialog, SignInStage};
 
 /// Two saved accounts, the second in use. Returns their ids.
 fn two_accounts(state: &mut State) -> (String, String) {
@@ -40,7 +42,7 @@ fn one_account_change_is_finished_before_another_begins() {
     let mut state = ready();
     let (ada, _) = two_accounts(&mut state);
     // A sign-in is open in the browser.
-    apply(&mut state, Action::SignIn);
+    apply(&mut state, Action::StartSignIn);
     assert!(apply(&mut state, Action::SwitchAccount(ada.clone())).is_empty());
     apply(&mut state, Action::SignInFailed("closed".into()));
     // The core is starting again on another account.
@@ -154,4 +156,101 @@ fn channels_are_asked_for_again_only_of_a_signed_in_account() {
         apply(&mut state, Action::RefreshChannels),
         [Effect::Fetch(Request::Channels)]
     );
+}
+
+fn signed_in_as(name: &str) -> Account {
+    Account {
+        name: name.into(),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn signing_in_says_what_will_happen_before_opening_the_browser() {
+    let mut state = ready();
+    assert!(apply(&mut state, Action::SignIn).is_empty());
+    assert_eq!(state.dialog, Some(Dialog::SignIn));
+    assert!(!state.signing_in());
+    assert_eq!(apply(&mut state, Action::StartSignIn), [Effect::SignIn]);
+    assert_eq!(state.sign_in, SignInStage::Browser);
+    // A second press while the browser is open starts nothing more.
+    assert!(apply(&mut state, Action::StartSignIn).is_empty());
+}
+
+#[test]
+fn a_sign_in_goes_through_its_stages_and_ends_with_who_signed_in() {
+    let mut state = ready();
+    apply(&mut state, Action::StartSignIn);
+    apply(&mut state, Action::SignInReading);
+    assert_eq!(state.sign_in, SignInStage::Reading);
+    apply(&mut state, Action::AccountChanged);
+    assert_eq!(state.sign_in, SignInStage::Starting);
+    // Too late to call off: the core is starting on the account.
+    assert!(apply(&mut state, Action::CancelSignIn).is_empty());
+    apply(
+        &mut state,
+        Action::Loaded(Box::new(Response::Account(Ok(Some(signed_in_as("Ada")))))),
+    );
+    assert_eq!(state.sign_in, SignInStage::Idle);
+    assert_eq!(state.dialog, None);
+    assert!(
+        state
+            .toasts
+            .iter()
+            .any(|toast| toast.text == "Signed in as Ada")
+    );
+}
+
+#[test]
+fn a_sign_in_can_be_put_away_cancelled_and_its_failure_shown_again() {
+    let mut state = ready();
+    apply(&mut state, Action::StartSignIn);
+    // Put away: the sign-in carries on.
+    apply(&mut state, Action::CloseDialog);
+    assert!(state.signing_in());
+    assert_eq!(
+        apply(&mut state, Action::ShowSignInBrowser),
+        [Effect::RaiseSignInBrowser]
+    );
+    assert_eq!(
+        apply(&mut state, Action::CancelSignIn),
+        [Effect::CancelSignIn]
+    );
+    assert!(!state.signing_in());
+    assert_eq!(state.dialog, None);
+
+    apply(&mut state, Action::StartSignIn);
+    apply(&mut state, Action::CloseDialog);
+    apply(&mut state, Action::SignInFailed("closed too soon".into()));
+    assert_eq!(state.dialog, Some(Dialog::SignIn));
+    assert_eq!(state.import_error.as_deref(), Some("closed too soon"));
+}
+
+#[test]
+fn a_session_youtube_will_not_take_is_signed_out_again() {
+    let mut state = ready();
+    let (_, grace) = two_accounts(&mut state);
+    apply(&mut state, Action::StartSignIn);
+    apply(&mut state, Action::AccountChanged);
+    let effects = apply(
+        &mut state,
+        Action::Loaded(Box::new(Response::Account(Ok(None)))),
+    );
+    assert!(effects.contains(&Effect::RemoveAccount(grace)));
+    assert_eq!(state.sign_in, SignInStage::Idle);
+    assert_eq!(state.dialog, Some(Dialog::SignIn));
+    assert!(state.import_error.is_some());
+}
+
+#[test]
+fn a_core_that_fails_to_start_on_a_new_sign_in_fails_the_sign_in() {
+    let mut state = ready();
+    apply(&mut state, Action::StartSignIn);
+    apply(&mut state, Action::AccountChanged);
+    apply(
+        &mut state,
+        Action::CoreChanged(CoreStatus::Failed("no core".into())),
+    );
+    assert_eq!(state.sign_in, SignInStage::Idle);
+    assert_eq!(state.import_error.as_deref(), Some("no core"));
 }

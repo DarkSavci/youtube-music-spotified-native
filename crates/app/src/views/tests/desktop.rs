@@ -214,3 +214,61 @@ fn a_problem_report_is_saved_from_settings_and_says_where_it_went() {
     harness.run();
     assert!(asked(&harness, |action| matches!(action, Action::OpenLogs)));
 }
+
+#[test]
+fn the_sign_in_dialog_says_what_will_happen_and_starts_only_when_asked() {
+    let mut state = state();
+    state.dialog = Some(crate::state::Dialog::SignIn);
+    state.sign_in_browser = Some("Microsoft Edge");
+    let mut harness = harness(state);
+    assert!(
+        harness
+            .query_by_label_contains("Microsoft Edge opens Google's sign-in page")
+            .is_some()
+    );
+    harness.get_by_label("Continue to Google").click();
+    harness.run();
+    assert!(asked(&harness, |action| matches!(
+        action,
+        Action::StartSignIn
+    )));
+}
+
+#[test]
+fn the_sign_in_dialog_can_be_cancelled_while_the_browser_is_open() {
+    let mut state = state();
+    state.dialog = Some(crate::state::Dialog::SignIn);
+    state.sign_in = crate::state::SignInStage::Browser;
+    let mut harness = harness(state);
+    assert!(
+        harness
+            .query_by_label("Finish signing in in your browser")
+            .is_some()
+    );
+    harness.get_by_label("Cancel").click();
+    harness.run();
+    assert!(asked(&harness, |action| matches!(
+        action,
+        Action::CancelSignIn
+    )));
+}
+
+#[test]
+fn a_failed_sign_in_says_why_and_offers_another_go() {
+    let mut state = state();
+    state.dialog = Some(crate::state::Dialog::SignIn);
+    state.import_error = Some("The browser window closed too soon.".into());
+    let mut harness = harness(state);
+    assert!(harness.query_by_label("Couldn't sign in").is_some());
+    assert!(
+        harness
+            .query_by_label("The browser window closed too soon.")
+            .is_some()
+    );
+    harness.get_by_label("Try again").click();
+    harness.run();
+    assert!(asked(&harness, |action| matches!(
+        action,
+        Action::StartSignIn
+    )));
+}

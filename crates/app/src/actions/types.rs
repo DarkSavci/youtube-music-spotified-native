@@ -402,9 +402,18 @@ pub enum Action {
     UpdateChanged(update::Status),
     /// Run the downloaded installer and quit.
     InstallUpdate,
+    /// Show the sign-in: what will happen before it starts, or how far it
+    /// has got once it has.
+    SignIn,
     /// Open a browser window to sign in with: the account it comes back
     /// with is added to those saved, and is the one in use.
-    SignIn,
+    StartSignIn,
+    /// Stop the sign-in under way and close its browser window.
+    CancelSignIn,
+    /// Bring the sign-in's browser window to the front.
+    ShowSignInBrowser,
+    /// The sign-in's browser window has gone and what it left is being read.
+    SignInReading,
     /// Ask whether the account in use is really to be signed out.
     SignOut,
     /// Use another of the saved accounts.
@@ -480,6 +489,10 @@ pub enum Effect {
     MigrationSeen,
     /// Run the browser sign-in, then restart the core on the new account.
     SignIn,
+    /// Call off the browser sign-in under way.
+    CancelSignIn,
+    /// Bring the sign-in's browser window to the front.
+    RaiseSignInBrowser,
     /// Restart the core on this saved account.
     SwitchAccount(String),
     /// Sign this saved account out and forget it; if it is the one in use,

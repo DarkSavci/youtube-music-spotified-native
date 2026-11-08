@@ -255,6 +255,8 @@ pub(super) fn opening_action(spec: &str) -> Option<Action> {
         "scroll" => Action::HoldScroll(value.parse().ok()?),
         // The newest notes, over whatever page is open.
         "whatsnew-dialog" => Action::ShowWhatsNew,
+        // The sign-in dialog, before anything has happened.
+        "signin" => Action::SignIn,
         // Every song of an artist's, and the order they are shown in.
         "artist-songs" => Action::Open(Page::ArtistSongs(value)),
         "songs-order" => Action::SetSongOrder(match value.as_str() {

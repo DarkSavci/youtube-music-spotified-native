@@ -28,6 +28,7 @@ mod queue;
 mod search;
 mod settings;
 mod sidebar;
+mod signin;
 mod skeleton;
 mod speed;
 mod stats;

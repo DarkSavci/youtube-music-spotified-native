@@ -216,6 +216,9 @@ pub fn apply(state: &mut State, action: Action) -> Vec<Effect> {
             if let (true, CoreStatus::Failed(message)) = (state.core_ready(), &status) {
                 state.toast_error(message.clone());
             }
+            if let CoreStatus::Failed(message) = &status {
+                account::core_failed(state, message);
+            }
             state.core = status;
             if !state.core_ready() {
                 return Vec::new();
@@ -532,6 +535,10 @@ pub fn apply(state: &mut State, action: Action) -> Vec<Effect> {
         Action::Video(ask) => video::asked(state, ask),
         Action::SwitchChannel(_)
         | Action::SignIn
+        | Action::StartSignIn
+        | Action::CancelSignIn
+        | Action::ShowSignInBrowser
+        | Action::SignInReading
         | Action::SignOut
         | Action::SwitchAccount(_)
         | Action::AskRemoveAccount(_)

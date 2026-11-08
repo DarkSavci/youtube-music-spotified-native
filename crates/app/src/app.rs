@@ -59,9 +59,12 @@ pub enum Event {
     Tray(TrayAction),
     /// A button on the taskbar thumbnail.
     Thumb(ThumbAction),
-    /// The browser sign-in ended: with the account it made, or with a
-    /// sentence saying why not.
-    SignedIn(Result<SavedAccount, String>),
+    /// The browser sign-in numbered so ended: with the account it made, or
+    /// with why not. A sign-in that was cancelled says nothing.
+    SignedIn(u64, Result<SavedAccount, String>),
+    /// The browser sign-in numbered so has had its window close, and is
+    /// reading back what it left.
+    SignInReading(u64),
     /// A look for a newer yt-dlp that was asked for ended, with what there
     /// is to say of it.
     ResolverUpdated(Result<String, String>),
@@ -165,6 +168,10 @@ pub struct App {
     accounts: AccountStore,
     /// What is to change about them once the core has stopped.
     pending_change: Option<accounts::Change>,
+    /// The browser sign-in under way, and its number: what it reports
+    /// under an older number is from one that was cancelled.
+    sign_in: Option<std::sync::Arc<crate::signin::Control>>,
+    sign_in_run: u64,
     /// The Electron app's profile, and what has been brought from it.
     mover: migration::Mover,
     /// When to look for a newer yt-dlp next; `None` for a copy that leaves
@@ -228,6 +235,8 @@ impl App {
         state.themes = themes::list(&themes_folder);
         state.skins = skins::list(&launch.paths.skins_folder());
         state.milkdrop.presets = milkdrop::list_presets(&launch.paths.milkdrop_folder()).len();
+        // A few files looked for, so the sign-in can name what it opens.
+        state.sign_in_browser = crate::signin::browser_name();
         // What the system is set to is not known until a frame has run;
         // until then, dark, which `wear_theme` puts right.
         let theme = &state.settings;
@@ -342,6 +351,8 @@ impl App {
             mini_made: false,
             accounts,
             pending_change: None,
+            sign_in: None,
+            sign_in_run: 0,
             mover,
             resolver_due,
             report_folder,
@@ -520,13 +531,23 @@ impl App {
             }
             Event::Together(event) => self.heard_from_relay(event),
             Event::Media(action) => self.actions.push(action),
-            Event::SignedIn(Ok(account)) => {
+            Event::SignedIn(run, _) if run != self.sign_in_run || self.sign_in.is_none() => {
+                log::info!("a cancelled sign-in has ended");
+            }
+            Event::SignedIn(_, Ok(account)) => {
+                self.sign_in = None;
                 log::info!("signed in; restarting the playback service");
                 self.change_account(ctx, accounts::Change::Add(account));
             }
-            Event::SignedIn(Err(reason)) => {
+            Event::SignedIn(_, Err(reason)) => {
+                self.sign_in = None;
                 log::warn!("sign-in failed: {reason}");
                 self.actions.push(Action::SignInFailed(reason));
+            }
+            Event::SignInReading(run) => {
+                if run == self.sign_in_run {
+                    self.actions.push(Action::SignInReading);
+                }
             }
             Event::Tray(action) => self.tray_asked(ctx, action),
             Event::Session(session::Update::Projection(projection)) => {

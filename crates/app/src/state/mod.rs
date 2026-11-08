@@ -80,6 +80,8 @@ pub enum Dialog {
     },
     /// Sign the account in use out?
     SignOut,
+    /// Signing in: what will happen, how far it has got, or why it failed.
+    SignIn,
     /// Forget a saved account?
     RemoveAccount {
         id: String,
@@ -97,6 +99,19 @@ pub enum Dialog {
         name: String,
         track_ids: Vec<String>,
     },
+}
+
+/// How far a sign-in has got.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub enum SignInStage {
+    #[default]
+    Idle,
+    /// The browser window is open for the person to sign in with.
+    Browser,
+    /// The window has gone, and the sign-in it left is being read.
+    Reading,
+    /// The core is starting on the new account, to say who it is.
+    Starting,
 }
 
 /// Why playback is not going on, when it is something the listener can
@@ -365,11 +380,19 @@ pub struct State {
     pub import_error: Option<String>,
     /// Whether the app is set to start with Windows.
     pub starts_at_login: bool,
-    /// A browser window is open for the person to sign in with.
-    pub signing_in: bool,
+    /// How far a sign-in has got, if one is under way.
+    pub sign_in: SignInStage,
+    /// What the browser a sign-in opens is called, when it is known.
+    pub sign_in_browser: Option<&'static str>,
 }
 
 impl State {
+    /// Whether a sign-in is under way, from the browser opening until the
+    /// new account is known.
+    pub fn signing_in(&self) -> bool {
+        self.sign_in != SignInStage::Idle
+    }
+
     pub fn new(settings: Settings) -> Self {
         Self {
             palette: theme::DARK,
@@ -448,7 +471,8 @@ impl State {
             volume_before_mute: DEFAULT_VOLUME,
             migration: Migration::default(),
             import_error: None,
-            signing_in: false,
+            sign_in: SignInStage::Idle,
+            sign_in_browser: None,
             starts_at_login: false,
         }
     }

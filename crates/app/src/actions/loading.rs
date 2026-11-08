@@ -403,8 +403,9 @@ fn store_rest(state: &mut State, response: Response) -> Vec<Effect> {
         }
         // Only a signed-in account has channels to ask after.
         Response::Account(result) => {
+            let signed_in = super::account::account_known(state, &result);
             state.account = result.ok().flatten();
-            return match &state.account {
+            let mut effects = match &state.account {
                 Some(account) => {
                     // The list of saved accounts learns what this one is
                     // called, to tell it from the others.
@@ -422,6 +423,8 @@ fn store_rest(state: &mut State, response: Response) -> Vec<Effect> {
                     Vec::new()
                 }
             };
+            effects.extend(signed_in);
+            return effects;
         }
         // What the library shows was changed ahead of this answer. Either
         // way the core now has the last word on it.

@@ -161,28 +161,51 @@ impl App {
 
     /// Opens the browser for a sign-in, which becomes a new saved account.
     pub(super) fn sign_in(&mut self, ctx: &egui::Context) {
+        // One at a time: one still under way is called off first.
+        self.cancel_sign_in();
         let account = accounts::new_account("New account");
         let credentials = match self.accounts.credentials_for(&account) {
             Ok(credentials) => credentials,
             Err(error) => return self.actions.push(Action::SignInFailed(error.to_string())),
         };
+        self.sign_in_run += 1;
+        let run = self.sign_in_run;
+        let control = std::sync::Arc::new(signin::Control::default());
+        self.sign_in = Some(control.clone());
         // The browser stays open for as long as the person takes.
         let scratch = self.paths.config.clone();
         let folder = self.accounts.directory(Some(&account));
-        let done = waking(ctx, &self.events_tx, Event::SignedIn);
+        let done = waking(ctx, &self.events_tx, move |result| {
+            Event::SignedIn(run, result)
+        });
+        let reading = waking(ctx, &self.events_tx, move |()| Event::SignInReading(run));
         let spawned = std::thread::Builder::new()
             .name("sign-in".into())
-            .spawn(move || match signin::sign_in(&scratch, &credentials) {
-                Ok(()) => done(Ok(account)),
-                Err(error) => {
-                    // The folder was made for this sign-in and holds
-                    // nothing else.
-                    let _ = std::fs::remove_dir_all(folder);
-                    done(Err(error.to_string()));
+            .spawn(move || {
+                match signin::sign_in(&scratch, &credentials, &control, || reading(())) {
+                    Ok(()) => done(Ok(account)),
+                    Err(error) => {
+                        // The folder was made for this sign-in and holds
+                        // nothing else.
+                        let _ = std::fs::remove_dir_all(folder);
+                        if !matches!(error, signin::SignInError::Cancelled) {
+                            done(Err(error.to_string()));
+                        }
+                    }
                 }
             });
         if let Err(error) = spawned {
+            self.sign_in = None;
             self.actions.push(Action::SignInFailed(error.to_string()));
+        }
+    }
+
+    /// Calls off the sign-in under way, if there is one: its browser is
+    /// closed and whatever it ends with is not listened to.
+    pub(super) fn cancel_sign_in(&mut self) {
+        if let Some(control) = self.sign_in.take() {
+            log::info!("the sign-in was cancelled");
+            control.cancel();
         }
     }
 

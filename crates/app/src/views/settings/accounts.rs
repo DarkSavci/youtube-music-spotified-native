@@ -83,15 +83,18 @@ pub(super) fn show(state: &State, ui: &mut Ui, actions: &mut Vec<Action>) {
     ui.add_space(8.0);
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 8.0;
-        ui.add_enabled_ui(!busy, |ui| {
-            let add = if state.signing_in {
-                "Finish in your browser…"
+        // A sign-in under way can always be brought back to the front.
+        ui.add_enabled_ui(!busy || state.signing_in(), |ui| {
+            let add = if state.signing_in() {
+                "Finish signing in…"
             } else {
                 "Add Google account"
             };
             if widgets::pill_button(ui, palette, add).clicked() {
                 actions.push(Action::SignIn);
             }
+        });
+        ui.add_enabled_ui(!busy, |ui| {
             if saved.active.is_some()
                 && widgets::outline_button(ui, palette, "Refresh channels").clicked()
             {
@@ -99,25 +102,6 @@ pub(super) fn show(state: &State, ui: &mut Ui, actions: &mut Vec<Action>) {
             }
         });
     });
-
-    let note = if let Some(error) = &state.import_error {
-        Some((error.as_str(), palette.danger))
-    } else if state.signing_in {
-        Some((
-            "Sign in to YouTube Music in the browser window. It closes by itself when you are in.",
-            palette.secondary,
-        ))
-    } else {
-        None
-    };
-    if let Some((text, color)) = note {
-        ui.add_space(6.0);
-        ui.label(
-            egui::RichText::new(text)
-                .font(theme::regular(12.0))
-                .color(color),
-        );
-    }
 }
 
 /// The earlier, Electron app, when it is on this computer: what it has,

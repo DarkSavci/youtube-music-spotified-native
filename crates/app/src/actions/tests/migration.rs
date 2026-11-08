@@ -156,7 +156,7 @@ fn nothing_ticked_is_nothing_to_bring() {
 fn the_move_waits_for_an_account_change_under_way() {
     let mut state = ready();
     looked(&mut state, true);
-    state.signing_in = true;
+    state.sign_in = crate::state::SignInStage::Browser;
     assert!(apply(&mut state, Action::StartMigration).is_empty());
     assert_eq!(state.migration.running, None);
 }

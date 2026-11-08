@@ -3,7 +3,7 @@
 
 use eframe::egui::{self, Align, Frame, Key, Layout, Margin, TextEdit, Ui};
 
-use super::{changelog, migration, widgets};
+use super::{changelog, migration, signin, widgets};
 use crate::actions::Action;
 use crate::state::{Dialog, Page, State};
 use crate::theme::{self, Icon};
@@ -17,6 +17,8 @@ const NOTES_WIDTH: f32 = 560.0;
 const NOTES_SHOWN: usize = 3;
 /// The move from the old app lists what it found, a line or two for each.
 const MIGRATION_WIDTH: f32 = 520.0;
+/// Signing in says what will happen in a few sentences and steps.
+const SIGN_IN_WIDTH: f32 = 460.0;
 
 pub fn show(state: &State, ui: &mut Ui, actions: &mut Vec<Action>) {
     let Some(dialog) = &state.dialog else {
@@ -32,17 +34,23 @@ pub fn show(state: &State, ui: &mut Ui, actions: &mut Vec<Action>) {
     // stage is laid out afresh, or it would keep the height of the tallest.
     let id = match dialog {
         Dialog::Migration => egui::Id::new("dialog").with(migration::stage(state)),
+        Dialog::SignIn => egui::Id::new("dialog")
+            .with("sign-in")
+            .with(state.sign_in)
+            .with(state.import_error.is_some()),
         _ => egui::Id::new("dialog"),
     };
     let modal = egui::Modal::new(id).frame(frame).show(ui.ctx(), |ui| {
         ui.set_width(match dialog {
             Dialog::WhatsNew => NOTES_WIDTH.min(ui.ctx().content_rect().width() - 80.0),
             Dialog::Migration => MIGRATION_WIDTH.min(ui.ctx().content_rect().width() - 80.0),
+            Dialog::SignIn => SIGN_IN_WIDTH.min(ui.ctx().content_rect().width() - 80.0),
             _ => WIDTH,
         });
         match dialog {
             Dialog::WhatsNew => whats_new(state, ui, actions),
             Dialog::Migration => migration::dialog(state, ui, actions),
+            Dialog::SignIn => signin::dialog(state, ui, actions),
             Dialog::NewPlaylist { name, track_ids } => {
                 let note = match track_ids.len() {
                     0 => None,

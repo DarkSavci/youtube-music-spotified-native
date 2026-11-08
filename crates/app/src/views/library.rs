@@ -134,26 +134,29 @@ fn note(state: &State, ui: &mut Ui, title: &str, text: &str, more: impl FnOnce(&
 fn unavailable(state: &State, ui: &mut Ui, actions: &mut Vec<Action>, message: &str) {
     let palette = &state.palette;
     let signed_out = state.account.is_none();
-    let (title, text) = match (&state.import_error, signed_out, state.signing_in) {
-        (Some(error), ..) => ("Signed out", error.as_str()),
-        (None, true, true) => (
+    let (title, text) = match (signed_out, state.signing_in()) {
+        (true, true) => ("Signing in", "Finish signing in in the browser window."),
+        (true, false) => (
             "Signed out",
-            "Sign in in the browser window. It closes by itself once you are in.",
+            "Sign in to see your library, likes and playlists.",
         ),
-        (None, true, false) => ("Signed out", "Sign in to see your library."),
-        (None, false, _) => ("Could not load your library", message),
+        (false, _) => ("Could not load your library", message),
     };
     note(state, ui, title, text, |ui| {
         if !signed_out {
             return;
         }
-        if state.signing_in {
-            widgets::spinner(ui, palette, 18.0);
-            return;
-        }
         ui.horizontal_wrapped(|ui| {
-            if widgets::chip(ui, palette, "Sign in", false).clicked() {
+            let label = if state.signing_in() {
+                "Finish signing in…"
+            } else {
+                "Sign in"
+            };
+            if widgets::chip(ui, palette, label, false).clicked() {
                 actions.push(Action::SignIn);
+            }
+            if state.signing_in() {
+                return;
             }
             // The earlier app is on this computer, signed in or not.
             if state.migration.found.is_some()

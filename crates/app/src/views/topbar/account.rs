@@ -78,8 +78,9 @@ fn chip(state: &State, ui: &mut Ui, name: &str) -> egui::Response {
 /// to sign in as well.
 fn sign_in(state: &State, ui: &mut Ui, actions: &mut Vec<Action>) {
     let palette = &state.palette;
-    let label = if state.signing_in {
-        "Finish in your browser…"
+    // While the browser is open this brings the sign-in back to the front.
+    let label = if state.signing_in() {
+        "Finish signing in…"
     } else {
         "Sign in"
     };
@@ -88,12 +89,7 @@ fn sign_in(state: &State, ui: &mut Ui, actions: &mut Vec<Action>) {
         .painter()
         .layout_no_wrap(label.to_owned(), font, palette.text);
     let size = vec2(text.size().x + 24.0, 26.0);
-    let sense = if state.signing_in {
-        Sense::hover()
-    } else {
-        Sense::click()
-    };
-    let (rect, response) = ui.allocate_exact_size(size, sense);
+    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
     widgets::name(ui, &response, "Sign in to YouTube Music");
     let lift = widgets::hover(ui, &response);
     let fill = crate::tint::blend(palette.surface, palette.surface_active, lift);
@@ -233,12 +229,16 @@ fn switcher(state: &State, menu: &mut Menu<'_>) -> Option<Action> {
             chosen = Some(Action::SwitchAccount(account.id.clone()));
         }
     }
-    let add = if state.signing_in {
-        "Finish in your browser…"
+    let add = if state.signing_in() {
+        "Finish signing in…"
     } else {
         "Add Google account"
     };
-    if menu.entry(Entry::new(add).icon(Icon::Plus).enabled(free)) {
+    if menu.entry(
+        Entry::new(add)
+            .icon(Icon::Plus)
+            .enabled(free || state.signing_in()),
+    ) {
         chosen = Some(Action::SignIn);
     }
     chosen
