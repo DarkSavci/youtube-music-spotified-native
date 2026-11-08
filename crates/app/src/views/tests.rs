@@ -13,6 +13,7 @@ mod player;
 mod selection;
 mod shell;
 mod skinned;
+mod sound;
 mod together;
 mod together_room;
 mod video;

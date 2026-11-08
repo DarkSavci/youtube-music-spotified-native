@@ -30,6 +30,17 @@
   loaded when MilkDrop's window is opened, so it can be replaced with any
   other build of itself. Its licence is `libprojectM-LICENSE.txt`.
   https://github.com/projectM-visualizer/projectm
+- **Symphonia**'s Matroska and WebM demuxer, `symphonia-format-mkv` 0.6.1,
+  and its MP4 demuxer, `symphonia-format-isomp4` 0.6.1 (MPL 2.0, Copyright
+  (c) the Symphonia contributors), in `third_party/symphonia-format-mkv/` and
+  `third_party/symphonia-format-isomp4/`, changed so that the padding at the
+  end of an Opus track, and the encoder delay and padding of an AAC track,
+  are not played; `PATCHED.md` in each says what changed. Their licence is
+  the `LICENSE` beside each. https://github.com/pdeljanov/Symphonia
+- **AutoEQ** headphone corrections (MIT, Copyright (c) 2018-2022 Jaakko
+  Pasanen), fetched from the project's published results when a listener
+  looks for their headphones; the measurements are by the reviewers each
+  profile names. https://github.com/jaakkopasanen/AutoEq
 - **Lucide** icons (ISC, Copyright (c) Lucide Icons and Contributors), in
   `crates/app/assets/icons/`. Stroke and fill colours are rewritten to white
   so the interface can tint them.

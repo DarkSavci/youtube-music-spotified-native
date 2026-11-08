@@ -167,6 +167,14 @@ impl Session {
     }
 
     /// Takes effect from the next track.
+    pub fn set_normalise_albums(&self, on: bool) {
+        self.shared.engine.set_normalise_albums(on);
+    }
+
+    pub fn set_exclusive_output(&self, on: bool) {
+        self.shared.engine.set_exclusive(on);
+    }
+
     pub fn set_normalise_volume(&self, on: bool) {
         self.shared.engine.set_normalise(on);
     }

@@ -301,6 +301,8 @@ pub struct Settings {
     pub autoplay: bool,
     /// What the queue steps over.
     pub blocked: Blocked,
+    /// The stream to ask for: "high" or "standard".
+    pub audio_quality: &'static str,
 }
 
 /// The songs, artists and albums the listener never wants played, by id.

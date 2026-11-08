@@ -157,6 +157,7 @@ fn settings_are_written_as_the_core_reads_them() {
             artists: vec!["UCb".into()],
             albums: Vec::new(),
         },
+        audio_quality: "standard",
     };
     assert_eq!(
         json!(settings),
@@ -168,6 +169,7 @@ fn settings_are_written_as_the_core_reads_them() {
             "cacheMaxMB": 2048,
             "autoplay": false,
             "blocked": { "tracks": ["a"], "artists": ["UCb"], "albums": [] },
+            "audioQuality": "standard",
         })
     );
 }

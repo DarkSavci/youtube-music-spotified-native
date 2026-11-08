@@ -220,7 +220,7 @@ fn settings_offer_the_skins_and_the_ways_to_get_more() {
     let mut state = state();
     state.nav.open(Page::Settings);
     // The section is far down the page: held where it can be reached.
-    state.held_scroll = Some(1500.0);
+    state.held_scroll = Some(2020.0);
     state.skins = vec![skins::Choice {
         file: "Base 2.91.wsz".into(),
     }];
@@ -339,7 +339,7 @@ fn settings_open_milkdrop_and_fetch_its_presets() {
     use crate::milkdrop::Ask as MilkDrop;
     let mut state = state();
     state.nav.open(Page::Settings);
-    state.held_scroll = Some(1700.0);
+    state.held_scroll = Some(2220.0);
     let mut harness = harness(state);
     harness.get_by_label("Open MilkDrop").click();
     harness.get_by_label("Get presets").click();

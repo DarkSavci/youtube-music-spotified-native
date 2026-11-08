@@ -104,6 +104,155 @@ impl VolumeLevel {
     }
 }
 
+/// How good a stream is asked of YouTube.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum StreamQuality {
+    /// The best there is: Opus at about 256 kbps with Premium, about 160
+    /// without.
+    #[default]
+    High,
+    /// At most about 170 kbps: Opus at about 130, or AAC at 128.
+    Standard,
+}
+
+impl StreamQuality {
+    pub const EVERY: [StreamQuality; 2] = [StreamQuality::High, StreamQuality::Standard];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            StreamQuality::High => "High",
+            StreamQuality::Standard => "Standard",
+        }
+    }
+
+    /// The name the core knows it by.
+    pub fn for_core(self) -> &'static str {
+        match self {
+            StreamQuality::High => "high",
+            StreamQuality::Standard => "standard",
+        }
+    }
+}
+
+/// A set of sound settings made for one purpose, set in one go. Moving any
+/// of what it sets makes the settings "Custom"; what it leaves as set
+/// (the equalizer in Balanced, say) can be moved freely.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SoundPreset {
+    /// The track as YouTube serves it: nothing evened out, shaped, faded or
+    /// sped up. Below full scale, every sample reaches the device as it was
+    /// decoded (at the device's rate).
+    Untouched,
+    /// Albums evened out, which turns loud masters down in float and so
+    /// leaves no overs to limit; nothing else. Every change measured clean
+    /// to below -100 dB.
+    BestQuality,
+    /// Tracks evened out and faded into each other; the equalizer, speed
+    /// and balance as set.
+    Balanced,
+    /// Balanced, on a lighter stream.
+    DataSaver,
+}
+
+impl SoundPreset {
+    pub const EVERY: [SoundPreset; 4] = [
+        SoundPreset::Untouched,
+        SoundPreset::BestQuality,
+        SoundPreset::Balanced,
+        SoundPreset::DataSaver,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            SoundPreset::Untouched => "Untouched",
+            SoundPreset::BestQuality => "Best quality",
+            SoundPreset::Balanced => "Balanced",
+            SoundPreset::DataSaver => "Data saver",
+        }
+    }
+
+    pub fn about(self) -> &'static str {
+        match self {
+            SoundPreset::Untouched => {
+                "Every song exactly as YouTube sends it: no levelling, equalizer, \
+                 crossfade or speed. Loud songs differ in level from quiet ones."
+            }
+            SoundPreset::BestQuality => {
+                "Levels whole albums rather than single songs, so loud songs are turned \
+                 down without clipping and albums keep their quiet parts. No crossfade, \
+                 equalizer or speed. Headphone correction stays on if you've chosen it."
+            }
+            SoundPreset::Balanced => {
+                "Levels each song and crossfades between them. Your equalizer, speed and \
+                 balance stay as you set them."
+            }
+            SoundPreset::DataSaver => {
+                "Balanced, on a lighter stream that uses about half the data."
+            }
+        }
+    }
+
+    /// Sets what this preset sets, and leaves the rest.
+    pub fn apply(self, settings: &mut Settings) {
+        settings.gapless = true;
+        settings.volume_boost = false;
+        match self {
+            SoundPreset::Untouched | SoundPreset::BestQuality => {
+                let untouched = self == SoundPreset::Untouched;
+                settings.stream_quality = StreamQuality::High;
+                settings.normalise_volume = !untouched;
+                settings.normalise_albums = !untouched;
+                settings.volume_level = VolumeLevel::Normal;
+                settings.equalizer_on = false;
+                if untouched {
+                    settings.headphones_on = false;
+                }
+                settings.crossfade_seconds = 0;
+                settings.playback_speed = 1.0;
+                settings.balance = 0.0;
+            }
+            SoundPreset::Balanced | SoundPreset::DataSaver => {
+                settings.stream_quality = if self == SoundPreset::DataSaver {
+                    StreamQuality::Standard
+                } else {
+                    StreamQuality::High
+                };
+                settings.normalise_volume = true;
+                settings.normalise_albums = false;
+                settings.volume_level = VolumeLevel::Normal;
+                settings.crossfade_seconds = DEFAULT_CROSSFADE_SECONDS;
+            }
+        }
+    }
+
+    /// The preset the settings are at, if any: `None` is "Custom".
+    pub fn matching(settings: &Settings) -> Option<SoundPreset> {
+        SoundPreset::EVERY.into_iter().find(|preset| {
+            let mut applied = settings.clone();
+            preset.apply(&mut applied);
+            applied.sound_matches(settings)
+        })
+    }
+}
+
+impl Settings {
+    /// Whether the settings a preset may touch are the same in both.
+    fn sound_matches(&self, other: &Settings) -> bool {
+        self.stream_quality == other.stream_quality
+            && self.normalise_volume == other.normalise_volume
+            && self.normalise_albums == other.normalise_albums
+            && self.volume_level == other.volume_level
+            && self.equalizer_on == other.equalizer_on
+            && self.headphones_on == other.headphones_on
+            && self.crossfade_seconds == other.crossfade_seconds
+            && self.gapless == other.gapless
+            && self.volume_boost == other.volume_boost
+            && self.playback_speed == other.playback_speed
+            && self.balance == other.balance
+    }
+}
+
 /// A sound device to play through.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OutputDevice {
@@ -216,6 +365,20 @@ pub struct Settings {
     pub normalise_volume: bool,
     /// How loud that evening out leaves them.
     pub volume_level: VolumeLevel,
+    /// Even out albums, not tracks: the songs of an album that follow each
+    /// other in the queue are turned down alike, so a quiet interlude
+    /// stays quieter than the song after it, as the album was made.
+    pub normalise_albums: bool,
+    /// The stream asked of YouTube: the best there is, or a lighter one.
+    pub stream_quality: StreamQuality,
+    /// Hold the sound device for this app alone (WASAPI exclusive mode),
+    /// past the system's mixer and effects. Off by default: other apps go
+    /// silent on that device meanwhile.
+    pub exclusive_output: bool,
+    /// The headphones' correction, from AutoEQ, kept whole so that it needs
+    /// no network again; and whether it is on.
+    pub headphones: Option<crate::headphones::Correction>,
+    pub headphones_on: bool,
     /// Let the volume go past 100%, up to 200%. Off by default: past full
     /// scale a limiter has to hold the peaks down, which flattens loud
     /// passages.
@@ -311,6 +474,11 @@ impl Default for Settings {
             recent_searches_by: std::collections::BTreeMap::new(),
             normalise_volume: true,
             volume_level: VolumeLevel::Normal,
+            normalise_albums: false,
+            stream_quality: StreamQuality::High,
+            exclusive_output: false,
+            headphones: None,
+            headphones_on: true,
             volume_boost: false,
             output_device: None,
             gapless: true,
@@ -420,6 +588,9 @@ impl Settings {
             recent_searches: std::mem::take(&mut self.recent_searches),
             recent_searches_by: std::mem::take(&mut self.recent_searches_by),
             equalizer_presets: std::mem::take(&mut self.equalizer_presets),
+            // The listener's headphones, not a preference about sound.
+            headphones: self.headphones.take(),
+            headphones_on: self.headphones_on,
             blocked: std::mem::take(&mut self.blocked),
             device_id: std::mem::take(&mut self.device_id),
             ..fresh
@@ -539,6 +710,20 @@ mod tests {
             recent_searches_by: [("a:personal".to_owned(), vec!["moby".to_owned()])].into(),
             normalise_volume: false,
             volume_level: VolumeLevel::Loud,
+            normalise_albums: true,
+            stream_quality: StreamQuality::Standard,
+            exclusive_output: true,
+            headphones: Some(crate::headphones::Correction {
+                name: "Sennheiser HD 600".into(),
+                source: "oratory1990".into(),
+                filters: vec![crate::headphones::Filter {
+                    kind: crate::headphones::Kind::LowShelf,
+                    hz: 105.0,
+                    db: 6.5,
+                    q: 0.7,
+                }],
+            }),
+            headphones_on: false,
             volume_boost: true,
             output_device: Some(OutputDevice {
                 id: "wasapi:{0.0.0.00000000}.{a1}".into(),
@@ -629,6 +814,42 @@ mod tests {
             speed = clamp_speed(speed + SPEED_STEP);
         }
         assert_eq!(speed, 1.5);
+    }
+
+    #[test]
+    fn each_preset_is_recognised_once_applied_and_custom_once_moved() {
+        let mut settings = Settings {
+            equalizer_on: true,
+            playback_speed: 1.25,
+            ..Settings::default()
+        };
+        for preset in SoundPreset::EVERY {
+            preset.apply(&mut settings);
+            assert_eq!(SoundPreset::matching(&settings), Some(preset), "{preset:?}");
+        }
+        // What Balanced leaves alone can move without leaving it.
+        SoundPreset::Balanced.apply(&mut settings);
+        settings.equalizer_on = !settings.equalizer_on;
+        settings.playback_speed = 1.5;
+        assert_eq!(
+            SoundPreset::matching(&settings),
+            Some(SoundPreset::Balanced)
+        );
+        // What it sets cannot.
+        settings.crossfade_seconds = 2;
+        assert_eq!(SoundPreset::matching(&settings), None);
+        // Untouched leaves nothing on.
+        SoundPreset::Untouched.apply(&mut settings);
+        assert!(!settings.normalise_volume && !settings.equalizer_on && !settings.headphones_on);
+        assert_eq!(
+            (settings.crossfade_seconds, settings.playback_speed),
+            (0, 1.0)
+        );
+        // A new profile is Balanced, as it always sounded.
+        assert_eq!(
+            SoundPreset::matching(&Settings::default()),
+            Some(SoundPreset::Balanced)
+        );
     }
 
     #[test]

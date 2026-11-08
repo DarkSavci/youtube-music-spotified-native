@@ -118,6 +118,34 @@ impl App {
                     apply_audio_settings(session, &self.state);
                 }
             }
+            Effect::ListHeadphones => {
+                let listed = waking(ctx, &self.events_tx, Event::Headphones);
+                let cache = self.paths.cache.clone();
+                let spawned =
+                    std::thread::Builder::new()
+                        .name("headphones".into())
+                        .spawn(move || {
+                            let agent = crate::update::agent();
+                            let found = crate::headphones::load_index(&agent, &cache);
+                            listed(found.map(std::sync::Arc::new));
+                        });
+                if let Err(error) = spawned {
+                    log::warn!("the headphone list could not be fetched: {error}");
+                }
+            }
+            Effect::FetchHeadphones(headphone) => {
+                let fetched = waking(ctx, &self.events_tx, Event::HeadphonesFetched);
+                let spawned =
+                    std::thread::Builder::new()
+                        .name("headphones".into())
+                        .spawn(move || {
+                            let agent = crate::update::agent();
+                            fetched(crate::headphones::fetch(&agent, &headphone));
+                        });
+                if let Err(error) = spawned {
+                    log::warn!("the correction could not be fetched: {error}");
+                }
+            }
             // On a thread of its own: the system can take a moment to say.
             Effect::ListOutputDevices => {
                 let listed = waking(ctx, &self.events_tx, Event::OutputDevices);
@@ -419,6 +447,8 @@ impl App {
 pub(super) fn apply_audio_settings(session: &Session, state: &State) {
     let settings = &state.settings;
     session.set_normalise_volume(settings.normalise_volume);
+    session.set_normalise_albums(settings.normalise_albums);
+    session.set_exclusive_output(settings.exclusive_output);
     session.set_loudness_target(settings.volume_level.lufs());
     session.set_equalizer(crate::equalizer::for_engine(settings));
     session.set_speed(state.speed());
@@ -434,6 +464,7 @@ pub(super) fn apply_audio_settings(session: &Session, state: &State) {
         cache_max_mb: u64::from(settings.cache_max_mb),
         autoplay: settings.autoplay,
         blocked: settings.blocked.for_core(),
+        audio_quality: settings.stream_quality.for_core(),
     });
 }
 

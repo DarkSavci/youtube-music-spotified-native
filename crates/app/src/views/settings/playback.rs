@@ -91,6 +91,14 @@ pub(super) fn show(state: &State, ui: &mut Ui, actions: &mut Vec<Action>) {
         row(state, ui, "Volume level", about, |ui| {
             volume_level(state, ui, actions);
         });
+        ui.add_space(BETWEEN);
+        let text = (
+            "Level whole albums",
+            "When songs from one album play in a row, they are turned down together, \
+             so quiet tracks stay quieter than loud ones, as on the album.",
+        );
+        let albums = settings.normalise_albums;
+        toggle(state, ui, actions, text, albums, Action::SetNormaliseAlbums);
     }
     ui.add_space(BETWEEN);
     let text = (

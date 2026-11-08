@@ -177,6 +177,9 @@ pub(super) fn show(state: &State, ui: &mut Ui, actions: &mut Vec<Action>, place:
         gains: std::array::from_fn(|band| knobs[band].shown),
         preamp: pre.shown,
         headroom: settings.equalizer_headroom,
+        // The sliders' own curve: the headphones' correction is not theirs
+        // to draw.
+        ..eq::Settings::default()
     };
     let points = (width / CURVE_STEP).ceil() as usize + 1;
     let drawn = curve(ui, &shown, rate, points);

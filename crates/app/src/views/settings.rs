@@ -13,6 +13,7 @@ use crate::update::Status;
 mod accounts;
 mod blocked;
 mod playback;
+mod sound;
 
 /// Cards stop growing here; a row's label and its control would otherwise
 /// drift apart on a wide window.
@@ -29,6 +30,9 @@ pub fn show(state: &State, ui: &mut Ui, actions: &mut Vec<Action>) {
     });
     section(state, ui, "Playback", |ui| {
         playback::show(state, ui, actions)
+    });
+    section(state, ui, "Sound quality", |ui| {
+        sound::show(state, ui, actions)
     });
     section(state, ui, "Equalizer", |ui| {
         equalizer::panel(state, ui, actions, equalizer::Place::Page);

@@ -67,7 +67,7 @@ fn the_queues_heading_opens_the_same_panel() {
 fn settings_shows_the_panel_too() {
     let mut state = state();
     state.nav.open(Page::Settings);
-    state.held_scroll = Some(860.0);
+    state.held_scroll = Some(1380.0);
     let mut harness = harness(state);
     harness.get_by_label("Equalizer on").click();
     harness.run();
@@ -142,7 +142,7 @@ fn the_wheel_over_a_slider_moves_it_a_step() {
 fn on_the_settings_page_the_wheel_scrolls_the_page_and_moves_no_slider() {
     let mut state = rock();
     state.nav.open(Page::Settings);
-    state.held_scroll = Some(860.0);
+    state.held_scroll = Some(1380.0);
     let mut harness = harness(state);
     harness.get_by_label("1 kHz").hover();
     harness.run();

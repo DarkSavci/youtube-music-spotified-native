@@ -294,6 +294,23 @@ pub enum Action {
     SetNormaliseVolume(bool),
     /// How loud evening out the loudness leaves the songs.
     SetVolumeLevel(VolumeLevel),
+    /// Even out albums as wholes, or each song by itself.
+    SetNormaliseAlbums(bool),
+    /// Set every sound setting a preset sets.
+    SetSoundPreset(crate::settings::SoundPreset),
+    /// The stream to ask YouTube for.
+    SetStreamQuality(crate::settings::StreamQuality),
+    /// Hold the sound device for this app alone, or share it.
+    SetExclusiveOutput(bool),
+    /// Headphone correction: switch it, forget it, or look for one.
+    SetHeadphonesOn(bool),
+    ForgetHeadphones,
+    SearchHeadphones(String),
+    /// AutoEQ's list arrived, or could not be had.
+    HeadphonesListed(Result<std::sync::Arc<Vec<crate::headphones::Headphone>>, String>),
+    /// Fetch this headphone's correction and use it.
+    ChooseHeadphones(crate::headphones::Headphone),
+    HeadphonesFetched(Result<crate::headphones::Correction, String>),
     /// Let the volume go past 100%, or hold it to that.
     SetVolumeBoost(bool),
     /// Play through this sound device, or with `None` through whichever
@@ -502,6 +519,11 @@ pub enum Effect {
     /// Ask the system what sound devices there are; the answer comes back
     /// as [`Action::OutputDevicesListed`].
     ListOutputDevices,
+    /// Fetch AutoEQ's list of headphones, or read the kept copy; the
+    /// answer comes back as [`Action::HeadphonesListed`].
+    ListHeadphones,
+    /// Fetch a headphone's correction; [`Action::HeadphonesFetched`].
+    FetchHeadphones(crate::headphones::Headphone),
     /// Name this channel in the credentials, then restart the core.
     SwitchChannel(String),
     OpenLogs,

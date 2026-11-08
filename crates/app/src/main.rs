@@ -17,6 +17,7 @@ mod channel;
 mod cli;
 mod equalizer;
 mod fonts;
+mod headphones;
 mod icon;
 mod images;
 mod logging;

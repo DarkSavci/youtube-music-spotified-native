@@ -33,6 +33,71 @@ pub(super) fn preferences(state: &mut State, action: Action) -> Vec<Effect> {
             state.settings.volume_level = level;
             heard()
         }
+        Action::SetNormaliseAlbums(on) => {
+            state.settings.normalise_albums = on;
+            heard()
+        }
+        Action::SetSoundPreset(preset) => {
+            if state.speed_pinned() && state.settings.playback_speed != 1.0 {
+                // A room's speed is the room's; the rest still applies.
+                state.toast("Listen Together keeps everyone at normal speed.");
+            }
+            preset.apply(&mut state.settings);
+            hold_position(state);
+            let mut effects = heard();
+            effects.push(Effect::ApplyEqualizer);
+            effects
+        }
+        Action::SetStreamQuality(quality) => {
+            state.settings.stream_quality = quality;
+            heard()
+        }
+        Action::SetExclusiveOutput(on) => {
+            state.settings.exclusive_output = on;
+            heard()
+        }
+        Action::SetHeadphonesOn(on) => {
+            state.settings.headphones_on = on;
+            vec![Effect::SaveSettings, Effect::ApplyEqualizer]
+        }
+        Action::ForgetHeadphones => {
+            state.settings.headphones = None;
+            vec![Effect::SaveSettings, Effect::ApplyEqualizer]
+        }
+        Action::SearchHeadphones(query) => {
+            state.headphones.query = query;
+            // The list is fetched the first time anyone looks.
+            if state.headphones.list.is_none() && !state.headphones.listing {
+                state.headphones.listing = true;
+                return vec![Effect::ListHeadphones];
+            }
+            Vec::new()
+        }
+        Action::HeadphonesListed(listed) => {
+            state.headphones.listing = false;
+            state.headphones.list = Some(listed);
+            Vec::new()
+        }
+        Action::ChooseHeadphones(headphone) => {
+            state.headphones.fetching = Some(headphone.name.clone());
+            vec![Effect::FetchHeadphones(headphone)]
+        }
+        Action::HeadphonesFetched(fetched) => {
+            state.headphones.fetching = None;
+            match fetched {
+                Ok(correction) => {
+                    state.toast(format!("Correcting for {}", correction.name));
+                    state.settings.headphones = Some(correction);
+                    state.settings.headphones_on = true;
+                    state.headphones.query.clear();
+                    vec![Effect::SaveSettings, Effect::ApplyEqualizer]
+                }
+                Err(why) => {
+                    state.toast_error(why);
+                    Vec::new()
+                }
+            }
+        }
         Action::SetOutputDevice(device) => {
             state.settings.output_device = device;
             heard()

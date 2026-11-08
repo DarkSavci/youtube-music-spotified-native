@@ -73,6 +73,8 @@ pub enum Event {
     Update(update::Status),
     /// The sound devices there are to play through.
     OutputDevices(Vec<crate::settings::OutputDevice>),
+    Headphones(Result<std::sync::Arc<Vec<crate::headphones::Headphone>>, String>),
+    HeadphonesFetched(Result<crate::headphones::Correction, String>),
     /// The line to a Listen Together relay has something to say.
     Together(together::Event),
     /// A test of a relay's address ended.
@@ -507,6 +509,10 @@ impl App {
             Event::Update(status) => self.actions.push(Action::UpdateChanged(status)),
             Event::OutputDevices(devices) => {
                 self.actions.push(Action::OutputDevicesListed(devices));
+            }
+            Event::Headphones(listed) => self.actions.push(Action::HeadphonesListed(listed)),
+            Event::HeadphonesFetched(fetched) => {
+                self.actions.push(Action::HeadphonesFetched(fetched));
             }
             Event::TogetherProbed(result) => {
                 self.actions

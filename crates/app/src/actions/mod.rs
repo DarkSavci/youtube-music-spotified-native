@@ -403,6 +403,16 @@ pub fn apply(state: &mut State, action: Action) -> Vec<Effect> {
         | Action::SetCrossfade(_)
         | Action::SetNormaliseVolume(_)
         | Action::SetVolumeLevel(_)
+        | Action::SetNormaliseAlbums(_)
+        | Action::SetSoundPreset(_)
+        | Action::SetStreamQuality(_)
+        | Action::SetExclusiveOutput(_)
+        | Action::SetHeadphonesOn(_)
+        | Action::ForgetHeadphones
+        | Action::SearchHeadphones(_)
+        | Action::HeadphonesListed(_)
+        | Action::ChooseHeadphones(_)
+        | Action::HeadphonesFetched(_)
         | Action::SetVolumeBoost(_)
         | Action::SetOutputDevice(_)
         | Action::ListOutputDevices

@@ -222,6 +222,12 @@ pub fn for_engine(settings: &Settings) -> eq::Settings {
         gains: settings.equalizer,
         preamp: settings.equalizer_preamp,
         headroom: settings.equalizer_headroom,
+        correction: settings
+            .headphones
+            .as_ref()
+            .filter(|_| settings.headphones_on)
+            .map(crate::headphones::Correction::for_engine)
+            .unwrap_or_default(),
     }
 }
 

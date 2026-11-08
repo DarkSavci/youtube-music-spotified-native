@@ -233,6 +233,8 @@ pub struct State {
     /// The sound devices there were to play through when Settings last
     /// asked.
     pub output_devices: Vec<crate::settings::OutputDevice>,
+    /// Looking for headphones to correct for.
+    pub headphones: crate::headphones::Search,
     pub nav: Nav,
     pub core: CoreStatus,
     pub settings: Settings,
@@ -376,6 +378,7 @@ impl State {
             skins: Vec::new(),
             skin: None,
             output_devices: Vec::new(),
+            headphones: crate::headphones::Search::default(),
             nav: Nav::default(),
             core: CoreStatus::Starting,
             settings,
