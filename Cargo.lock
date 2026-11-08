@@ -3931,7 +3931,7 @@ dependencies = [
 
 [[package]]
 name = "spotified"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "crossbeam-channel",
  "directories",
@@ -3972,7 +3972,7 @@ dependencies = [
 
 [[package]]
 name = "spotified-audio"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "cpal",
  "crossbeam-channel",
@@ -3986,7 +3986,7 @@ dependencies = [
 
 [[package]]
 name = "spotified-client"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "log",
  "serde",

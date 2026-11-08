@@ -45,7 +45,7 @@ android {
         targetSdk = 36
         // -PversionCode and -PversionName stamp a release's own version.
         versionCode = (findProperty("versionCode") as String?)?.toInt() ?: 1
-        versionName = (findProperty("versionName") as String?) ?: "0.6.0"
+        versionName = (findProperty("versionName") as String?) ?: "0.7.0"
         buildConfigField("String", "RELEASES_URL", "\"$RELEASES\"")
         ndk { abiFilters += abis }
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"

@@ -2,6 +2,35 @@
 
 Every release of Youtube Music Spotified Native, newest first.
 
+## 0.7.0 — 2026-11-08
+
+### New: sound quality
+
+- Settings has a Sound quality section with presets: Untouched, Best quality, Balanced and Data saver
+- See what is playing and how it reaches your device: the format, its bitrate, your device's rate, and anything on the way that costs quality
+- Headphone correction: search about nine thousand headphones measured for AutoEQ and make yours sound neutral, with or without the equalizer
+- Exclusive output on Windows takes the sound device for the app alone, bypassing Windows' mixer and sound effects
+- Level whole albums: songs from one album in a row are turned down together, so quiet tracks stay quiet
+- Choose the stream quality: High, or Standard to use less data
+
+### Better sound
+
+- Opus is chosen over AAC wherever it is as good, so most songs play at 48 kHz without being resampled
+- Gapless to the frame: the silence at the start of AAC songs and the padding at the end of every song are gone
+- Songs of one album that follow each other no longer crossfade
+- Nothing changes the sound when nothing is meant to: at full volume with every effect off, songs reach the device exactly as decoded
+- A much cleaner resampler, which no longer dulls everything above 17 kHz
+- Loud songs are held under full scale without pumping, and quiet detail survives on 16-bit devices
+- The level no longer drops a few seconds into a song when normalisation is on
+
+### Fixed on Android
+
+- The system equalizer no longer runs with every band flat
+
+### New on macOS and Linux
+
+- The desktop app on both, from the same release: an updater, sign-in, the tray, MilkDrop and music videos
+
 ## 0.6.0 — 2026-10-30
 
 ### Fixed on Android
