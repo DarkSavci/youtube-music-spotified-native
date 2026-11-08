@@ -143,6 +143,11 @@ impl Decoder {
         self.format
     }
 
+    /// Whether the stream is Opus; otherwise it is AAC.
+    pub fn is_opus(&self) -> bool {
+        self.is_opus
+    }
+
     /// The track's length, when the container states it.
     pub fn duration_ms(&self) -> Option<u64> {
         self.duration_ms
@@ -172,13 +177,35 @@ impl Decoder {
             }
 
             let channels = self.format.channels;
-            let frames = self.samples.len() / channels;
-            let skipped = self.skip_frames.min(frames);
+            let mut frames = self.samples.len() / channels;
+
+            // The demuxers mark what is not part of the track: an AAC
+            // encoder's delay and padding (from an MP4's edit list), an Opus
+            // track's padding (from WebM's DiscardPadding). libopus trims its
+            // own output; symphonia's AAC decoder does not, so it is done here.
+            let (trim_start, trim_end) = if self.is_opus {
+                (0, 0)
+            } else {
+                (
+                    packet.trim_start.get() as usize,
+                    packet.trim_end.get() as usize,
+                )
+            };
+            frames -= trim_end.min(frames);
+            self.samples.truncate(frames * channels);
+            let trimmed = trim_start.min(frames);
+
+            let skipped = self.skip_frames.min(frames - trimmed);
             self.skip_frames -= skipped;
+            let skipped = trimmed + skipped;
             if skipped == frames {
                 continue;
             }
-            let position_ms = self.position_ms(packet.pts) + frames_to_ms(skipped, self.format);
+            // The pts of a packet that starts in the encoder delay is
+            // negative; its first presented frame is at or after zero.
+            let position_ms = (self.signed_ms(packet.pts)
+                + frames_to_ms(skipped, self.format) as i64)
+                .max(0) as u64;
             return Ok(Some(Chunk {
                 samples: &self.samples[skipped * channels..],
                 position_ms,
@@ -218,6 +245,14 @@ impl Decoder {
         self.time_base
             .and_then(|base| base.calc_time(timestamp))
             .and_then(|time| u64::try_from(time.as_millis()).ok())
+            .unwrap_or(0)
+    }
+
+    /// `timestamp` in milliseconds, negative before the start of the track.
+    fn signed_ms(&self, timestamp: Timestamp) -> i64 {
+        self.time_base
+            .and_then(|base| base.calc_time(timestamp))
+            .and_then(|time| i64::try_from(time.as_millis()).ok())
             .unwrap_or(0)
     }
 }
