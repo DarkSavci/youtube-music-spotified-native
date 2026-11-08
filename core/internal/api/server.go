@@ -212,12 +212,10 @@ func New(d Deps) *Server {
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// The UI runs from a different origin in development.
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-	// The page is always another origin, so these must be listed to be read.
-	w.Header().Set("Access-Control-Expose-Headers", "Retry-After, X-Cache")
+	// No CORS headers: the apps call the core directly, never from a web
+	// page, so a browser is left to refuse any page that tries to read what
+	// the core says of the account. A preflight is answered with nothing a
+	// browser would take as leave to go on.
 	if r.Method == http.MethodOptions {
 		w.WriteHeader(http.StatusNoContent)
 		return
@@ -243,7 +241,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /v1/video-stream/{id}", s.handleVideoStream)
 	s.mux.HandleFunc("GET /v1/tracks/{id}/versions", s.handleTrackVersions)
 	s.mux.HandleFunc("GET /v1/radio/{id}", s.handleRadio)
-	s.mux.HandleFunc("POST /v1/session/radio", s.handleStartRadio)
+	s.mux.HandleFunc("POST /v1/session/radio", s.ownClient(s.handleStartRadio))
 	s.mux.HandleFunc("GET /v1/podcasts/{id}", s.handlePodcast)
 	s.mux.HandleFunc("GET /v1/tracks/{id}/lyrics", s.handleLyrics)
 	s.mux.HandleFunc("GET /v1/tracks/{id}/loudness", s.handleLoudness)
@@ -268,20 +266,20 @@ func (s *Server) routes() {
 	// The shell calls this after a sign-in writes new credentials. Without it
 	// the file changes and nothing reads it again until a restart, which is
 	// exactly what made signing in look like it did nothing.
-	s.mux.HandleFunc("POST /v1/auth/reload", s.handleAuthReload)
-	s.mux.HandleFunc("POST /v1/auth/sign-out", s.handleAuthSignOut)
+	s.mux.HandleFunc("POST /v1/auth/reload", s.ownClient(s.handleAuthReload))
+	s.mux.HandleFunc("POST /v1/auth/sign-out", s.ownClient(s.handleAuthSignOut))
 
 	// Playback. Resolution and byte transfer both stay on the Device: the
 	// stream URL is bound to this machine's address, so a proxy here preserves
 	// that binding rather than breaking it.
 	s.mux.HandleFunc("GET /v1/resolve/{id}", s.handleResolve)
 	s.mux.HandleFunc("GET /v1/stream/{id}", s.handleStream)
-	s.mux.HandleFunc("POST /v1/prefetch/{id}", s.handlePrefetch)
+	s.mux.HandleFunc("POST /v1/prefetch/{id}", s.ownClient(s.handlePrefetch))
 	s.mux.HandleFunc("GET /v1/downloads", s.handleDownloads)
-	s.mux.HandleFunc("POST /v1/downloads/{id}", s.handleDownload)
-	s.mux.HandleFunc("DELETE /v1/downloads/{id}", s.handleDownload)
+	s.mux.HandleFunc("POST /v1/downloads/{id}", s.ownClient(s.handleDownload))
+	s.mux.HandleFunc("DELETE /v1/downloads/{id}", s.ownClient(s.handleDownload))
 	s.mux.HandleFunc("GET /v1/cache", s.handleCache)
-	s.mux.HandleFunc("DELETE /v1/cache", s.handleCache)
+	s.mux.HandleFunc("DELETE /v1/cache", s.ownClient(s.handleCache))
 
 	// Control plane — ours, not YouTube's. No credentials involved, which is
 	// why these could later be served centrally.
@@ -300,18 +298,18 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("DELETE /v1/me/folders/{id}", s.ownClient(s.handleDeleteFolder))
 	s.mux.HandleFunc("POST /v1/me/library/organise", s.ownClient(s.handleOrganise))
 	s.mux.HandleFunc("POST /v1/me/library/saved", s.ownClient(s.handleSaveToLibrary))
-	s.mux.HandleFunc("POST /v1/migrate/history", s.handleMigrateHistory)
-	s.mux.HandleFunc("POST /v1/migrate/cache", s.handleMigrateCache)
+	s.mux.HandleFunc("POST /v1/migrate/history", s.ownClient(s.handleMigrateHistory))
+	s.mux.HandleFunc("POST /v1/migrate/cache", s.ownClient(s.handleMigrateCache))
 
 	// Session: projections stream out, commands come in. The same transport
 	// serves the local device and, later, a remote one.
-	s.mux.HandleFunc("POST /v1/session/register", s.handleSessionRegister)
-	s.mux.HandleFunc("POST /v1/session/command", s.handleSessionCommand)
-	s.mux.HandleFunc("POST /v1/session/engine-event", s.handleSessionEngineEvent)
-	s.mux.HandleFunc("POST /v1/session/capabilities", s.handleSessionCapabilities)
-	s.mux.HandleFunc("POST /v1/session/settings", s.handleSessionSettings)
-	s.mux.HandleFunc("GET /v1/session/events", s.handleSessionEvents)
-	s.mux.HandleFunc("GET /v1/session", s.handleSessionSnapshot)
+	s.mux.HandleFunc("POST /v1/session/register", s.ownClient(s.handleSessionRegister))
+	s.mux.HandleFunc("POST /v1/session/command", s.ownClient(s.handleSessionCommand))
+	s.mux.HandleFunc("POST /v1/session/engine-event", s.ownClient(s.handleSessionEngineEvent))
+	s.mux.HandleFunc("POST /v1/session/capabilities", s.ownClient(s.handleSessionCapabilities))
+	s.mux.HandleFunc("POST /v1/session/settings", s.ownClient(s.handleSessionSettings))
+	s.mux.HandleFunc("GET /v1/session/events", s.ownClient(s.handleSessionEvents))
+	s.mux.HandleFunc("GET /v1/session", s.ownClient(s.handleSessionSnapshot))
 
 	// Diagnostics.
 	s.mux.HandleFunc("GET /v1/health", s.handleHealth)
