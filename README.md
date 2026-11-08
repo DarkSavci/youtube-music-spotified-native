@@ -8,9 +8,6 @@ It browses, searches and plays; keeps a library with pins and folders, a
 queue, likes and playlists; shows lyrics, radios, podcasts and listening
 stats; has an equalizer, crossfade, a visualizer and a mini player; and
 shares a queue with friends through Listen Together.
-`PLAN.md` has the design and, in section 9, what is done, what was left out
-and what has not been checked by hand; `docs/perf.md` has what has been
-measured.
 
 Unofficial personal project. Not affiliated with Spotify or YouTube.
 
@@ -91,11 +88,11 @@ MilkDrop, and nothing else changes.
 
 ## macOS and Linux
 
-The same app, from the same release; `docs/desktop-ports.md` has what each system
-has and what has been checked. Both are new, and macOS has not yet been run.
+The same app, from the same release. Both are new, and macOS has not yet been run.
 
 **Linux:** download the AppImage, make it executable and run it. It updates itself;
-the `.tar.gz` is the same app as a folder, and does not. It needs glibc 2.35 or newer.
+the `.tar.gz` is the same app as a folder, and does not. It needs glibc 2.35 or newer,
+and on X11 `libxkbcommon-x11` (`libxkbcommon-x11-0` on Debian and Ubuntu).
 The app asks for X11, through XWayland on a Wayland desktop, as Wayland can neither
 hide a window nor place one. On a desktop with no tray, such as plain GNOME, closing
 the window quits it.
@@ -110,7 +107,7 @@ Applications.
 `android/` is the same app for phones: Kotlin and Compose in the desktop's
 look and Spotify's phone layout, with the Go core running inside it and
 Media3 for the notification, lock screen, Bluetooth, Android Auto, a watch
-and the Assistant. `docs/android.md` has the plan and what is done.
+and the Assistant.
 
 Requires the Android SDK with SDK platform 37 and the NDK, gomobile
 (`go install golang.org/x/mobile/cmd/gomobile@latest` and `gobind`), and a
@@ -159,7 +156,7 @@ cd core; go test ./...; go test -tags sqlitewasm ./...
 - `crates/audio`: the engine: stream source, decoding, resampling, output.
 - `android/`: the Android app.
 - `core/`: the Go service that talks to YouTube Music, copied from the
-  Electron app and changed as `PLAN.md` section 3.2 lists.
+  Electron app.
 
 ## License
 
