@@ -33,6 +33,9 @@ enum Message {
         duration_ms: Option<u64>,
         /// The whole stream's length in bytes, when the core stated it.
         bytes: Option<u64>,
+        /// What the stream decodes as, and whether it is Opus.
+        format: crate::decode::Format,
+        opus: bool,
     },
     Chunk {
         seek: u64,
@@ -75,6 +78,7 @@ pub struct Deck {
     /// The stream's bitrate in kilobits a second, once it is open and
     /// both its size and its length are known; until then, nought.
     kbps: u32,
+    served: Option<crate::tap::Served>,
 }
 
 /// A stream's average bitrate in kilobits a second: its size over its
@@ -132,7 +136,13 @@ impl Deck {
             seek: 0,
             failed,
             kbps: 0,
+            served: None,
         }
+    }
+
+    /// What the stream is, once it has opened.
+    pub fn served(&self) -> Option<crate::tap::Served> {
+        self.served
     }
 
     /// The stream's bitrate in kilobits a second; nought until it is known.
@@ -152,8 +162,19 @@ impl Deck {
     pub fn poll(&mut self) -> Poll {
         loop {
             return match self.messages.try_recv() {
-                Ok(Message::Ready { duration_ms, bytes }) => {
+                Ok(Message::Ready {
+                    duration_ms,
+                    bytes,
+                    format,
+                    opus,
+                }) => {
                     self.kbps = kbps_of(bytes, duration_ms);
+                    self.served = Some(crate::tap::Served {
+                        codec: if opus { "Opus" } else { "AAC" },
+                        kbps: self.kbps,
+                        sample_rate: format.sample_rate,
+                        channels: format.channels,
+                    });
                     Poll::Ready { duration_ms }
                 }
                 Ok(Message::Chunk {
@@ -204,6 +225,8 @@ fn run(
         .send(Message::Ready {
             duration_ms: decoder.duration_ms(),
             bytes,
+            format,
+            opus: decoder.is_opus(),
         })
         .is_err()
     {
@@ -212,7 +235,12 @@ fn run(
 
     let mut seek = 0;
     let mut stereo = Vec::new();
+    // The first sound at the level it will keep, rather than turned down
+    // under the listener a moment in.
+    gain.wait();
     let mut applied_gain = gain.get();
+    // Where the last chunk ended, for the resampler's tail.
+    let mut end_ms = 0;
     loop {
         // The latest seek wins; earlier ones are already out of date.
         if let Some((number, position_ms)) = seeks.try_iter().last() {
@@ -234,13 +262,26 @@ fn run(
                     None => stereo.clone(),
                 };
                 applied_gain = loudness::apply(&mut samples, applied_gain, gain.get());
+                let frames = (chunk.samples.len() / format.channels.max(1)) as u64;
+                end_ms = chunk.position_ms + frames * 1000 / u64::from(format.sample_rate);
                 Message::Chunk {
                     seek,
                     samples,
                     position_ms: chunk.position_ms,
                 }
             }
-            None => Message::Ended { seek },
+            // The resampler's last milliseconds first, then the end.
+            None => match resampler.as_mut().map(Resampler::finish) {
+                Some(mut samples) if !samples.is_empty() => {
+                    applied_gain = loudness::apply(&mut samples, applied_gain, gain.get());
+                    Message::Chunk {
+                        seek,
+                        samples,
+                        position_ms: end_ms,
+                    }
+                }
+                _ => Message::Ended { seek },
+            },
         };
         let ended = matches!(message, Message::Ended { .. });
         // Wait for room, but not past a seek: what is waiting to be sent
@@ -299,7 +340,7 @@ fn decode_error(error: DecodeError) -> DeckError {
 }
 
 /// Mono is doubled; anything wider keeps its first two channels.
-fn to_stereo(samples: &[f32], channels: usize, stereo: &mut Vec<f32>) {
+pub(crate) fn to_stereo(samples: &[f32], channels: usize, stereo: &mut Vec<f32>) {
     stereo.clear();
     match channels {
         2 => stereo.extend_from_slice(samples),

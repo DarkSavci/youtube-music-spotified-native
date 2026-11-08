@@ -1,6 +1,7 @@
 //! What the worker keeps an eye on while music plays: the sound device,
 //! the preload, and what the core is owed a report of.
 
+use std::sync::atomic::Ordering;
 use std::time::Instant;
 
 use super::super::{Event, gain_for};
@@ -26,15 +27,22 @@ impl Worker {
         // A choice is acted on at once; what the system does by itself is
         // looked for now and then, and only while there is music to move.
         let due = self.target.playing && self.device_checked.elapsed() >= DEVICE_CHECK;
-        if !chosen_anew && !due {
+        // Exclusive use asked for or given up: the device is opened anew.
+        let exclusive = self.dials.exclusive.load(Ordering::Relaxed);
+        let switched = self
+            .output
+            .as_ref()
+            .is_some_and(|output| !output.opened_as(exclusive));
+        if !chosen_anew && !due && !switched {
             return;
         }
         self.device_checked = Instant::now();
         let wanted = self.device.as_deref();
-        if !self
-            .output
-            .as_ref()
-            .is_some_and(|output| output.stale(wanted))
+        if !switched
+            && !self
+                .output
+                .as_ref()
+                .is_some_and(|output| output.stale(wanted))
         {
             return;
         }

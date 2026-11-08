@@ -6,7 +6,8 @@
 //! limiter this pipeline does not have yet.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::time::{Duration, Instant};
 
 /// What streaming services have settled on, in LUFS: the level tracks are
 /// brought to unless the listener asks for quieter or louder.
@@ -15,22 +16,47 @@ pub const TARGET_LUFS: f32 = -14.0;
 /// likely wrong than the track is that loud.
 const MOST_CUT_DB: f32 = 12.0;
 
+/// How long after the gain is asked for the first sound may wait for it.
+/// The stream nearly always takes longer to open, so the wait is seldom
+/// felt; without it, a gain answered late (an album's, which asks for all
+/// its tracks) was heard as the level dropping a few seconds into a song.
+const WAIT_AT_MOST: Duration = Duration::from_millis(1500);
+
 /// A gain that may arrive after the track has started. It is fetched on a
-/// thread of its own so the first sound never waits for it.
+/// thread of its own; the first sound waits for it only briefly.
 #[derive(Clone)]
-pub struct Gain(Arc<AtomicU32>);
+pub struct Gain {
+    value: Arc<AtomicU32>,
+    /// The answer is in, whatever it was.
+    settled: Arc<AtomicBool>,
+    asked: Instant,
+}
 
 impl Gain {
     /// Unity, for when normalisation is off or nothing is known.
     pub fn unity() -> Self {
-        Self(Arc::new(AtomicU32::new(1.0f32.to_bits())))
+        Self {
+            value: Arc::new(AtomicU32::new(1.0f32.to_bits())),
+            settled: Arc::new(AtomicBool::new(true)),
+            asked: Instant::now(),
+        }
+    }
+
+    /// Waits until the gain is known, or [`WAIT_AT_MOST`] after it was
+    /// asked for, whichever is first.
+    pub fn wait(&self) {
+        let until = self.asked + WAIT_AT_MOST;
+        while !self.settled.load(Ordering::Relaxed) && Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(10));
+        }
     }
 
     /// Unity now, and the gain that brings the track to `target` LUFS once
     /// the core has answered at `url`. Without an answer it stays at unity.
     pub fn fetch(agent: ureq::Agent, url: String, target: f32) -> Self {
         let gain = Self::unity();
-        let slot = gain.0.clone();
+        gain.settled.store(false, Ordering::Relaxed);
+        let (slot, settled) = (gain.value.clone(), gain.settled.clone());
         let spawned = std::thread::Builder::new()
             .name("loudness".into())
             .spawn(move || {
@@ -40,17 +66,21 @@ impl Gain {
                     .ok()
                     .and_then(|mut response| response.body_mut().read_to_string().ok());
                 if let Some(lufs) = body.as_deref().and_then(loudness_in) {
+                    // An album's loudness, when asked for and known, in
+                    // place of the track's: one gain for the album.
                     slot.store(gain_for(lufs, target).to_bits(), Ordering::Relaxed);
                 }
+                settled.store(true, Ordering::Relaxed);
             });
         if let Err(error) = spawned {
             log::debug!("loudness not fetched: {error}");
+            gain.settled.store(true, Ordering::Relaxed);
         }
         gain
     }
 
     pub fn get(&self) -> f32 {
-        f32::from_bits(self.0.load(Ordering::Relaxed))
+        f32::from_bits(self.value.load(Ordering::Relaxed))
     }
 }
 
@@ -77,10 +107,15 @@ fn gain_for(lufs: f32, target: f32) -> f32 {
     10f32.powf(db / 20.0)
 }
 
-/// The number in `{"loudnessLkfs":-9.3}`. The core sends `{}` when it does
-/// not know, which reads as `None`.
+/// The number in `{"loudnessLkfs":-9.3}`, or the album's in
+/// `{"loudnessLkfs":-9.3,"albumLkfs":-11.2}` when the core sends one. The
+/// core sends `{}` when it does not know, which reads as `None`.
 fn loudness_in(body: &str) -> Option<f32> {
-    let after = body.split_once("\"loudnessLkfs\":")?.1;
+    number_after(body, "\"albumLkfs\":").or_else(|| number_after(body, "\"loudnessLkfs\":"))
+}
+
+fn number_after(body: &str, key: &str) -> Option<f32> {
+    let after = body.split_once(key)?.1;
     let number: String = after
         .trim_start()
         .chars()
@@ -93,10 +128,43 @@ fn loudness_in(body: &str) -> Option<f32> {
 mod tests {
     use super::*;
 
+    /// The first sound waits for the answer, but only until there is one:
+    /// a refusal is an answer too, and unity keeps no one waiting.
+    #[test]
+    fn the_wait_ends_with_the_answer() {
+        let started = Instant::now();
+        Gain::unity().wait();
+        assert!(started.elapsed() < Duration::from_millis(50));
+        // A core that knows nothing of the track answers `{}` at once.
+        let Ok(server) = std::net::TcpListener::bind("127.0.0.1:0") else {
+            return;
+        };
+        let Ok(address) = server.local_addr() else {
+            return;
+        };
+        std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            if let Ok((mut stream, _)) = server.accept() {
+                let mut request = [0; 1024];
+                let _ = stream.read(&mut request);
+                let _ = stream.write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}",
+                );
+            }
+        });
+        let unknown = Gain::fetch(crate::source::agent(), format!("http://{address}/"), -14.0);
+        let started = Instant::now();
+        unknown.wait();
+        assert!(started.elapsed() < WAIT_AT_MOST, "{:?}", started.elapsed());
+        assert_eq!(unknown.get(), 1.0);
+    }
+
     #[test]
     fn the_loudness_is_read_from_the_cores_answer() {
         assert_eq!(loudness_in(r#"{"loudnessLkfs":-9.3}"#), Some(-9.3));
         assert_eq!(loudness_in(r#"{"loudnessLkfs": -14}"#), Some(-14.0));
+        let album = r#"{"albumLkfs":-11.5,"loudnessLkfs":-9.3}"#;
+        assert_eq!(loudness_in(album), Some(-11.5));
         assert_eq!(loudness_in("{}"), None);
     }
 

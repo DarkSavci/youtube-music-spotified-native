@@ -1,4 +1,5 @@
-//! A ten-band equalizer, its preamp, and the limiter that follows them.
+//! A ten-band equalizer, its preamp, a headphone's correction, and the
+//! limiter that follows them.
 //!
 //! The bands sit where graphic equalizers have had their sliders since the
 //! hi-fi rack, an octave apart. What each filter is, and how the ten are
@@ -12,10 +13,12 @@
 //! 3. stretched to the playback speed;
 //! 4. mixed with the track it fades from or into;
 //! 5. **equalized, and the preamp applied** (here);
-//! 6. limited, so nothing the equalizer or a crossfade raised clips (here);
+//! 6. limited while it shapes, so nothing a raised band pushed past full
+//!    scale clips (here);
 //! 7. copied to the visualizer's tap, and queued for the device;
-//! 8. scaled by the volume in the device's callback, where boost past 100%
-//!    has a limiter of its own.
+//! 8. scaled by the volume in the device's callback, where a limiter of its
+//!    own holds whatever else would pass full scale: boost past 100%, two
+//!    songs crossing, and loud masters' own peaks.
 //!
 //! It comes after the mix so that there is one equalizer however many
 //! decks play, and before the volume so that the volume never changes how
@@ -29,6 +32,7 @@ mod limiter;
 #[cfg(test)]
 mod tests;
 
+use design::TOTAL;
 pub use design::{Biquad, Design, Shape};
 use limiter::Limiter;
 
@@ -38,6 +42,9 @@ pub const BANDS: [f32; 10] = [
 ];
 /// The most a band, or the preamp, is raised or lowered, in decibels.
 pub const RANGE_DB: f32 = 12.0;
+/// The most filters a headphone's correction has: AutoEQ's parametric
+/// profiles have ten.
+pub const CORRECTION_FILTERS: usize = 10;
 
 /// How long a change takes to arrive, in seconds. Long enough that a
 /// dragged slider is a glide and not a staircase, short enough to be heard
@@ -59,6 +66,45 @@ pub struct Settings {
     /// nothing comes out louder than it went in and the limiter is left
     /// with nothing to do.
     pub headroom: bool,
+    /// A headphone's correction, on whether or not the bands are: it makes
+    /// the headphone neutral, for the bands to then shape as they like.
+    /// Kept under full scale always.
+    pub correction: Correction,
+}
+
+/// What a headphone needs to sound neutral, as AutoEQ measures it: up to
+/// ten filters, the unused ones off.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Correction {
+    pub filters: [Filter; CORRECTION_FILTERS],
+}
+
+impl Correction {
+    pub fn is_empty(&self) -> bool {
+        self.filters
+            .iter()
+            .all(|filter| filter.kind == FilterKind::Off)
+    }
+}
+
+/// One filter of a correction.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Filter {
+    pub kind: FilterKind,
+    pub hz: f32,
+    pub db: f32,
+    /// How narrow: for a bell, its centre over its width; for a shelf, how
+    /// sharp its knee.
+    pub q: f32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FilterKind {
+    #[default]
+    Off,
+    Peak,
+    LowShelf,
+    HighShelf,
 }
 
 /// One band while it plays: the filter in force, where it is heading, and
@@ -140,7 +186,8 @@ fn flatten(filter: &Biquad) -> [f64; 5] {
 pub struct Equalizer {
     design: Design,
     settings: Settings,
-    bands: [Band; 10],
+    /// The ten bands, then the correction's filters.
+    bands: [Band; TOTAL],
     /// The level in force, as a multiplier, and where it is heading.
     gain: f64,
     gain_target: f64,
@@ -156,7 +203,7 @@ impl Equalizer {
         Self {
             design: Design::new(sample_rate),
             settings: Settings::default(),
-            bands: [Band::IDLE; 10],
+            bands: [Band::IDLE; TOTAL],
             gain: 1.0,
             gain_target: 1.0,
             gain_step: 0.0,
@@ -201,15 +248,22 @@ impl Equalizer {
     /// ceiling. Idle, the samples go to the limiter as they came, and it
     /// leaves alone what is already under the ceiling.
     pub fn process(&mut self, samples: &mut [f32]) {
-        if !self.is_idle() {
-            let frames = samples.as_chunks_mut::<2>().0;
-            let ramped = frames.len().min(self.ramp_left as usize);
-            let (moving, steady) = frames.split_at_mut(ramped);
-            self.glide(moving);
-            self.shape(steady);
-            for band in &mut self.bands {
-                band.tidy();
+        if self.is_idle() {
+            // Out of the path, its limiter too once that has let go of
+            // what it was holding. Run unasked, it turned down every peak
+            // over 0.98 in loud masters with nothing raised at all.
+            if self.limiter.holding() {
+                self.limiter.hold(samples);
             }
+            return;
+        }
+        let frames = samples.as_chunks_mut::<2>().0;
+        let ramped = frames.len().min(self.ramp_left as usize);
+        let (moving, steady) = frames.split_at_mut(ramped);
+        self.glide(moving);
+        self.shape(steady);
+        for band in &mut self.bands {
+            band.tidy();
         }
         self.limiter.hold(samples);
     }

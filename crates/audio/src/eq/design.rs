@@ -11,10 +11,16 @@
 
 use std::f64::consts::{PI, SQRT_2};
 
-use super::{BANDS, RANGE_DB, Settings};
+use super::{BANDS, CORRECTION_FILTERS, Correction, FilterKind, RANGE_DB, Settings};
 
 /// How many bands there are.
 const COUNT: usize = BANDS.len();
+/// How many filters there are in all: the bands, then a headphone's
+/// correction.
+pub(super) const TOTAL: usize = COUNT + CORRECTION_FILTERS;
+/// The narrowest and widest a correction's filter may be. AutoEQ's run
+/// from about 0.5 to 6.
+const CORRECTION_Q: (f64, f64) = (0.1, 20.0);
 /// How wide a peaking band is: wider than the octave the bands are apart.
 /// Wider still and neighbours raised alike join more smoothly, but
 /// neighbours set against each other need more from their filters than
@@ -40,8 +46,10 @@ const PROBE_DB: f64 = 6.0;
 /// they really give. The overlap is not quite proportional to the gain,
 /// so the first answer is a few tenths of a decibel out.
 const ROUNDS: usize = 4;
-/// The frequencies the curve's highest point is looked for at.
-const PEAK_POINTS: usize = 96;
+/// The frequencies the curve's highest point is looked for at: close
+/// enough together, at about a fortieth of an octave, that the narrowest
+/// bell of a headphone's correction is not stepped over.
+const PEAK_POINTS: usize = 400;
 
 /// A second-order filter, normalised so that its `a0` is 1.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -60,9 +68,14 @@ impl Biquad {
     /// A bell at `hz`, raising or lowering by `db` (Robert
     /// Bristow-Johnson's Audio EQ Cookbook).
     fn peaking(hz: f64, db: f64, rate: f64) -> Self {
+        Self::bell(hz, db, Q, rate)
+    }
+
+    /// A bell `q` wide.
+    fn bell(hz: f64, db: f64, q: f64, rate: f64) -> Self {
         let amplitude = 10f64.powf(db / 40.0);
         let omega = 2.0 * PI * hz / rate;
-        let alpha = omega.sin() / (2.0 * Q);
+        let alpha = omega.sin() / (2.0 * q);
         let a0 = 1.0 + alpha / amplitude;
         Self {
             b: [
@@ -77,10 +90,19 @@ impl Biquad {
     /// A shelf that raises or lowers everything above `hz` by `db`, as
     /// gently as a shelf can without a bump (the Cookbook's, slope 1).
     fn high_shelf(hz: f64, db: f64, rate: f64) -> Self {
+        Self::shelf(true, hz, db, 1.0 / SQRT_2, rate)
+    }
+
+    /// A shelf above `hz` (`high`) or below it, its knee `q` sharp: 0.7 is
+    /// the gentlest without a bump, as AutoEQ's are.
+    fn shelf(high: bool, hz: f64, db: f64, q: f64, rate: f64) -> Self {
         let amplitude = 10f64.powf(db / 40.0);
         let omega = 2.0 * PI * hz / rate;
         let cos = omega.cos();
-        let alpha = omega.sin() / 2.0 * SQRT_2;
+        let alpha = omega.sin() / (2.0 * q);
+        if !high {
+            return Self::low_shelf(amplitude, cos, alpha);
+        }
         let lean = 2.0 * amplitude.sqrt() * alpha;
         let (more, less) = (amplitude + 1.0, amplitude - 1.0);
         let a0 = more - less * cos + lean;
@@ -93,6 +115,24 @@ impl Biquad {
             a: [
                 2.0 * (less - more * cos) / a0,
                 (more - less * cos - lean) / a0,
+            ],
+        }
+    }
+
+    /// The Cookbook's low shelf.
+    fn low_shelf(amplitude: f64, cos: f64, alpha: f64) -> Self {
+        let lean = 2.0 * amplitude.sqrt() * alpha;
+        let (more, less) = (amplitude + 1.0, amplitude - 1.0);
+        let a0 = more + less * cos + lean;
+        Self {
+            b: [
+                amplitude * (more - less * cos + lean) / a0,
+                2.0 * amplitude * (less - more * cos) / a0,
+                amplitude * (more - less * cos - lean) / a0,
+            ],
+            a: [
+                -2.0 * (less + more * cos) / a0,
+                (more + less * cos - lean) / a0,
             ],
         }
     }
@@ -118,7 +158,8 @@ impl Biquad {
 /// with them.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Shape {
-    pub(super) filters: [Biquad; COUNT],
+    /// The bands', then the correction's.
+    pub(super) filters: [Biquad; TOTAL],
     /// What the whole signal is turned up or down by, in decibels: the
     /// preamp, less whatever keeps the curve's top at full scale.
     pub gain_db: f32,
@@ -129,11 +170,20 @@ pub struct Shape {
 }
 
 impl Shape {
-    /// What the ten bands together do to a tone at `hz`, in decibels: the
-    /// curve, without the level.
+    /// What the ten bands and the correction together do to a tone at
+    /// `hz`, in decibels: the curve, without the level.
     pub fn db_at(&self, hz: f32) -> f32 {
+        self.db_of(&self.filters, hz)
+    }
+
+    /// What the ten bands alone do: the curve the sliders draw.
+    pub fn bands_db_at(&self, hz: f32) -> f32 {
+        self.db_of(&self.filters[..COUNT], hz)
+    }
+
+    fn db_of(&self, filters: &[Biquad], hz: f32) -> f32 {
         let hz = f64::from(hz);
-        self.filters
+        filters
             .iter()
             .map(|filter| filter.db_at(hz, self.rate))
             .sum::<f64>() as f32
@@ -210,21 +260,27 @@ impl Design {
     /// the level the settings ask for. Switched off, or with nothing
     /// moved, it is the shape that changes nothing.
     pub fn shape(&self, settings: &Settings) -> Shape {
-        let flat = Shape {
-            filters: [Biquad::FLAT; COUNT],
+        let mut shape = Shape {
+            filters: [Biquad::FLAT; TOTAL],
             gain_db: 0.0,
             peak_db: 0.0,
             rate: self.rate,
         };
+        let corrected = self.correct(&settings.correction, &mut shape.filters[COUNT..]);
         if !settings.enabled {
-            return flat;
+            // The correction alone, kept under full scale: it is the
+            // headphone's, not a sound anyone chose to make louder.
+            if corrected {
+                shape.peak_db = self.peak_db(&shape);
+                shape.gain_db = -shape.peak_db.max(0.0);
+            }
+            return shape;
         }
         let wanted: [f64; COUNT] = std::array::from_fn(|band| {
             let db = settings.gains[band];
             let db = if db.is_finite() { db } else { 0.0 };
             f64::from(db.clamp(-RANGE_DB, RANGE_DB))
         });
-        let mut shape = flat;
         if wanted.iter().any(|db| db.abs() >= LEAST_DB) {
             let mut given = [0.0; COUNT];
             let mut short = wanted;
@@ -233,7 +289,7 @@ impl Design {
                     let more: f64 = (0..COUNT).map(|at| self.solve[band][at] * short[at]).sum();
                     *gain = (*gain + more).clamp(-MOST_DB, MOST_DB);
                 }
-                shape.filters = self.filters(&given);
+                shape.filters[..COUNT].copy_from_slice(&self.filters(&given));
                 for (band, hz) in BANDS.iter().enumerate() {
                     short[band] = if self.usable[band] {
                         wanted[band] - f64::from(shape.db_at(*hz))
@@ -242,6 +298,8 @@ impl Design {
                     };
                 }
             }
+        }
+        if corrected || shape.filters[..COUNT].iter().any(|f| *f != Biquad::FLAT) {
             shape.peak_db = self.peak_db(&shape);
         }
         let preamp = if settings.preamp.is_finite() {
@@ -258,6 +316,35 @@ impl Design {
         };
         shape.gain_db = preamp - over;
         shape
+    }
+
+    /// A headphone's correction into `filters`; whether there is any.
+    /// Filters past what the device can carry are left out, as the bands
+    /// are.
+    fn correct(&self, correction: &Correction, filters: &mut [Biquad]) -> bool {
+        let limit = self.rate / 2.0 * NYQUIST_SHARE;
+        let mut any = false;
+        for (slot, filter) in filters.iter_mut().zip(&correction.filters) {
+            let (hz, db, q) = (
+                f64::from(filter.hz),
+                f64::from(filter.db),
+                f64::from(filter.q),
+            );
+            let usable = hz.is_finite() && db.is_finite() && q.is_finite();
+            if !usable || hz <= 0.0 || hz >= limit || db.abs() < LEAST_DB {
+                continue;
+            }
+            let db = db.clamp(-MOST_DB, MOST_DB);
+            let q = q.clamp(CORRECTION_Q.0, CORRECTION_Q.1);
+            *slot = match filter.kind {
+                FilterKind::Off => continue,
+                FilterKind::Peak => Biquad::bell(hz, db, q, self.rate),
+                FilterKind::LowShelf => Biquad::shelf(false, hz, db, q, self.rate),
+                FilterKind::HighShelf => Biquad::shelf(true, hz, db, q, self.rate),
+            };
+            any = true;
+        }
+        any
     }
 
     /// The highest the curve reaches across what can be heard.

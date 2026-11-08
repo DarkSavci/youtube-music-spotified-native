@@ -13,6 +13,7 @@ use std::sync::{Arc, Mutex};
 
 use crossbeam_channel::{Sender, unbounded};
 
+pub(crate) use worker::balance_gains;
 use worker::{Dials, Worker};
 
 use crate::clock::Clock;
@@ -203,9 +204,11 @@ impl Engine {
         let dials = Arc::new(Dials {
             normalise: AtomicBool::new(normalise),
             loudness_target: AtomicU32::new(loudness::TARGET_LUFS.to_bits()),
+            albums: AtomicBool::new(false),
             speed: AtomicU32::new(1.0f32.to_bits()),
             equalizer: Mutex::new(eq::Settings::default()),
             device: Mutex::new(None),
+            exclusive: AtomicBool::new(false),
             balance: AtomicU32::new(0.0f32.to_bits()),
         });
         let shared = dials.clone();
@@ -245,6 +248,21 @@ impl Engine {
     /// Takes effect from the next track loaded.
     pub fn set_normalise(&self, on: bool) {
         self.dials.normalise.store(on, Ordering::Relaxed);
+    }
+
+    /// Whether to hold the sound device for this app alone (WASAPI
+    /// exclusive mode on Windows), so that what plays is exactly what the
+    /// engine made, at 48 kHz where the device has it. Refused, the device
+    /// is shared as before; [`Tap::served`] says which it got. Heard within
+    /// a moment: the device is opened again.
+    pub fn set_exclusive(&self, on: bool) {
+        self.dials.exclusive.store(on, Ordering::Relaxed);
+    }
+
+    /// Whether albums are evened out as wholes rather than track by track.
+    /// Takes effect from the next track loaded.
+    pub fn set_normalise_albums(&self, on: bool) {
+        self.dials.albums.store(on, Ordering::Relaxed);
     }
 
     /// The loudness tracks are evened out to, in LUFS. Takes effect from

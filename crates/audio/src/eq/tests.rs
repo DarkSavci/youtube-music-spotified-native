@@ -130,6 +130,7 @@ fn flat_or_switched_off_it_is_out_of_the_path_and_changes_not_a_bit() {
         gains: [12.0; 10],
         preamp: 6.0,
         headroom: true,
+        ..Settings::default()
     });
     let mut flat = Equalizer::new(RATE);
     flat.set(Settings {
@@ -187,6 +188,7 @@ fn a_change_glides_in_without_a_step() {
         gains: one_band(5, 12.0),
         preamp: -3.0,
         headroom: false,
+        ..Settings::default()
     });
     equalizer.process(rest);
     let settled = steepest(&rest[rest.len() / 2..]);
@@ -245,6 +247,7 @@ fn with_headroom_kept_nothing_comes_out_louder_than_it_went_in() {
         gains: [8.0, 6.0, 4.0, 1.0, 0.0, 0.0, 1.0, 3.0, 5.0, 6.0],
         preamp: 3.0,
         headroom: true,
+        ..Settings::default()
     };
     let shape = Design::new(RATE).shape(&settings);
     assert!((shape.peak_db - 8.0).abs() < 0.6, "peak {}", shape.peak_db);
@@ -320,4 +323,41 @@ fn sliders_set_hard_against_each_other_still_give_stable_filters() {
     let mut samples = tone(1000.0, 0.05);
     equalizer.process(&mut samples);
     assert!(samples.iter().all(|sample| sample.abs() < 1.0));
+}
+
+/// AutoEQ's filters are the Cookbook's: a bell gives its gain at its
+/// centre, a shelf half its gain at its corner and all of it far past.
+#[test]
+fn a_correction_is_built_as_autoeq_describes_it() {
+    use super::{Correction, Filter, FilterKind};
+    let one = |kind, hz, db, q| {
+        let mut correction = Correction::default();
+        correction.filters[0] = Filter { kind, hz, db, q };
+        Design::new(RATE).shape(&Settings {
+            correction,
+            ..Settings::default()
+        })
+    };
+    let bell = one(FilterKind::Peak, 1000.0, 6.0, 4.0);
+    assert!((bell.db_at(1000.0) - 6.0).abs() < 1e-3);
+    assert!(bell.db_at(500.0) < 0.5);
+    let low = one(FilterKind::LowShelf, 105.0, 6.5, 0.7);
+    assert!(
+        (low.db_at(105.0) - 3.25).abs() < 0.05,
+        "{}",
+        low.db_at(105.0)
+    );
+    assert!((low.db_at(10.0) - 6.5).abs() < 0.1);
+    assert!(low.db_at(2000.0).abs() < 0.1);
+    let high = one(FilterKind::HighShelf, 10_000.0, -3.1, 0.7);
+    assert!((high.db_at(10_000.0) + 1.55).abs() < 0.05);
+    assert!(high.db_at(500.0).abs() < 0.1);
+    // Alone, with the equalizer itself off, it is still heard, and turned
+    // down by its highest point; the sliders draw nothing.
+    assert!((low.gain_db + low.peak_db).abs() < 1e-6 && low.peak_db > 6.4);
+    assert_eq!(low.bands_db_at(105.0), 0.0);
+    assert_eq!(
+        one(FilterKind::Off, 1000.0, 6.0, 1.0),
+        Design::new(RATE).shape(&Settings::default())
+    );
 }

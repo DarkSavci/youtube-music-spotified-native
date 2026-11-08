@@ -48,7 +48,19 @@ pub struct Tap {
     /// The bitrate of the stream being played, in kilobits a second;
     /// nought when it is not known.
     bitrate: AtomicU32,
+    served: Mutex<Option<(Served, crate::OutputFormat)>>,
     ring: Mutex<Ring>,
+}
+
+/// What a stream is, as it decodes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Served {
+    /// "Opus" or "AAC".
+    pub codec: &'static str,
+    /// Its size over its length; nought when that is not known.
+    pub kbps: u32,
+    pub sample_rate: u32,
+    pub channels: usize,
 }
 
 impl Default for Tap {
@@ -58,6 +70,7 @@ impl Default for Tap {
             sink: Mutex::new(None),
             sample_rate: AtomicU32::new(48_000),
             bitrate: AtomicU32::new(0),
+            served: Mutex::new(None),
             ring: Mutex::new(Ring {
                 samples: vec![0.0; RING],
                 at: 0,
@@ -96,6 +109,18 @@ impl Tap {
 
     pub fn set_bitrate(&self, kbps: u32) {
         self.bitrate.store(kbps, Ordering::Relaxed);
+    }
+
+    /// The stream being played and how the device was opened for it, for
+    /// the listener to see what they are hearing.
+    pub fn served(&self) -> Option<(Served, crate::OutputFormat)> {
+        self.served.lock().ok()?.clone()
+    }
+
+    pub fn set_served(&self, served: Option<(Served, crate::OutputFormat)>) {
+        if let Ok(mut held) = self.served.lock() {
+            *held = served;
+        }
     }
 
     pub fn set_sample_rate(&self, rate: u32) {

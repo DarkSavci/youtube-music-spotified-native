@@ -20,43 +20,172 @@ const RING_SECONDS: f32 = 0.25;
 /// 48 kHz: no click on pause or a volume step, no audible lag.
 const GAIN_SLEW: f32 = 0.004;
 
-/// How fast the limiter lets go, per frame: about a tenth of a second at
-/// 48 kHz, slow enough that it is not heard pumping.
-const LIMITER_RELEASE: f32 = 0.0002;
+/// How far ahead the limiter looks, in frames: 2 ms at 48 kHz. Time to
+/// bring the level down smoothly before a peak, rather than at once on it.
+pub(crate) const LOOKAHEAD: usize = 96;
+/// How long the level stays down after the last peak that needed it, in
+/// frames: 50 ms at 48 kHz, longer than a cycle of the lowest bass, so a
+/// held tone is held steady instead of pumped once a cycle.
+const LIMITER_HOLD: u32 = 2400;
+/// How fast it then lets go, per frame: a time constant of 50 ms at 48 kHz.
+const LIMITER_RELEASE: f32 = 1.0 / 2400.0;
+/// Frames of the ring the device callback looks at in one go: what it
+/// plays, and the lookahead past it. Fixed, so the callback never
+/// allocates; a longer callback is played in pieces.
+const PIECE: usize = 1024;
 
-/// Holds boosted audio under full scale.
+/// How close the gain must come to its target to be given the rest: a
+/// thousandth of a decibel at full volume, far too small to hear as a step.
+/// Without it the glide stalls short, where a step rounds to nothing in
+/// `f32`, and at 100% every sample would be scaled by 0.9999926.
+const GAIN_SNAP: f32 = 1e-4;
+
+/// Holds audio under full scale.
 ///
-/// Volume past 100% multiplies the music beyond what it was mastered to,
-/// and a peak that passes full scale is clipped by the device, which is
-/// heard as distortion. This turns the level down the moment a peak would
-/// pass and lets it back up slowly, so loud passages are flattened rather
-/// than broken. It does nothing to audio that stays under full scale.
+/// Three things pass it: volume past 100%; two songs crossing; and loud
+/// masters themselves, whose decoded peaks can go over (to +1.6 dBFS in
+/// tracks measured). A peak past full scale is clipped by the device,
+/// which is heard as distortion.
+///
+/// It looks [`LOOKAHEAD`] frames ahead in what is queued, and brings the
+/// level down in a straight line to arrive at what the coming peak needs
+/// just as the peak does; holds it there while peaks keep coming; and lets
+/// it back up after [`LIMITER_HOLD`]. The one before it cut the level on
+/// the peak itself and let it straight back up, which pumped a held bass
+/// note once a cycle (THD+N -49 dB at 50 Hz). Audio under full scale, away
+/// from a peak it has had to hold, passes bit for bit.
 struct Limiter {
     gain: f32,
+    /// Frames left before letting go.
+    held: u32,
 }
 
 impl Limiter {
-    fn apply(&mut self, left: f32, right: f32) -> (f32, f32) {
-        self.gain += (1.0 - self.gain) * LIMITER_RELEASE;
-        // The last of the way is too small a step to be taken; it is given.
-        if self.gain > 0.999 {
-            self.gain = 1.0;
+    const NEW: Limiter = Limiter { gain: 1.0, held: 0 };
+
+    /// One frame, already at the volume. `ahead` is what follows it,
+    /// interleaved, before the volume, which `volume` is.
+    fn apply(&mut self, frame: [f32; 2], ahead: &[f32], volume: f32) -> [f32; 2] {
+        // The deepest cut the window needs, and how many frames off.
+        let mut need = 1.0f32;
+        let mut at = 0;
+        let now = frame[0].abs().max(frame[1].abs());
+        if now > 1.0 {
+            need = 1.0 / now;
         }
-        let peak = left.abs().max(right.abs());
-        if peak * self.gain > 1.0 {
-            self.gain = 1.0 / peak;
+        for (index, next) in ahead.as_chunks::<2>().0.iter().take(LOOKAHEAD).enumerate() {
+            let peak = next[0].abs().max(next[1].abs()) * volume;
+            if peak * need > 1.0 {
+                need = 1.0 / peak;
+                at = index + 1;
+            }
         }
-        (left * self.gain, right * self.gain)
+        if need < self.gain {
+            // Down in a straight line, to arrive as the peak does.
+            self.gain -= (self.gain - need) / (at as f32 + 1.0);
+            self.held = LIMITER_HOLD;
+        } else if need < 1.0 {
+            self.held = LIMITER_HOLD;
+        } else if self.held > 0 {
+            self.held -= 1;
+        } else if self.gain < 1.0 {
+            self.gain += (1.0 - self.gain) * LIMITER_RELEASE;
+            // The last of the way is too small a step to be taken; it is
+            // given.
+            if self.gain > 0.999 {
+                self.gain = 1.0;
+            }
+        }
+        let out = [frame[0] * self.gain, frame[1] * self.gain];
+        // A volume moving within the window can leave a sliver over: that
+        // is clipped, where the device would have clipped all of it.
+        [out[0].clamp(-1.0, 1.0), out[1].clamp(-1.0, 1.0)]
+    }
+}
+
+/// The volume as the device callback applies it, frame by frame: a gain
+/// that glides to where it is asked to be, and the limiter that holds
+/// peaks under full scale.
+pub(crate) struct Volume {
+    gain: f32,
+    limiter: Limiter,
+}
+
+impl Volume {
+    /// Silent, so the first sound fades in.
+    pub(crate) fn new() -> Self {
+        Self {
+            gain: 0.0,
+            limiter: Limiter::NEW,
+        }
     }
 
-    /// Whether it is holding the level down at the moment.
-    fn at_work(&self) -> bool {
-        self.gain < 1.0
+    /// Moves the gain a frame's step towards `target`, and says where it is.
+    pub(crate) fn step(&mut self, target: f32) -> f32 {
+        self.gain += (target - self.gain) * GAIN_SLEW;
+        if (target - self.gain).abs() < GAIN_SNAP {
+            self.gain = target;
+        }
+        self.gain
+    }
+
+    /// Steps towards `target` for as long as `frames` would take: where
+    /// the gain is once that much has played.
+    pub(crate) fn settle(&mut self, target: f32, frames: usize) {
+        for _ in 0..frames {
+            self.step(target);
+        }
+    }
+
+    /// One frame at the gain in force; `ahead` is what is queued after it,
+    /// interleaved, for the limiter to see coming.
+    pub(crate) fn apply(&mut self, frame: [f32; 2], ahead: &[f32]) -> [f32; 2] {
+        // At a gain of exactly 1 and under full scale, every multiplication
+        // is by 1: the samples come out as they went in.
+        let gain = self.gain;
+        self.limiter
+            .apply([frame[0] * gain, frame[1] * gain], ahead, gain)
+    }
+}
+
+/// Rounds to the steps of a 16-bit device, with triangular dither.
+///
+/// cpal turns a float into an `i16` by cutting off what is past the step
+/// below, towards zero. Everything within two steps of silence comes out as
+/// silence, and quiet passages pick up distortion where the cut falls.
+/// Rounding to the nearest step after adding noise of up to one step either
+/// way, shaped as a triangle, leaves an even hiss at -96 dBFS instead: the
+/// tail of a fade and detail below the last step stay audible in it.
+pub(crate) struct Dither {
+    state: u32,
+}
+
+impl Dither {
+    pub(crate) fn new() -> Self {
+        Self { state: 0x2545_F491 }
+    }
+
+    /// A float that is exactly one of the 65,536 steps, so cpal's cut has
+    /// nothing to cut.
+    pub(crate) fn quantize_16_bit(&mut self, sample: f32) -> f32 {
+        let noise = self.uniform() - self.uniform();
+        let step = (sample * 32_768.0 + noise)
+            .round()
+            .clamp(-32_768.0, 32_767.0);
+        step / 32_768.0
+    }
+
+    /// 0 to 1, by xorshift32: fast, and plenty for noise.
+    fn uniform(&mut self) -> f32 {
+        self.state ^= self.state << 13;
+        self.state ^= self.state >> 17;
+        self.state ^= self.state << 5;
+        (self.state >> 8) as f32 / (1u32 << 24) as f32
     }
 }
 
 /// What the engine thread and the device callback share.
-struct Shared {
+pub(crate) struct Shared {
     /// The gain to move towards, as `f32` bits.
     gain: AtomicU32,
     /// Fade to silence and stop taking from the ring.
@@ -71,7 +200,7 @@ struct Shared {
 }
 
 pub struct Output {
-    stream: cpal::Stream,
+    stream: Stream,
     producer: Producer<f32>,
     shared: Arc<Shared>,
     sample_rate: u32,
@@ -79,6 +208,27 @@ pub struct Output {
     /// Which device this is, to tell when the one to play through has moved
     /// on. `None` where the device has no identity to compare.
     device: Option<String>,
+    format: Format,
+}
+
+/// What plays the ring: a stream cpal runs, through the system's mixer, or
+/// the device held for this app alone.
+enum Stream {
+    Shared(cpal::Stream),
+    #[cfg(windows)]
+    Exclusive(crate::exclusive::Stream),
+}
+
+/// How the device was opened, for the listener to see.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Format {
+    pub sample_rate: u32,
+    /// `f32`, `i16`, `i24`, `i32`, as the device takes its samples.
+    pub sample_format: &'static str,
+    /// Held for this app alone, past the system's mixer and effects.
+    pub exclusive: bool,
+    /// Exclusive was asked for and could not be had: why.
+    pub exclusive_refused: Option<String>,
 }
 
 /// A sound device there is to play through.
@@ -111,6 +261,20 @@ pub fn output_devices() -> Vec<OutputDevice> {
         .collect()
 }
 
+/// Opens the device `id` names (the system's with `None`) exclusively for
+/// a moment, playing silence, and says how it opened: whether exclusive
+/// use was had, and at what rate and format. For a report.
+pub fn try_exclusive(id: Option<&str>) -> Result<Format, String> {
+    let mut output = Output::open(id, true)?;
+    output.set_gain(0.0);
+    let silence = vec![0.0; output.free().min(9600)];
+    output.push(&silence);
+    output.play();
+    std::thread::sleep(Duration::from_millis(200));
+    output.pause();
+    Ok(output.format().clone())
+}
+
 /// The identity of the device the system plays through now.
 fn default_device() -> Option<(cpal::Device, Option<String>)> {
     let device = cpal::default_host().default_output_device()?;
@@ -127,17 +291,65 @@ fn chosen_device(id: &str) -> Option<cpal::Device> {
 impl Output {
     /// Opens the device `wanted` names, in its own format; the one the
     /// system plays through when none is named, or the one named has gone.
-    pub fn open(wanted: Option<&str>) -> Result<Self, String> {
+    /// `exclusive` asks for it to be held for this app alone, where the
+    /// system allows that; otherwise, or if it will not, it is shared.
+    pub fn open(wanted: Option<&str>, exclusive: bool) -> Result<Self, String> {
         let chosen = wanted.and_then(|id| Some((chosen_device(id)?, Some(id.to_owned()))));
         let (device, id) = chosen
             .or_else(default_device)
             .ok_or("no sound output device")?;
+        let mut refused = None;
+        if exclusive {
+            match Self::open_exclusive(id.as_deref()) {
+                Ok(mut output) => {
+                    output.device = id;
+                    return Ok(output);
+                }
+                Err(why) => {
+                    log::warn!("exclusive output refused, sharing the device: {why}");
+                    refused = Some(why);
+                }
+            }
+        }
         let supported = device
             .default_output_config()
             .map_err(|error| format!("the sound device has no usable format: {error}"))?;
         let format = supported.sample_format();
         let config: StreamConfig = supported.into();
         let sample_rate = config.sample_rate;
+        let (producer, consumer, shared, capacity) = Self::ring(sample_rate);
+        let feed = Feed::new(consumer, shared.clone());
+        let stream = match format {
+            SampleFormat::F32 => build::<f32>(&device, config, feed, false),
+            SampleFormat::I16 => build::<i16>(&device, config, feed, true),
+            // Cut at the 32-bit step, far below what a float holds: nothing
+            // to dither.
+            SampleFormat::I32 => build::<i32>(&device, config, feed, false),
+            other => Err(format!("unsupported sample format {other}")),
+        }?;
+        let sample_format = match format {
+            SampleFormat::F32 => "f32",
+            SampleFormat::I16 => "i16",
+            _ => "i32",
+        };
+        Ok(Self {
+            stream: Stream::Shared(stream),
+            producer,
+            shared,
+            sample_rate,
+            capacity,
+            device: id,
+            format: Format {
+                sample_rate,
+                sample_format,
+                exclusive: false,
+                exclusive_refused: refused,
+            },
+        })
+    }
+
+    /// The ring and the flags, before there is a device to drain them.
+    fn ring(sample_rate: u32) -> (Producer<f32>, Consumer<f32>, Arc<Shared>, usize) {
         let capacity = (sample_rate as f32 * RING_SECONDS) as usize * 2;
         let (producer, consumer) = RingBuffer::new(capacity);
         let shared = Arc::new(Shared {
@@ -147,20 +359,47 @@ impl Output {
             lost: AtomicBool::new(false),
             delay: AtomicU32::new(0),
         });
-        let stream = match format {
-            SampleFormat::F32 => build::<f32>(&device, config, consumer, shared.clone()),
-            SampleFormat::I16 => build::<i16>(&device, config, consumer, shared.clone()),
-            SampleFormat::I32 => build::<i32>(&device, config, consumer, shared.clone()),
-            other => Err(format!("unsupported sample format {other}")),
-        }?;
+        (producer, consumer, shared, capacity)
+    }
+
+    #[cfg(windows)]
+    fn open_exclusive(id: Option<&str>) -> Result<Self, String> {
+        // The ring is sized once the rate is known; the stream is handed
+        // its far end.
+        let (sample_rate, open) = crate::exclusive::probe(id)?;
+        let (producer, consumer, shared, capacity) = Self::ring(sample_rate);
+        let feed = Feed::new(consumer, shared.clone());
+        let (stream, sample_format) = open(feed)?;
         Ok(Self {
-            stream,
+            stream: Stream::Exclusive(stream),
             producer,
             shared,
             sample_rate,
             capacity,
-            device: id,
+            device: None,
+            format: Format {
+                sample_rate,
+                sample_format,
+                exclusive: true,
+                exclusive_refused: None,
+            },
         })
+    }
+
+    #[cfg(not(windows))]
+    fn open_exclusive(_id: Option<&str>) -> Result<Self, String> {
+        Err("exclusive output is only made on Windows so far".into())
+    }
+
+    /// How the device was opened.
+    pub fn format(&self) -> &Format {
+        &self.format
+    }
+
+    /// Whether this was opened as `exclusive` asks: held when asked for and
+    /// not refused, shared when not asked for.
+    pub fn opened_as(&self, exclusive: bool) -> bool {
+        self.format.exclusive == exclusive || (exclusive && self.format.exclusive_refused.is_some())
     }
 
     /// Whether to open the output again: this device has gone, or it is no
@@ -230,8 +469,14 @@ impl Output {
 
     pub fn play(&self) {
         self.shared.paused.store(false, Ordering::Relaxed);
-        if let Err(error) = self.stream.play() {
-            log::warn!("the sound device would not start: {error}");
+        match &self.stream {
+            Stream::Shared(stream) => {
+                if let Err(error) = stream.play() {
+                    log::warn!("the sound device would not start: {error}");
+                }
+            }
+            #[cfg(windows)]
+            Stream::Exclusive(stream) => stream.run(true),
         }
     }
 
@@ -243,8 +488,93 @@ impl Output {
 
     /// Stops the device itself, so a paused app does no audio work at all.
     pub fn suspend(&self) {
-        if let Err(error) = self.stream.pause() {
-            log::debug!("the sound device would not pause: {error}");
+        match &self.stream {
+            Stream::Shared(stream) => {
+                if let Err(error) = stream.pause() {
+                    log::debug!("the sound device would not pause: {error}");
+                }
+            }
+            #[cfg(windows)]
+            Stream::Exclusive(stream) => stream.run(false),
+        }
+    }
+}
+
+/// What the device takes from the ring, frame by frame: the queue, the
+/// volume with its limiter, and the flags the engine sets. The same for a
+/// stream cpal runs and for one held exclusively.
+pub(crate) struct Feed {
+    consumer: Consumer<f32>,
+    shared: Arc<Shared>,
+    volume: Volume,
+    /// What is about to be played, and the lookahead past it, copied out
+    /// of the ring without taking it.
+    window: [f32; (PIECE + LOOKAHEAD) * 2],
+}
+
+impl Feed {
+    fn new(consumer: Consumer<f32>, shared: Arc<Shared>) -> Self {
+        Self {
+            consumer,
+            shared,
+            volume: Volume::new(),
+            window: [0.0; (PIECE + LOOKAHEAD) * 2],
+        }
+    }
+
+    /// The device will play what it is handed now `delay` from now.
+    pub(crate) fn delayed(&self, delay: Duration) {
+        let micros = u32::try_from(delay.as_micros()).unwrap_or(u32::MAX);
+        self.shared.delay.store(micros, Ordering::Relaxed);
+    }
+
+    /// The device has gone: unplugged, or taken by the system.
+    pub(crate) fn lost(&self) {
+        self.shared.lost.store(true, Ordering::Relaxed);
+    }
+
+    /// Fills `frames` with what plays next, at its volume: silence while
+    /// paused, or when the queue runs dry. Never more than [`PIECE`] frames
+    /// at a time; a caller with more asks again.
+    pub(crate) fn next(&mut self, frames: &mut [[f32; 2]]) {
+        if self.shared.flush.swap(false, Ordering::Relaxed) {
+            let queued = self.consumer.slots();
+            if let Ok(chunk) = self.consumer.read_chunk(queued) {
+                chunk.commit_all();
+            }
+        }
+        let paused = self.shared.paused.load(Ordering::Relaxed);
+        let target = if paused {
+            0.0
+        } else {
+            f32::from_bits(self.shared.gain.load(Ordering::Relaxed))
+        };
+        let count = frames.len().min(PIECE);
+        let frames = &mut frames[..count];
+        // Peek: what this piece plays and what the limiter must see.
+        let peeked = self.consumer.slots().min((frames.len() + LOOKAHEAD) * 2) & !1;
+        if let Ok(chunk) = self.consumer.read_chunk(peeked) {
+            let (first, second) = chunk.as_slices();
+            self.window[..first.len()].copy_from_slice(first);
+            self.window[first.len()..peeked].copy_from_slice(second);
+        }
+        let mut taken = 0;
+        for frame in frames {
+            let gain = self.volume.step(target);
+            // While paused and silent, the queue is left for the resume.
+            *frame = if paused && gain < 1e-4 || taken * 2 >= peeked {
+                [0.0, 0.0]
+            } else {
+                let at = taken * 2;
+                taken += 1;
+                let window = &self.window;
+                self.volume
+                    .apply([window[at], window[at + 1]], &window[at + 2..peeked])
+            };
+        }
+        // Only what was played leaves the ring.
+        if let Ok(chunk) = self.consumer.read_chunk(taken * 2) {
+            chunk.commit_all();
         }
     }
 }
@@ -252,57 +582,39 @@ impl Output {
 fn build<T>(
     device: &cpal::Device,
     config: StreamConfig,
-    mut consumer: Consumer<f32>,
-    shared: Arc<Shared>,
+    mut feed: Feed,
+    sixteen_bit: bool,
 ) -> Result<cpal::Stream, String>
 where
     T: SizedSample + FromSample<f32>,
 {
     let channels = usize::from(config.channels);
-    let mut gain = 0.0f32;
-    let mut limiter = Limiter { gain: 1.0 };
-    let errors = shared.clone();
+    let mut dither = Dither::new();
+    let mut frames = [[0.0f32; 2]; PIECE];
+    let errors = feed.shared.clone();
     let callback = move |data: &mut [T], info: &cpal::OutputCallbackInfo| {
         let stamp = info.timestamp();
-        let delay = stamp.playback.duration_since(stamp.callback);
-        let micros = u32::try_from(delay.as_micros()).unwrap_or(u32::MAX);
-        shared.delay.store(micros, Ordering::Relaxed);
-        if shared.flush.swap(false, Ordering::Relaxed) {
-            let queued = consumer.slots();
-            if let Ok(chunk) = consumer.read_chunk(queued) {
-                chunk.commit_all();
-            }
-        }
-        let paused = shared.paused.load(Ordering::Relaxed);
-        let target = if paused {
-            0.0
-        } else {
-            f32::from_bits(shared.gain.load(Ordering::Relaxed))
-        };
-        for frame in data.chunks_mut(channels) {
-            gain += (target - gain) * GAIN_SLEW;
-            // While paused and silent, the queue is left for the resume.
-            let (left, right) = if paused && gain < 1e-4 {
-                (0.0, 0.0)
-            } else {
-                match (consumer.pop(), consumer.pop()) {
-                    // Only boost can pass full scale, so at an ordinary
-                    // volume the limiter is not in the path at all.
-                    (Ok(left), Ok(right)) if gain > 1.0 || limiter.at_work() => {
-                        limiter.apply(left * gain, right * gain)
+        feed.delayed(stamp.playback.duration_since(stamp.callback));
+        for piece in data.chunks_mut(channels * PIECE) {
+            let played = &mut frames[..piece.len() / channels];
+            feed.next(played);
+            for (frame, &[left, right]) in piece.chunks_mut(channels).zip(played.iter()) {
+                let mut sample = |value: f32| {
+                    T::from_sample(if sixteen_bit {
+                        dither.quantize_16_bit(value)
+                    } else {
+                        value
+                    })
+                };
+                match frame {
+                    [only] => *only = sample((left + right) * 0.5),
+                    [first, second, rest @ ..] => {
+                        *first = sample(left);
+                        *second = sample(right);
+                        rest.fill(T::from_sample(0.0));
                     }
-                    (Ok(left), Ok(right)) => (left * gain, right * gain),
-                    _ => (0.0, 0.0),
+                    [] => {}
                 }
-            };
-            match frame {
-                [only] => *only = T::from_sample((left + right) * 0.5),
-                [first, second, rest @ ..] => {
-                    *first = T::from_sample(left);
-                    *second = T::from_sample(right);
-                    rest.fill(T::from_sample(0.0));
-                }
-                [] => {}
             }
         }
     };
@@ -320,27 +632,33 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_boosted_peak_is_held_at_full_scale_and_the_rest_left_alone() {
-        let mut limiter = Limiter { gain: 1.0 };
-        assert_eq!(limiter.apply(0.5, -0.25), (0.5, -0.25));
-        assert!(!limiter.at_work());
-        let (left, right) = limiter.apply(1.6, -0.8);
-        assert!((left - 1.0).abs() < 1e-6);
+    fn a_peak_is_met_at_full_scale_and_what_is_far_from_it_left_alone() {
+        let mut limiter = Limiter::NEW;
+        // Nothing over in sight: untouched, bit for bit.
+        assert_eq!(limiter.apply([0.5, -0.25], &[0.4, 0.4], 1.0), [0.5, -0.25]);
+        // A peak at 1.6 four frames ahead: the level comes down over them.
+        let ahead = [0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 1.6, -0.8];
+        let [before, _] = limiter.apply([0.5, 0.5], &ahead, 1.0);
+        assert!(before < 0.5 && before > 1.0 / 1.6 * 0.5, "{before}");
+        for at in (0..ahead.len()).step_by(2).take(3) {
+            limiter.apply([ahead[at], ahead[at + 1]], &ahead[at + 2..], 1.0);
+        }
+        let [left, right] = limiter.apply([1.6, -0.8], &[], 1.0);
+        assert!((left - 1.0).abs() < 1e-6, "{left}");
         // Both channels come down together, so the picture does not shift.
-        assert!((right + 0.5).abs() < 1e-6);
-        assert!(limiter.at_work());
+        assert!((right + 0.5).abs() < 1e-6, "{right}");
     }
 
     #[test]
-    fn the_level_comes_back_once_the_peaks_have_passed() {
-        let mut limiter = Limiter { gain: 1.0 };
-        limiter.apply(2.0, 2.0);
-        let (soon, _) = limiter.apply(0.5, 0.5);
-        assert!(soon < 0.3);
+    fn the_level_is_held_then_comes_back_once_the_peaks_have_passed() {
+        let mut limiter = Limiter::NEW;
+        limiter.apply([2.0, 2.0], &[], 1.0);
+        let [held, _] = limiter.apply([0.5, 0.5], &[], 1.0);
+        assert!((held - 0.25).abs() < 1e-6, "{held}");
         // A second later it has let go.
         for _ in 0..48_000 {
-            limiter.apply(0.5, 0.5);
+            limiter.apply([0.5, 0.5], &[], 1.0);
         }
-        assert!(!limiter.at_work());
+        assert_eq!(limiter.gain, 1.0);
     }
 }

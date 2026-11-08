@@ -44,12 +44,17 @@ pub(super) struct Dials {
     pub normalise: AtomicBool,
     /// The loudness they are evened out to, in LUFS, as `f32` bits.
     pub loudness_target: AtomicU32,
+    /// Even out albums, not tracks: the tracks of an album that follow each
+    /// other in the queue get one gain between them.
+    pub albums: AtomicBool,
     /// How fast the music plays, as `f32` bits; 1 is normal.
     pub speed: AtomicU32,
     /// The equalizer's settings, as the app last set them.
     pub equalizer: Mutex<eq::Settings>,
     /// The id of the sound device to play through; `None` for the system's.
     pub device: Mutex<Option<String>>,
+    /// Hold the device for this app alone, past the system's mixer.
+    pub exclusive: AtomicBool,
     /// How far the sound is turned to one side, as `f32` bits: -1 is all
     /// left, 1 all right, 0 both alike.
     pub balance: AtomicU32,
@@ -67,10 +72,10 @@ const OPEN_WAIT: Duration = Duration::from_millis(300);
 /// Just after the system's device changes, Windows can refuse the new one
 /// for a moment ("Cannot change thread mode after it is set" was seen once):
 /// a song given up then is a song skipped for nothing.
-fn open_output(wanted: Option<&str>) -> Result<Output, String> {
+fn open_output(wanted: Option<&str>, exclusive: bool) -> Result<Output, String> {
     let mut tried = 1;
     loop {
-        match Output::open(wanted) {
+        match Output::open(wanted, exclusive) {
             Ok(output) => return Ok(output),
             Err(error) if tried < OPEN_TRIES => {
                 log::warn!("{error}; trying again ({tried} of {OPEN_TRIES})");
@@ -82,7 +87,7 @@ fn open_output(wanted: Option<&str>) -> Result<Output, String> {
     }
 }
 
-pub(super) fn balance_gains(balance: f32) -> (f32, f32) {
+pub(crate) fn balance_gains(balance: f32) -> (f32, f32) {
     let balance = if balance.is_finite() { balance } else { 0.0 };
     let balance = balance.clamp(-1.0, 1.0);
     (1.0 - balance.max(0.0), 1.0 + balance.min(0.0))
@@ -293,7 +298,8 @@ impl Worker {
     fn spawn_deck(&mut self, video_id: &str, start_ms: u64, preload: bool) -> Option<Deck> {
         if self.output.is_none() {
             self.device = self.wanted_device();
-            match open_output(self.device.as_deref()) {
+            let exclusive = self.dials.exclusive.load(Ordering::Relaxed);
+            match open_output(self.device.as_deref(), exclusive) {
                 Ok(output) => {
                     self.equalizer = Some(Equalizer::new(output.sample_rate()));
                     self.tap.set_sample_rate(output.sample_rate());
@@ -310,7 +316,9 @@ impl Worker {
         let query = if preload { "?preload=1" } else { "" };
         let url = format!("{}/v1/stream/{video_id}{query}", self.origin);
         let gain = if self.dials.normalise.load(Ordering::Relaxed) {
-            let url = format!("{}/v1/tracks/{video_id}/loudness", self.origin);
+            let albums = self.dials.albums.load(Ordering::Relaxed);
+            let query = if albums { "?album=1" } else { "" };
+            let url = format!("{}/v1/tracks/{video_id}/loudness{query}", self.origin);
             let target = f32::from_bits(self.dials.loudness_target.load(Ordering::Relaxed));
             Gain::fetch(self.agent.clone(), url, target)
         } else {
@@ -419,6 +427,8 @@ impl Worker {
                         playing.ready = true;
                         playing.duration_ms = duration_ms.unwrap_or(0);
                         self.tap.set_bitrate(playing.deck.kbps());
+                        let format = Some(output.format().clone());
+                        self.tap.set_served(playing.deck.served().zip(format));
                         if playing.deck.video_id() == self.target.video_id {
                             (self.emit)(Event::Loaded {
                                 epoch: self.target.epoch,

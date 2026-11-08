@@ -25,3 +25,7 @@ ureq = { version = "3", default-features = false }
 # Hands audio and seeks between a deck's thread and the engine.
 crossbeam-channel = "0.5"
 log = "0.4"
+
+# The device held for this app alone, past the system mixer: exclusive.rs.
+[target.'cfg(windows)'.dependencies]
+wasapi = "0.27"

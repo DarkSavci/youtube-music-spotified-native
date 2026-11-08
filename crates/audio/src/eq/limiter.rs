@@ -1,9 +1,9 @@
 //! The limiter that follows the equalizer.
 //!
-//! Raising bands, or two songs crossing, can push peaks past full scale,
-//! which the device would clip. This turns the level down for as long as a
-//! peak lasts and lets it back up gently. What stays under the ceiling
-//! passes through untouched, bit for bit.
+//! Raising bands can push peaks past full scale, which the device would
+//! clip. This turns the level down for as long as a peak lasts and lets it
+//! back up gently. What stays under the ceiling passes through untouched,
+//! bit for bit. It runs only while the equalizer shapes the sound.
 
 /// The level peaks are held under, a little below full scale.
 pub(super) const CEILING: f32 = 0.98;
@@ -23,6 +23,11 @@ impl Limiter {
             gain: 1.0,
             release: 1.0 - (-1.0 / (RELEASE * sample_rate)).exp(),
         }
+    }
+
+    /// Whether it is still turning the level down.
+    pub(super) fn holding(&self) -> bool {
+        self.gain < 1.0
     }
 
     /// Holds the peaks of interleaved stereo under the ceiling, in place.
