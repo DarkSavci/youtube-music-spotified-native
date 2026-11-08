@@ -148,6 +148,11 @@ fn run(args: cli::Args, started: Instant) -> Result<(), Box<dyn std::error::Erro
         })),
         ..Default::default()
     };
+    #[cfg(target_os = "linux")]
+    if let Some(reason) = platform::x11::cannot_open() {
+        log::error!("{reason}");
+        return Err(reason.into());
+    }
     eframe::run_native(
         APP_NAME,
         options,

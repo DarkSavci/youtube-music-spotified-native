@@ -77,7 +77,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libasound2-dev libgl1-mesa-dev libegl1-mesa-dev \
-            libx11-dev libxkbcommon-dev libwayland-dev nasm ninja-build
+            libx11-dev libxkbcommon-dev libxkbcommon-x11-0 libwayland-dev nasm ninja-build
 
       - name: Test
         run: cargo test --workspace

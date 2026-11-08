@@ -13,19 +13,57 @@ use x11rb::protocol::xproto::{
 /// window inside a frame or two.
 const MOST_DEEP: usize = 4;
 
+/// The library the toolkit reads the keyboard through on X11. It is loaded
+/// when the window opens, and without it the toolkit panics, so it is looked
+/// for first. Many systems have `libxkbcommon` without this part of it.
+const KEYBOARD_LIBRARY: &str = "libxkbcommon-x11.so.0";
+
 /// Whether the app's windows are X11's: the toolkit is asked for X11 wherever
-/// there is an X server to ask (`main.rs`).
+/// there is an X server to ask (`main.rs`) and it can read the keyboard there.
 pub fn in_use() -> bool {
-    std::env::var_os("DISPLAY").is_some_and(|display| !display.is_empty())
+    static IN_USE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *IN_USE.get_or_init(|| has(DISPLAY) && keyboard_library())
+}
+
+const DISPLAY: &str = "DISPLAY";
+const WAYLAND_DISPLAY: &str = "WAYLAND_DISPLAY";
+
+fn has(variable: &str) -> bool {
+    std::env::var_os(variable).is_some_and(|value| !value.is_empty())
+}
+
+fn keyboard_library() -> bool {
+    // SAFETY: loading the library runs its initialisers, which for this one
+    // set nothing up; it is unloaded again at once.
+    let loaded = unsafe { libloading::Library::new(KEYBOARD_LIBRARY) };
+    if let Err(error) = &loaded {
+        log::warn!("{KEYBOARD_LIBRARY} could not be loaded: {error}");
+    }
+    loaded.is_ok()
+}
+
+/// Why no window can be opened, if none can: an X server whose keyboard
+/// library is missing, and no Wayland to use instead. Said before the
+/// toolkit would panic over it with a message nobody sees.
+pub fn cannot_open() -> Option<String> {
+    if in_use() || has(WAYLAND_DISPLAY) || !has(DISPLAY) {
+        return None;
+    }
+    Some(format!(
+        "{KEYBOARD_LIBRARY} is missing, and the window needs it on X11. Install it:          `sudo apt install libxkbcommon-x11-0` on Debian or Ubuntu,          `sudo dnf install libxkbcommon-x11` on Fedora,          `sudo pacman -S libxkbcommon-x11` on Arch."
+    ))
 }
 
 /// Asks for X11 where there is an X server, which is what a desktop on Wayland
 /// gives its older programs too. Wayland can neither hide a window nor place
-/// one, and the tray, the mini player and its skins want both.
+/// one, and the tray, the mini player and its skins want both. Without the
+/// keyboard library X11 needs, Wayland is used where there is one.
 pub fn prefer<T>(builder: &mut winit::event_loop::EventLoopBuilder<T>) {
     use winit::platform::x11::EventLoopBuilderExtX11;
     if in_use() {
         builder.with_x11();
+    } else if has(DISPLAY) && has(WAYLAND_DISPLAY) {
+        log::warn!("using Wayland, as X11 cannot read the keyboard without {KEYBOARD_LIBRARY}");
     }
 }
 

@@ -32,7 +32,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libasound2-dev libgl1-mesa-dev libegl1-mesa-dev \
-            libx11-dev libxkbcommon-dev libwayland-dev libgl1-mesa-dri nasm xvfb
+            libx11-dev libxkbcommon-dev libxkbcommon-x11-0 libwayland-dev libgl1-mesa-dri nasm xvfb
 
       - name: Format
         run: cargo fmt --check
