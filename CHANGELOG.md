@@ -2,6 +2,29 @@
 
 Every release of Youtube Music Spotified Native, newest first.
 
+## 0.7.1 — 2026-11-08
+
+### Better signing in
+
+- Signing in says what will happen before a browser window opens, and stays with you until you are in
+- A sign-in can be cancelled, put away and brought back, and on Windows its browser window brought to the front
+- When it fails it says why in plain words, with Try again
+- A sign-in YouTube Music will not accept is no longer kept as if it worked
+- The browser window closes by itself on Windows without needing PowerShell
+- Works with Brave on Windows and with Chromium installed as a snap on Linux
+
+### Fixed
+
+- Web pages open in your browser can no longer reach the app's playback service or read your library through it
+- Clear queue keeps autoplay from adding songs even after the app restarts
+- Linux: the app no longer crashes on start where libxkbcommon-x11 is missing; it uses Wayland, or says what to install
+
+### Fixed on Android
+
+- A song chosen from search results starts its radio, instead of playing the results in order
+- Downloads keep going with the app in the background
+- A podcast's big Play button resumes where you left off
+
 ## 0.7.0 — 2026-11-08
 
 ### New: sound quality
