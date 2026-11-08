@@ -19,9 +19,10 @@ class SoundEffects(private val session: Int) {
     private var bass: BassBoost? = null
 
     fun apply(s: Settings) {
-        equalizer = switch("equalizer", s.equalizerOn, equalizer, { Equalizer(0, session) }) { applyBands(it, s.equalizerBands) }
-        enhancer = switch("boost", s.volumeBoost, enhancer, { LoudnessEnhancer(session) }) { it.setTargetGain(BOOST_MB) }
-        bass = switch("bass", s.bassBoost, bass, { BassBoost(0, session) }) { it.setStrength(BASS_STRENGTH) }
+        val wanted = wantedEffects(s)
+        equalizer = switch("equalizer", wanted.equalizer, equalizer, { Equalizer(0, session) }) { applyBands(it, s.equalizerBands) }
+        enhancer = switch("boost", wanted.boost, enhancer, { LoudnessEnhancer(session) }) { it.setTargetGain(BOOST_MB) }
+        bass = switch("bass", wanted.bass, bass, { BassBoost(0, session) }) { it.setStrength(BASS_STRENGTH) }
     }
 
     /** Made when first wanted, and kept: it is cheap while off, and switched back on at once. */
@@ -41,7 +42,7 @@ class SoundEffects(private val session: Int) {
     }
 
     private fun applyBands(eq: Equalizer, bands: String) {
-        val levels = bands.split(',').mapNotNull { it.trim().toIntOrNull() }
+        val levels = bandLevels(bands)
         val (lo, hi) = eq.bandLevelRange.let { it[0].toInt() to it[1].toInt() }
         for (band in 0 until eq.numberOfBands) {
             eq.setBandLevel(band.toShort(), (levels.getOrNull(band) ?: 0).coerceIn(lo, hi).toShort())
@@ -65,3 +66,21 @@ class SoundEffects(private val session: Int) {
         const val BASS_STRENGTH: Short = 600
     }
 }
+
+/** Which of the phone's effects are switched on. */
+data class WantedEffects(val equalizer: Boolean, val boost: Boolean, val bass: Boolean)
+
+/**
+ * The effects that change the sound as set, and no others. An equalizer with
+ * every band at 0 is left off: it would change nothing on purpose, but on many
+ * phones it still runs every sample through the maker's filters, and at worst
+ * through their own loudness handling too.
+ */
+fun wantedEffects(s: Settings) = WantedEffects(
+    equalizer = s.equalizerOn && bandLevels(s.equalizerBands).any { it != 0 },
+    boost = s.volumeBoost,
+    bass = s.bassBoost,
+)
+
+/** Millibels per band from the stored setting; empty is flat. */
+fun bandLevels(bands: String): List<Int> = bands.split(',').mapNotNull { it.trim().toIntOrNull() }

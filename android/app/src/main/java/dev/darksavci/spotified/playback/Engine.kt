@@ -505,9 +505,18 @@ private class TappedRenderers(context: Context, private val tap: AudioProcessor)
         DefaultAudioSink.Builder(context)
             .setEnableFloatOutput(enableFloatOutput)
             .setEnableAudioOutputPlaybackParameters(enableAudioOutputPlaybackParams)
-            .setAudioProcessors(arrayOf(tap))
+            .setAudioProcessorChain(audioChain(tap))
             .build()
 }
+
+/**
+ * What the sink runs the decoded sound through: the tap, then ExoPlayer's
+ * silence skipping and its speed change (Sonic). At speed 1 with skipping off,
+ * the last two stand aside and the tap only copies, so the samples reach the
+ * phone as they were decoded; AudioChainTest holds it to that.
+ */
+@OptIn(UnstableApi::class)
+internal fun audioChain(tap: AudioProcessor) = DefaultAudioSink.DefaultAudioProcessorChain(tap)
 
 private fun CoroutineScope.launchMain(block: suspend () -> Unit) {
     launch(Dispatchers.Main) { block() }
