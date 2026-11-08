@@ -173,13 +173,25 @@ func (c *Core) transition() Transition {
 	if c.following {
 		return Transition{Kind: "cut"}
 	}
-	if c.settings.CrossfadeMs > 0 && c.caps.Crossfade != "none" {
+	if c.settings.CrossfadeMs > 0 && c.caps.Crossfade != "none" && !c.albumRunsOn() {
 		return Transition{Kind: "crossfade", Ms: c.settings.CrossfadeMs}
 	}
 	if c.settings.Gapless {
 		return Transition{Kind: "gapless"}
 	}
 	return Transition{Kind: "cut"}
+}
+
+// albumRunsOn is whether the next track is the next of the same album, as on
+// a live album or a continuous mix, where one track runs into the next. A
+// crossfade there would dip and blur a join the artist made seamless, so the
+// two play back to back instead.
+func (c *Core) albumRunsOn() bool {
+	cur, next := c.currentPtr(), c.peekNext()
+	if cur == nil || next == nil || cur.Album == nil || next.Album == nil {
+		return false
+	}
+	return cur.Album.ID != "" && cur.Album.ID == next.Album.ID
 }
 
 // ---------- commands ----------
