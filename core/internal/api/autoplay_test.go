@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -550,8 +551,12 @@ func TestAMixLeavesOutWhatIsBlockedUnlessThatIsAllOfIt(t *testing.T) {
 	if rec := postJSON(t, s, "/v1/session/radio", mix); rec.Code != http.StatusOK {
 		t.Fatalf("an all-blocked mix: status %d: %s", rec.Code, rec.Body.String())
 	}
+	// The mix as it is, playing. Three songs is short enough for autoplay to
+	// top the queue up behind them, which it may have done already: what
+	// follows them is not this test's business.
 	state := hub.Projection().State
-	if len(state.Queue.Items) != 3 || state.State != domain.StatePlaying {
-		t.Fatalf("queue %v %s, want the mix as it is, playing", queueIDs(hub), state.State)
+	ids := queueIDs(hub)
+	if len(ids) < 3 || !slices.Equal(ids[:3], all) || state.State != domain.StatePlaying {
+		t.Fatalf("queue %v %s, want the mix as it is, playing", ids, state.State)
 	}
 }
