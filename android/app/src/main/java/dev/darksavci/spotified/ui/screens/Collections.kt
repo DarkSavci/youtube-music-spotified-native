@@ -122,6 +122,8 @@ fun LazyListScope.collectionHeader(
     actions: Actions,
     bylineArtwork: List<Artwork> = emptyList(),
     bylineArtists: List<ArtistRef> = emptyList(),
+    /** A podcast's: the first episode then carries on from where it was left, as its row does. */
+    episodes: Boolean = false,
     extra: @Composable () -> Unit = {},
 ) {
     item {
@@ -195,7 +197,13 @@ fun LazyListScope.collectionHeader(
                 GlyphButton(R.drawable.ic_shuffle, "Shuffle", { actions.playback.shuffle(tracks, origin) }, tint = p.secondary)
                 Spacer(Modifier.padding(4.dp))
                 PlayButton(
-                    onClick = { if (here) actions.playback.toggle() else actions.play(tracks, 0, origin) },
+                    onClick = {
+                        when {
+                            here -> actions.playback.toggle()
+                            episodes -> actions.playEpisode(tracks, 0, origin)
+                            else -> actions.play(tracks, 0, origin)
+                        }
+                    },
                     playing = playing,
                     // The row's edge is 8dp; the button lines up with the 16dp of the words above.
                     modifier = Modifier.padding(end = 8.dp),
@@ -644,7 +652,7 @@ fun PodcastScreen(id: String) {
         Refreshable(loader) {
             Box(Modifier.fillMaxSize()) {
                 LazyColumn(state = list, contentPadding = PaddingValues(bottom = if (selection.active) 140.dp else 24.dp)) {
-                    collectionHeader(podcast.title, podcast.author, if (podcast.episodes.size == 1) "1 episode" else "${podcast.episodes.size} episodes", podcast.artwork, podcast.episodes, podcast.title, actions)
+                    collectionHeader(podcast.title, podcast.author, if (podcast.episodes.size == 1) "1 episode" else "${podcast.episodes.size} episodes", podcast.artwork, podcast.episodes, podcast.title, actions, episodes = true)
                     if (podcast.description.isNotEmpty()) {
                         item { ExpandableText(podcast.description, 6, Modifier.padding(16.dp), style = Type.small, color = LocalPalette.current.secondary) }
                     }

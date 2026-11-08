@@ -399,7 +399,7 @@ private fun LazyListScope.results(results: SearchResults, videos: Boolean, keys:
         val topKey = keyOf(top)
         item { SectionTitle("Top result") }
         item {
-            // A song plays on into what is beside it, as the rest of the page's songs do.
+            // A song starts its radio, as the rest of the page's songs do.
             if (top is Item.Song) TrackRowOf(top.track, queue, topKey, selection) else ItemRow(top, artSize = 64.dp)
         }
         val rows = topResultRows(results).map { it to keyOf(it) }
@@ -424,11 +424,14 @@ private fun LazyListScope.results(results: SearchResults, videos: Boolean, keys:
     }
 }
 
-/** A song in a shelf of results: it plays on into the shelf's others. */
+/**
+ * A song in the results: it starts its radio, as YouTube Music does (#7). In a
+ * room, where the room decides, it plays on into [songs] instead.
+ */
 @Composable
 private fun TrackRowOf(track: Track, songs: List<Track>, key: String, selection: TrackSelection) {
     val actions = LocalActions.current
-    SelectableRow(track, key, selection, { actions.play(songs, placeInQueue(songs, track), "Search") }, { actions.menuFor(track) })
+    SelectableRow(track, key, selection, { actions.playback.playRadio(track) { actions.play(songs, placeInQueue(songs, track), "Search") } }, { actions.menuFor(track) })
 }
 
 @Composable

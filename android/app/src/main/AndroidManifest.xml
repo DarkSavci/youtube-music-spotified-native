@@ -109,6 +109,12 @@
                 android:value="true" />
         </service>
 
+        <!-- Keeps the process alive while songs download, with the download notification. -->
+        <service
+            android:name=".data.DownloadService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
         <!-- The app's own screens in Android Auto, beside the media service above. -->
         <service
             android:name=".car.CarService"

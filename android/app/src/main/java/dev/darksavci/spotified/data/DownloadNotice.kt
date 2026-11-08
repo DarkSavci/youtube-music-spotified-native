@@ -20,8 +20,9 @@ import dev.darksavci.spotified.ui.MainActivity
  * The notification while songs download. On Android 16 it is a Live Update: a
  * progress bar kept near the top of the shade and in the status bar, with
  * [NotificationCompat.ProgressStyle] doing the drawing. Older phones get the
- * ordinary progress bar. It lasts only while the app's process does: the core
- * doing the downloading lives in that process.
+ * ordinary progress bar. While something is coming and not paused, it is also
+ * the notification of [DownloadService], which keeps the app's process, and the
+ * core downloading in it, from being stopped in the background.
  */
 class DownloadNotice(private val context: Context) {
     /** The songs of the run being shown; it grows with what is added and ends when nothing is left to come. */
@@ -36,6 +37,7 @@ class DownloadNotice(private val context: Context) {
                 NotificationManagerCompat.from(context).cancel(ID)
                 shown = null
             }
+            DownloadService.release(keepShown = false)
             return
         }
         batch = batch + coming.map { it.id }
@@ -46,9 +48,6 @@ class DownloadNotice(private val context: Context) {
         // Reposted only when it would look different: the system limits how often an app may.
         val look = "$title|$percent|${current.id}"
         if (look == shown) return
-        if (Build.VERSION.SDK_INT >= 33 &&
-            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
-        ) return
         shown = look
         context.getSystemService(NotificationManager::class.java)
             .createNotificationChannel(NotificationChannel(CHANNEL, "Downloads", NotificationManager.IMPORTANCE_LOW))
@@ -90,14 +89,21 @@ class DownloadNotice(private val context: Context) {
                 // What an older phone draws; Android 16 draws the style instead.
                 .setProgress(100, percent, false)
         }
-        NotificationManagerCompat.from(context).notify(ID, builder.build())
+        val notification = builder.build()
+        // Refused notifications hide it, but the service still needs one to run with.
+        if (Build.VERSION.SDK_INT < 33 ||
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+        ) {
+            NotificationManagerCompat.from(context).notify(ID, notification)
+        }
+        if (paused) DownloadService.release(keepShown = true) else DownloadService.keep(context, notification)
     }
 
     private fun DownloadStatus?.isUnderWay() =
         this is DownloadStatus.Active || this is DownloadStatus.Waiting || this is DownloadStatus.Paused
 
     companion object {
-        private const val ID = 4100
+        const val ID = 4100
         private const val CHANNEL = "downloads"
         const val ACTION_PAUSE = "dev.darksavci.spotified.PAUSE_DOWNLOADS"
         const val ACTION_RESUME = "dev.darksavci.spotified.RESUME_DOWNLOADS"

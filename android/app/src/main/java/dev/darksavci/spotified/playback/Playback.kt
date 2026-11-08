@@ -318,6 +318,21 @@ class Playback(
         }
     }
 
+    /**
+     * A song chosen on its own, as from search results: it plays, then songs like
+     * it, as YouTube Music does, not the list it was found in. The song already
+     * playing is not started over. In a room the room decides what plays, so
+     * [inRoom] plays what it would have before.
+     */
+    fun playRadio(track: Track, inRoom: () -> Unit) {
+        when (radioStart(_projection.value, track)) {
+            RadioStart.Nothing -> {}
+            RadioStart.Resume -> resume()
+            RadioStart.Room -> inRoom()
+            RadioStart.Radio -> startRadio(track)
+        }
+    }
+
     fun startMix(playlistId: String, videoId: String, params: String, origin: String) {
         scope.launch {
             runCatching { session.startMix(deviceId.ifEmpty { settings.deviceId() }, playlistId, videoId, params, origin) }
@@ -333,4 +348,14 @@ class Playback(
         private const val TAG = "Playback"
         private const val SETTLE_MS = 5000L
     }
+}
+
+/** What choosing a song on its own does; see [Playback.playRadio]. */
+enum class RadioStart { Nothing, Resume, Room, Radio }
+
+internal fun radioStart(p: Projection, track: Track): RadioStart = when {
+    !track.playable || track.id.isEmpty() -> RadioStart.Nothing
+    p.followingRoom -> RadioStart.Room
+    p.state.current?.id == track.id -> if (p.target.playing) RadioStart.Nothing else RadioStart.Resume
+    else -> RadioStart.Radio
 }
