@@ -57,5 +57,10 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sh scripts/build-core.sh
-          xvfb-run -a target/release/spotified --demo --screenshot "$RUNNER_TEMP/window.png"
+          # A release build aborts on a panic, saying nothing here: its log
+          # is the only record of why.
+          if ! xvfb-run -a target/release/spotified --demo -v --screenshot "$RUNNER_TEMP/window.png"; then
+            find /tmp -path '*spotified-demo*' -name 'app-*.log' -exec tail -n 60 {} \;
+            exit 1
+          fi
           test -s "$RUNNER_TEMP/window.png"
