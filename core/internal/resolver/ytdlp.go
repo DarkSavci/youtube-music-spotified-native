@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -336,7 +337,7 @@ func bestYtdlpAudio(formats []ytdlpFormat) *ytdlpFormat {
 		if limit > 0 && rate(f) > limit {
 			continue
 		}
-		if best == nil || rate(f) > rate(best) {
+		if best == nil || f.rank().beats(best.rank()) {
 			best = f
 		}
 	}
@@ -345,6 +346,18 @@ func bestYtdlpAudio(formats []ytdlpFormat) *ytdlpFormat {
 		return lightest
 	}
 	return best
+}
+
+// rank reads the tier from the itag yt-dlp names the format by: "774", or
+// "251-drc" for a DRC copy.
+func (f *ytdlpFormat) rank() rank {
+	itag, _ := strconv.Atoi(strings.SplitN(f.FormatID, "-", 2)[0])
+	return rank{
+		premium: premiumItags[itag],
+		drc:     strings.Contains(f.FormatID, "drc"),
+		opus:    strings.HasPrefix(f.ACodec, "opus"),
+		bitrate: rate(f),
+	}
 }
 
 func rate(f *ytdlpFormat) float64 {

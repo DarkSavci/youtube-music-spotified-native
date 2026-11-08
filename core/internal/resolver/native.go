@@ -427,6 +427,16 @@ type adaptiveFormat struct {
 	ContentLength    string `json:"contentLength"`
 	ApproxDurationMs string `json:"approxDurationMs"`
 	Type             string `json:"type"`
+	IsDrc            bool   `json:"isDrc"`
+}
+
+func (f *adaptiveFormat) rank() rank {
+	return rank{
+		premium: premiumItags[f.Itag],
+		drc:     f.IsDrc,
+		opus:    strings.Contains(f.MimeType, "opus"),
+		bitrate: float64(f.Bitrate),
+	}
 }
 
 // playable reads the answer's verdict on the track. Only "gone for good" is
@@ -470,7 +480,7 @@ func bestAdaptiveAudio(formats []adaptiveFormat) *adaptiveFormat {
 		if limit > 0 && int64(f.Bitrate) > limit {
 			continue
 		}
-		if best == nil || f.Bitrate > best.Bitrate {
+		if best == nil || f.rank().beats(best.rank()) {
 			best = f
 		}
 	}

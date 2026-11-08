@@ -84,6 +84,52 @@ var premiumItags = map[int]bool{
 // IsPremiumItag reports whether a format is subscriber-only.
 func IsPremiumItag(itag int) bool { return premiumItags[itag] }
 
+// rank orders audio formats by what is heard, so that choosing one does not
+// rest on how bitrates happen to compare:
+//
+//  1. a Premium format over a standard one;
+//  2. the full dynamic range over a "DRC" copy, which YouTube serves at the
+//     same bitrate with its loud and quiet parts squeezed together;
+//  3. Opus over AAC: Opus is 48 kHz, the rate most devices run at, so it
+//     plays without being resampled. Only while it is not far behind on
+//     bitrate: Opus matches AAC at about three quarters of its bitrate, and
+//     under a ceiling the Opus left may be a 70 kbps one beside a 128 kbps
+//     AAC, which is the better of the two;
+//  4. the higher bitrate.
+type rank struct {
+	premium bool
+	drc     bool
+	opus    bool
+	bitrate float64
+}
+
+func (r rank) beats(o rank) bool {
+	switch {
+	case r.premium != o.premium:
+		return r.premium
+	case r.drc != o.drc:
+		return !r.drc
+	case r.opus != o.opus && opusHolds(r, o):
+		return r.opus
+	default:
+		return r.bitrate > o.bitrate
+	}
+}
+
+// opusMatches is the share of an AAC stream's bitrate at which Opus sounds
+// at least as good.
+const opusMatches = 0.75
+
+// opusHolds is whether the Opus one of two formats is near enough the AAC
+// one's bitrate to be preferred for being Opus.
+func opusHolds(a, b rank) bool {
+	opus, aac := a, b
+	if b.opus {
+		opus, aac = b, a
+	}
+	return opus.bitrate >= opusMatches*aac.bitrate
+}
+
 // describeQuality turns a format into a badge label.
 func describeQuality(itag, bitrate int, mime string) Quality {
 	codec := "AAC"

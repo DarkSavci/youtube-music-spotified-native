@@ -84,11 +84,22 @@ func bestAudio(formats ytlib.FormatList) *ytlib.Format {
 		if !strings.HasPrefix(f.MimeType, "audio/") {
 			continue
 		}
-		if best == nil || f.Bitrate > best.Bitrate {
+		if best == nil || libraryRank(f).beats(libraryRank(best)) {
 			best = f
 		}
 	}
 	return best
+}
+
+// libraryRank is the extractor's format in the order the others use. It
+// does not say which formats are DRC copies; signed out, as it runs, it
+// is not offered Premium ones.
+func libraryRank(f *ytlib.Format) rank {
+	return rank{
+		premium: premiumItags[f.ItagNo],
+		opus:    strings.Contains(f.MimeType, "opus"),
+		bitrate: float64(f.Bitrate),
+	}
 }
 
 // classify maps extractor errors onto the ones callers act on, so the Session
