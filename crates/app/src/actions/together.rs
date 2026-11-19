@@ -8,7 +8,7 @@ mod servers;
 use std::time::{Duration, Instant};
 
 use serde_json::json;
-use spotified_client::session::Command;
+use spotified_client::session::{Command, PlayState};
 
 use super::{Action, Effect};
 use crate::state::State;
@@ -246,6 +246,9 @@ fn keep_up(state: &mut State) -> Vec<Effect> {
         position_ms: playback.position_ms(now),
         playing: playback.wants_to_play(),
         settled,
+        // Offline, a seek would only stall again; the core says when
+        // YouTube is back.
+        stalled: playback.session.state == PlayState::Stalled && !playback.offline,
     };
     let since = together.corrected_at.map(|at| now.duration_since(at));
     let applied = together.applied_entry.as_deref();

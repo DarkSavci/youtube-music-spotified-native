@@ -36,6 +36,7 @@ fn with_the_room(position_ms: u64) -> Local<'static> {
         position_ms,
         playing: true,
         settled: true,
+        stalled: false,
     }
 }
 
@@ -73,6 +74,42 @@ fn a_player_adrift_is_brought_back_but_not_twice_in_a_row() {
         ..with_the_room(0)
     };
     assert_eq!(follow(&room(), 1000.0, &loading, Some("e2"), None), None);
+}
+
+#[test]
+fn a_stalled_player_is_brought_back_but_not_twice_in_a_row() {
+    // Waiting for audio that does not come: its position stands still
+    // while the room's moves on, and only a seek starts it again.
+    let stalled = Local {
+        settled: false,
+        stalled: true,
+        ..with_the_room(30_000)
+    };
+    let command = follow(&room(), 6000.0, &stalled, Some("e2"), None);
+    assert!(matches!(
+        command,
+        Some(Command::FollowRoom {
+            playing: true,
+            position_ms: 35_000,
+            ..
+        })
+    ));
+    let just_now = Some(Duration::from_secs(1));
+    assert_eq!(
+        follow(&room(), 6000.0, &stalled, Some("e2"), just_now),
+        None
+    );
+    // A paused room asks nothing of it but the pause.
+    let mut paused = room();
+    paused.playing = false;
+    let playing_paused = Local {
+        playing: false,
+        ..stalled
+    };
+    assert_eq!(
+        follow(&paused, 6000.0, &playing_paused, Some("e2"), None),
+        None
+    );
 }
 
 #[test]

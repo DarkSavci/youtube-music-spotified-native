@@ -29,6 +29,10 @@ pub struct Local<'a> {
     pub playing: bool,
     /// Neither loading nor stalled: its position can be trusted.
     pub settled: bool,
+    /// Waiting for audio that has stopped coming, while online. Only a
+    /// seek sets the engine going again; pausing and playing did that by
+    /// hand.
+    pub stalled: bool,
 }
 
 /// The command that brings the player to the room, if it is not there:
@@ -62,11 +66,17 @@ pub fn follow(
     let adrift = local.settled
         && local.position_ms.abs_diff(position_ms) > DRIFT_MS
         && since_correction.is_none_or(|since| since >= BETWEEN_CORRECTIONS);
+    // A stalled player is not settled, so it is never adrift; left alone it
+    // would wait in silence until someone pressed pause and play.
+    let stuck = local.stalled
+        && room.playing
+        && since_correction.is_none_or(|since| since >= BETWEEN_CORRECTIONS);
     let wanted = !local.following
         || another_song
         || another_queue
         || local.playing != room.playing
-        || adrift;
+        || adrift
+        || stuck;
     wanted.then(|| Command::FollowRoom {
         tracks: room.tracks(),
         index,
