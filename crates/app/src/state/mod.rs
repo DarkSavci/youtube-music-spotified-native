@@ -291,6 +291,9 @@ pub struct State {
     /// done with it once they are here: playing it, or queueing it, means
     /// all of it.
     pub preparing_playlist: Option<(String, Whole)>,
+    /// Liked Music's songs are held oldest first, the other way from how
+    /// YouTube gives them. Only ever so of the whole list.
+    pub liked_reversed: bool,
     /// The listener's own history with the artist whose page is open.
     pub affinity: Option<(String, Affinity)>,
     /// The page of all of an artist's songs, for the artist last opened.
@@ -414,6 +417,7 @@ impl State {
             artist_photos: HashMap::new(),
             playlist_tails: HashMap::new(),
             preparing_playlist: None,
+            liked_reversed: false,
             affinity: None,
             artist_songs: None,
             about_expanded: false,
@@ -490,6 +494,7 @@ impl State {
         self.stats_page = StatsPage::default();
         self.playlist_tails.clear();
         self.preparing_playlist = None;
+        self.liked_reversed = false;
         self.affinity = None;
         self.artist_songs = None;
         self.library = Loadable::NotLoaded;

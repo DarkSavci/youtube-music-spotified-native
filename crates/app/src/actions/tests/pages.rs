@@ -494,3 +494,102 @@ fn a_toast_with_a_button_stays_longer_than_one_without() {
     assert_eq!(state.expire_toasts(much_later), None);
     assert!(state.toasts.is_empty());
 }
+
+/// Liked Music, its newest likes "c" and "b" here and "a", the first one
+/// liked, behind `next`.
+fn on_liked(oldest_first: bool, next: &str) -> (State, Vec<Effect>) {
+    let mut state = ready();
+    state.settings.liked_oldest_first = oldest_first;
+    apply(&mut state, Action::Open(Page::Playlist("LM".into())));
+    let mut page = playlist_page(&["c", "b"], next);
+    page.playlist.id = "LM".into();
+    let effects = loaded(&mut state, Response::Playlist("LM".into(), Ok(page)));
+    (state, effects)
+}
+
+fn liked_songs(state: &State) -> Vec<&str> {
+    match state.playlists.get(&"LM".to_owned()) {
+        Loadable::Loaded(playlist) => playlist.tracks.iter().map(|t| t.id.as_str()).collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn rest_of_liked(token: &str) -> Response {
+    Response::PlaylistRest {
+        id: "LM".into(),
+        token: token.into(),
+        result: Ok(vec![track("a")]),
+    }
+}
+
+#[test]
+fn liked_music_oldest_first_is_read_whole_then_turned_over() {
+    let (mut state, effects) = on_liked(true, "t1");
+    assert_eq!(
+        effects,
+        [Effect::Fetch(Request::PlaylistRest {
+            id: "LM".into(),
+            token: "t1".into(),
+        })]
+    );
+    // Until the first like is here, the list is as YouTube gave it.
+    assert_eq!(liked_songs(&state), ["c", "b"]);
+    loaded(&mut state, rest_of_liked("t1"));
+    assert_eq!(liked_songs(&state), ["a", "b", "c"]);
+    // Played from the top, it starts with the first song liked.
+    let effects = apply(
+        &mut state,
+        Action::PlayPlaylist {
+            id: "LM".into(),
+            index: 0,
+        },
+    );
+    assert!(matches!(
+        &effects[..],
+        [Effect::Command(Command::Play { tracks, start_index: 0, .. })] if tracks[0].id == "a"
+    ));
+}
+
+#[test]
+fn liked_music_is_turned_over_when_asked_and_back_again() {
+    let (mut state, effects) = on_liked(false, "t1");
+    assert!(effects.is_empty(), "newest first reads a page at a time");
+    let effects = apply(&mut state, Action::SetLikedOldestFirst(true));
+    assert_eq!(
+        effects,
+        [
+            Effect::SaveSettings,
+            Effect::Fetch(Request::PlaylistRest {
+                id: "LM".into(),
+                token: "t1".into(),
+            })
+        ]
+    );
+    loaded(&mut state, rest_of_liked("t1"));
+    assert_eq!(liked_songs(&state), ["a", "b", "c"]);
+    assert_eq!(
+        apply(&mut state, Action::SetLikedOldestFirst(false)),
+        [Effect::SaveSettings]
+    );
+    assert_eq!(liked_songs(&state), ["c", "b", "a"]);
+}
+
+#[test]
+fn liked_music_read_again_is_put_in_the_chosen_order() {
+    let (mut state, _) = on_liked(true, "");
+    assert_eq!(liked_songs(&state), ["b", "c"]);
+    // Read again after a like: YouTube's order again, turned over again.
+    let mut page = playlist_page(&["d", "c", "b"], "");
+    page.playlist.id = "LM".into();
+    loaded(&mut state, Response::Playlist("LM".into(), Ok(page)));
+    assert_eq!(liked_songs(&state), ["b", "c", "d"]);
+}
+
+#[test]
+fn other_playlists_keep_their_order() {
+    let mut state = on_long_playlist("");
+    state.settings.liked_oldest_first = true;
+    let again = Response::Playlist("pl".into(), Ok(playlist_page(&["a", "b"], "")));
+    loaded(&mut state, again);
+    assert_eq!(songs_of(&state), ["a", "b"]);
+}

@@ -31,6 +31,9 @@ class PagePrefs private constructor(private val prefs: SharedPreferences) {
         private set
     var recentSearches by mutableStateOf(readList())
         private set
+    /** Liked Music lists the first song liked at the top. Off: newest first, as YouTube keeps it. */
+    var likedOldestFirst by mutableStateOf(prefs.getBoolean(LIKED_OLDEST_FIRST, false))
+        private set
 
     fun setGrid(on: Boolean) {
         libraryGrid = on
@@ -40,6 +43,11 @@ class PagePrefs private constructor(private val prefs: SharedPreferences) {
     fun setSort(sort: LibrarySort) {
         librarySort = sort
         prefs.edit().putString(SORT, sort.name).apply()
+    }
+
+    fun putLikedOldestFirst(on: Boolean) {
+        likedOldestFirst = on
+        prefs.edit().putBoolean(LIKED_OLDEST_FIRST, on).apply()
     }
 
     fun setVideos(on: Boolean) {
@@ -79,6 +87,7 @@ class PagePrefs private constructor(private val prefs: SharedPreferences) {
         private const val SORT = "librarySort"
         private const val VIDEOS = "showMusicVideos"
         private const val SEARCHES = "recentSearches"
+        private const val LIKED_OLDEST_FIRST = "likedOldestFirst"
         private const val PODCASTS = "podcastsPage"
         private const val PODCASTS_AT = "podcastsPageAt"
         private const val PODCASTS_KEPT_MS = 7 * 24 * 60 * 60 * 1000L

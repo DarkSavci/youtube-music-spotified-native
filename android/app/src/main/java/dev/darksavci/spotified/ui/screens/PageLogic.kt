@@ -95,6 +95,13 @@ enum class SongSort(val label: String) {
     Custom("Custom order"), Title("Title"), Artist("Artist"), Album("Album"), Duration("Duration")
 }
 
+/**
+ * Liked Music in the order chosen for it. YouTube keeps the newest like first;
+ * oldest first puts the first song liked at the top and each later one below it.
+ */
+internal fun likedInOrder(tracks: List<Track>, oldestFirst: Boolean): List<Track> =
+    if (oldestFirst) tracks.asReversed().toList() else tracks
+
 /** The songs in the order chosen to view them; the list itself keeps its order. */
 internal fun sortedSongs(tracks: List<Track>, sort: SongSort): List<Track> = when (sort) {
     SongSort.Custom -> tracks

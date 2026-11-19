@@ -224,6 +224,14 @@ class PageLogicTest {
         assertEquals(page, stillLiked(page, emptySet()))
     }
 
+    @Test
+    fun likedMusicOldestFirstPutsTheFirstLikeAtTheTop() {
+        // As YouTube gives it: the newest like first.
+        val page = listOf(t("c"), t("b"), t("a"))
+        assertEquals(listOf("a", "b", "c"), likedInOrder(page, oldestFirst = true).map { it.id })
+        assertEquals(page, likedInOrder(page, oldestFirst = false))
+    }
+
     // ---------- music videos ----------
 
     @Test

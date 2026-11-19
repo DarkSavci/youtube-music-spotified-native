@@ -67,6 +67,9 @@ pub enum Action {
     MoreHome {
         retry: bool,
     },
+    /// Liked Music listed with the first song liked at the top, or the
+    /// newest there as YouTube keeps it.
+    SetLikedOldestFirst(bool),
     /// The end of the songs read of a playlist is near: read the next.
     MorePlaylist {
         id: String,

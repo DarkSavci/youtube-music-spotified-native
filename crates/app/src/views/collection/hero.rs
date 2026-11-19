@@ -415,6 +415,15 @@ fn buttons(
         row.painter().galley(place.min, title, color);
     }
     more_button(state, &mut row, actions, entity);
+    // Liked Music only: YouTube lists the newest like first.
+    if entity.id == "LM" && !with_title {
+        let oldest_first = state.settings.liked_oldest_first;
+        let chip = widgets::chip(&mut row, &state.palette, "Oldest first", oldest_first)
+            .on_hover_text("List your liked songs from the first one you liked");
+        if chip.clicked() {
+            actions.push(Action::SetLikedOldestFirst(!oldest_first));
+        }
+    }
 }
 
 #[cfg(test)]

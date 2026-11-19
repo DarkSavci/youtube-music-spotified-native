@@ -16,6 +16,15 @@ pub(super) fn paging(state: &mut State, action: Action) -> Vec<Effect> {
     match action {
         Action::MoreHome { retry } => more_home(state, retry),
         Action::MorePlaylist { id, retry } => more_playlist(state, id, retry),
+        Action::SetLikedOldestFirst(oldest_first) => {
+            if state.settings.liked_oldest_first == oldest_first {
+                return Vec::new();
+            }
+            state.settings.liked_oldest_first = oldest_first;
+            let mut effects = vec![Effect::SaveSettings];
+            effects.extend(order_liked(state));
+            effects
+        }
         Action::PlayPlaylist { id, index } => whole_playlist(state, id, Whole::Play(index)),
         Action::WholePlaylist { id, then } => whole_playlist(state, id, then),
         Action::PlayArtist { artist_id, shuffle } => play_artist(state, artist_id, shuffle),
@@ -153,7 +162,38 @@ fn give_up_preparing(state: &mut State, id: &str) {
     }
 }
 
+/// YouTube's own playlist of liked songs.
+const LIKED: &str = "LM";
+
+/// Puts Liked Music in the order chosen for it. YouTube gives the newest
+/// like first, a page at a time; the first song liked is on the last page,
+/// so oldest first means reading every page and then turning the list
+/// over. Until then it stays as YouTube gave it.
+fn order_liked(state: &mut State) -> Vec<Effect> {
+    let wanted = state.settings.liked_oldest_first;
+    if let Some(tail) = state.playlist_tails.get_mut(LIKED) {
+        if !wanted || !tail.idle() {
+            return Vec::new();
+        }
+        tail.loading = true;
+        let token = tail.next.clone();
+        let id = LIKED.to_owned();
+        return vec![Effect::Fetch(Request::PlaylistRest { id, token })];
+    }
+    if state.liked_reversed != wanted
+        && let Some(playlist) = state.playlists.loaded_mut(&LIKED.to_owned())
+    {
+        playlist.tracks.reverse();
+        state.liked_reversed = wanted;
+    }
+    Vec::new()
+}
+
 fn playlist_arrived(state: &mut State, id: String, result: Result<PlaylistPage, ApiError>) {
+    if id == LIKED {
+        // A new read is as YouTube gives it.
+        state.liked_reversed = false;
+    }
     state.playlist_tails.remove(&id);
     if let Ok(page) = &result
         && !page.next.is_empty()
@@ -193,6 +233,9 @@ fn more_arrived(
     }
     if !more {
         state.playlist_tails.remove(&id);
+        if id == LIKED {
+            order_liked(state);
+        }
         return prepared(state, &id);
     }
     // Asked to play while this page was on its way: now the rest.
@@ -201,6 +244,7 @@ fn more_arrived(
         .take_if(|(waiting, _)| waiting == &id);
     match waiting {
         Some((_, then)) => whole_playlist(state, id, then),
+        None if id == LIKED => order_liked(state),
         None => Vec::new(),
     }
 }
@@ -222,6 +266,9 @@ fn rest_arrived(
             state.playlist_tails.remove(id);
             if let Some(playlist) = state.playlists.loaded_mut(&id.to_owned()) {
                 playlist.tracks.extend(tracks);
+            }
+            if id == LIKED {
+                order_liked(state);
             }
             prepared(state, id)
         }
@@ -397,8 +444,13 @@ pub(super) fn answered(state: &mut State, response: Response) -> Vec<Effect> {
             Vec::new()
         }
         Response::Playlist(id, result) => {
+            let liked = id == LIKED;
             playlist_arrived(state, id, result);
-            Vec::new()
+            if liked {
+                order_liked(state)
+            } else {
+                Vec::new()
+            }
         }
         Response::PlaylistMore { id, token, result } => more_arrived(state, id, &token, result),
         Response::PlaylistRest { id, token, result } => rest_arrived(state, &id, &token, result),

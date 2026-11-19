@@ -488,7 +488,10 @@ private fun TrackList(
     val p = LocalPalette.current
     val downloads by actions.graph.downloads.done.collectAsStateWithLifecycle()
     var sort by rememberSaveable { mutableStateOf(SongSort.Custom) }
-    val shown = remember(tracks, sort) { sortedSongs(tracks, sort) }
+    val prefs = PagePrefs.of(LocalContext.current)
+    val oldestFirst = liked && prefs.likedOldestFirst
+    // Played as shown: from the top, oldest first starts with the first song liked.
+    val shown = remember(tracks, oldestFirst, sort) { sortedSongs(likedInOrder(tracks, oldestFirst), sort) }
     val keys = remember(shown) { rowKeys(shown) }
     val list = rememberLazyListState()
     val selection = rememberTrackSelection()
@@ -518,6 +521,15 @@ private fun TrackList(
                             item { Pill("Add", { actions.go(Routes.playlistAdd(playlist.id, playlist.title)) }, icon = R.drawable.ic_plus, description = "Add songs to this playlist") }
                         }
                         item { Pill(if (sort == SongSort.Custom) "Sort" else sort.label, { sorting = true }, icon = R.drawable.ic_arrow_up_down, description = "Sort the songs") }
+                        if (liked) {
+                            item {
+                                Pill(
+                                    "Oldest first", { prefs.putLikedOldestFirst(!oldestFirst) },
+                                    icon = if (oldestFirst) R.drawable.ic_check else null,
+                                    description = if (oldestFirst) "Oldest first, on: the first song you liked is at the top" else "Oldest first, off: the newest like is at the top",
+                                )
+                            }
+                        }
                         if (editable) {
                             item { Pill("Edit", { editing = true }, icon = R.drawable.ic_pencil, description = "Rename or describe this playlist") }
                             item { Pill("Download and keep in step", { actions.launch {

@@ -288,6 +288,8 @@ pub struct Settings {
     pub sidebar_width: f32,
     /// The order the library is listed in.
     pub library_sort: LibrarySort,
+    /// Liked Music lists the first song liked at the top.
+    pub liked_oldest_first: bool,
     /// The sidebar shows the library as a grid of covers rather than rows.
     pub library_grid: bool,
     /// As `library_grid`, for the library given the page's room: there a
@@ -438,6 +440,7 @@ impl Default for Settings {
             sidebar_collapsed: false,
             sidebar_width: theme::SIDEBAR_WIDTH,
             library_sort: LibrarySort::Recent,
+            liked_oldest_first: false,
             library_grid: false,
             library_expanded_grid: true,
             panel: RightPanel::Closed,
@@ -558,6 +561,7 @@ impl Settings {
             sidebar_collapsed: self.sidebar_collapsed,
             sidebar_width: self.sidebar_width,
             library_sort: self.library_sort,
+            liked_oldest_first: self.liked_oldest_first,
             library_grid: self.library_grid,
             library_expanded_grid: self.library_expanded_grid,
             panel: self.panel,
@@ -670,6 +674,7 @@ mod tests {
             sidebar_collapsed: true,
             sidebar_width: 320.0,
             library_sort: LibrarySort::Creator,
+            liked_oldest_first: true,
             library_grid: true,
             library_expanded_grid: false,
             panel: RightPanel::Lyrics,

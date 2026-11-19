@@ -124,6 +124,7 @@ pub fn apply(state: &mut State, action: Action) -> Vec<Effect> {
         }
         Action::MoreHome { .. }
         | Action::MorePlaylist { .. }
+        | Action::SetLikedOldestFirst(_)
         | Action::PlayPlaylist { .. }
         | Action::WholePlaylist { .. }
         | Action::PlayArtist { .. }
