@@ -11,11 +11,19 @@ use std::time::Duration;
 
 use symphonia::core::io::MediaSource;
 use ureq::BodyReader;
+use ureq::unversioned::resolver::DefaultResolver;
+use ureq::unversioned::transport::{
+    Buffers, ConnectionDetails, Connector, NextTimeout, TcpConnector, Transport, time,
+};
 
 /// A first request waits while the core resolves the stream, which can take
 /// a minute for a track it has never seen.
 const RESPONSE_TIMEOUT: Duration = Duration::from_secs(75);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+/// How long a body may say nothing before it is asked for again. The core
+/// itself gives up on YouTube after 20 seconds without progress, so a
+/// silence longer than that is the core's connection, not YouTube's.
+const QUIET_AT_MOST: Duration = Duration::from_secs(30);
 /// A forward seek shorter than this reads and discards rather than opening
 /// a new request.
 const SKIP_LIMIT: u64 = 128 * 1024;
@@ -49,14 +57,78 @@ impl fmt::Display for StreamError {
 impl std::error::Error for StreamError {}
 
 /// An agent for stream reads: patient with the first answer, and without an
-/// overall limit, since a body is read for as long as the track plays.
+/// overall limit, since a body is read for as long as the track plays. A
+/// body that goes quiet for longer than [`QUIET_AT_MOST`] is given up, and
+/// the read asks for it again from where it got to.
 pub fn agent() -> ureq::Agent {
-    ureq::Agent::config_builder()
+    agent_quiet_for(QUIET_AT_MOST)
+}
+
+fn agent_quiet_for(quiet: Duration) -> ureq::Agent {
+    let config = ureq::Agent::config_builder()
         .timeout_connect(Some(CONNECT_TIMEOUT))
         .timeout_recv_response(Some(RESPONSE_TIMEOUT))
+        // Longer than any song; set so that each wait for the body is
+        // named as such, for `Quiet` to know it.
+        .timeout_recv_body(Some(Duration::from_secs(24 * 60 * 60)))
         .http_status_as_error(false)
-        .build()
-        .new_agent()
+        .build();
+    // The core is on this computer: no proxy, no TLS.
+    let connector = ().chain(TcpConnector::default()).chain(Quiet(quiet));
+    ureq::Agent::with_parts(config, connector, DefaultResolver::default())
+}
+
+/// Limits each wait for a body's next bytes. ureq's own body timeout is one
+/// budget for the whole body, which a stream reads for as long as the song
+/// plays; without a limit, a read the core stops answering waits forever,
+/// and the deck with it, deaf to seeks.
+#[derive(Debug)]
+struct Quiet(Duration);
+
+impl<In: Transport> Connector<In> for Quiet {
+    type Out = QuietTransport<In>;
+
+    fn connect(
+        &self,
+        _: &ConnectionDetails,
+        chained: Option<In>,
+    ) -> Result<Option<Self::Out>, ureq::Error> {
+        Ok(chained.map(|inner| QuietTransport {
+            inner,
+            quiet: self.0,
+        }))
+    }
+}
+
+#[derive(Debug)]
+struct QuietTransport<T> {
+    inner: T,
+    quiet: Duration,
+}
+
+impl<T: Transport> Transport for QuietTransport<T> {
+    fn buffers(&mut self) -> &mut dyn Buffers {
+        self.inner.buffers()
+    }
+
+    fn transmit_output(&mut self, amount: usize, timeout: NextTimeout) -> Result<(), ureq::Error> {
+        self.inner.transmit_output(amount, timeout)
+    }
+
+    fn await_input(&mut self, mut timeout: NextTimeout) -> Result<bool, ureq::Error> {
+        // Only the body: the first answer may rightly take a minute.
+        if timeout.reason == ureq::Timeout::RecvBody {
+            let quiet = time::Duration::Exact(self.quiet);
+            if quiet < timeout.after {
+                timeout.after = quiet;
+            }
+        }
+        self.inner.await_input(timeout)
+    }
+
+    fn is_open(&mut self) -> bool {
+        self.inner.is_open()
+    }
 }
 
 pub struct HttpSource {
@@ -254,7 +326,9 @@ mod tests {
 
     /// A server of `whole` that breaks off its first answer after `cut`
     /// bytes, as a dropped connection does, and answers properly after.
-    fn breaking_server(whole: Vec<u8>, cut: usize) -> String {
+    /// One that `hangs` keeps that first connection open and says nothing
+    /// more, as a wedged server does.
+    fn breaking_server(whole: Vec<u8>, cut: usize, hangs: bool) -> String {
         use std::io::{BufRead, BufReader, Write};
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a port");
         let address = listener.local_addr().expect("an address");
@@ -281,6 +355,13 @@ mod tests {
                 let _ = stream.write_all(head.as_bytes());
                 let sent = if served == 0 { &rest[..cut] } else { rest };
                 let _ = stream.write_all(sent);
+                if hangs && served == 0 {
+                    let _ = stream.flush();
+                    std::thread::spawn(move || {
+                        std::thread::sleep(Duration::from_secs(60));
+                        drop(stream);
+                    });
+                }
                 // Dropped here: the first answer ends short of its length.
             }
         });
@@ -290,12 +371,28 @@ mod tests {
     #[test]
     fn a_connection_that_breaks_off_is_asked_for_again_from_where_it_got_to() {
         let whole: Vec<u8> = (0..200_000u32).map(|n| (n % 251) as u8).collect();
-        let url = breaking_server(whole.clone(), 70_000);
+        let url = breaking_server(whole.clone(), 70_000, false);
         let mut source = HttpSource::open(agent(), url).expect("opened");
         let mut read = Vec::new();
         source.read_to_end(&mut read).expect("read whole");
         assert_eq!(read.len(), whole.len());
         assert!(read == whole, "the bytes after the break follow on");
+    }
+
+    #[test]
+    fn a_connection_that_goes_quiet_is_asked_for_again_from_where_it_got_to() {
+        let whole: Vec<u8> = (0..200_000u32).map(|n| (n % 251) as u8).collect();
+        let url = breaking_server(whole.clone(), 70_000, true);
+        let idle = Duration::from_millis(500);
+        let mut source = HttpSource::open(agent_quiet_for(idle), url).expect("opened");
+        let started = std::time::Instant::now();
+        let mut read = Vec::new();
+        source.read_to_end(&mut read).expect("read whole");
+        assert!(read == whole, "the bytes after the silence follow on");
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "not left waiting"
+        );
     }
 
     #[test]
