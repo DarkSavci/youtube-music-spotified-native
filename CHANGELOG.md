@@ -2,6 +2,19 @@
 
 Every release of Youtube Music Spotified Native, newest first.
 
+## 0.7.2 — 2026-11-19
+
+### New
+
+- Liked Music can be listed oldest first, on the desktop and Android: the first song you liked at the top, and played from there
+
+### Fixed
+
+- Listen Together no longer goes silent with the progress bar stuck until you pause and play again
+- A player that stalls in a room is brought back in step with it by itself
+- A song played again after it reached its end, as repeat one does, no longer shows as unavailable
+- A stream that stops answering is asked for again after 30 seconds, instead of leaving the music silent
+
 ## 0.7.1 — 2026-11-08
 
 ### Better signing in
